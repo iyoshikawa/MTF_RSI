@@ -1,0 +1,574 @@
+//@version=5
+indicator("MTF RSI Signals [v7.4.3]", overlay=true, max_labels_count=500)
+
+// Clean ticker for request.security (avoids session/extended hours issues)
+cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
+
+// ==========================================
+// --- ⚡ QUICK INSTRUMENT PRESETS ---
+// ==========================================
+grp_preset = "⚡ Quick Instrument Presets"
+instrument_preset = input.string("DEFAULT", "Instrument", options=["DEFAULT", "🛢️ CL (Crude Oil)", "📈 NQ/MNQ (NASDAQ)", "📊 ES/MES (S&P 500)", "🔷 YM/MYM (Dow)"], group=grp_preset, tooltip="Select your instrument to auto-configure EMA, DStoch, ADX, session, and volume settings.")
+
+// Derive booleans from dropdown for use throughout the script
+use_cl_preset = instrument_preset == "🛢️ CL (Crude Oil)"
+use_nq_preset = instrument_preset == "📈 NQ/MNQ (NASDAQ)"
+use_es_preset = instrument_preset == "📊 ES/MES (S&P 500)"
+use_ym_preset = instrument_preset == "🔷 YM/MYM (Dow)"
+
+// ==========================================
+// --- CORE CONFIGURATION ---
+// ==========================================
+grp_core = "Core Settings"
+ema_length_in = input.int(34, "EMA Length", group=grp_core)
+show_vwap = input.bool(true, "Show VWAP", group=grp_core)
+show_ny_vwap = input.bool(true, "Show NY Session Anchored VWAP", group=grp_core)
+show_prev_ny_vwap = input.bool(true, "Show Previous NY VWAP Level", group=grp_core)
+
+// RSI Settings
+grp_rsi = "RSI Configuration"
+shortLen    = input.int(5, "Short RSI Period", group=grp_rsi)
+longLen     = input.int(13, "Long RSI Period", group=grp_rsi)
+shortSmooth = input.int(2, "Short Smoothing", group=grp_rsi)
+longSmooth  = input.int(3, "Long Smoothing", group=grp_rsi)
+threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_rsi)
+
+// Stochastic Settings
+grp_stoch = "Stochastic Configuration"
+stochLen  = input.int(10, "Stoch Period", group=grp_stoch)
+stochSmth = input.int(3, "Stoch Smoothing", group=grp_stoch)
+stoch_os_in  = input.float(35, "Oversold Level", group=grp_stoch)
+stoch_ob_in  = input.float(60, "Overbought Level", group=grp_stoch)
+
+// DStoch Crossover Signals
+grp_stoch_signals = "DStoch Crossover Signals"
+show_stoch_signals = input.bool(true, "Show DStoch Crossover Signals", group=grp_stoch_signals)
+stoch_sell_level_in = input.float(85, "Sell Signal Level (cross down)", group=grp_stoch_signals)
+stoch_buy_level = input.float(12, "Buy Signal Level (cross up)", group=grp_stoch_signals)
+brighten_on_confluence = input.bool(true, "Brighten Background When DStoch + RSI Align", group=grp_stoch_signals)
+
+// Volume Settings
+grp_vol = "Volume Filter"
+vol_ma_len = input.int(20, "Volume MA Length", group=grp_vol)
+vol_mult_in   = input.float(1.1, "Volume Multiplier", group=grp_vol)
+use_vol_filter = input.bool(true, "Enable Volume Filter", group=grp_vol)
+
+// ADX Settings
+grp_adx = "ADX Trend Strength Filter"
+use_adx = input.bool(true, "Enable ADX Filter", group=grp_adx)
+adx_length = input.int(14, "ADX Length", group=grp_adx)
+adx_threshold_a_plus_in = input.float(25, "ADX Threshold for A+", group=grp_adx)
+adx_threshold_a_in = input.float(20, "ADX Threshold for A", group=grp_adx)
+
+// Time & Session Settings
+grp_time = "⏰ Time & Session Filters"
+sessionConfig = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_time, tooltip="Format: TIME1,TIME2,TIME3:DAYS\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri")
+
+// Algo Windows
+grp_algo = "🤖 Algo Windows"
+algo_mode = input.string("OFF", "Algo Window Mode", options=["OFF", "TRADE WITH", "AVOID"], group=grp_algo)
+show_algo_bg = input.bool(true, "Highlight Algo Windows on Chart", group=grp_algo)
+use_london     = input.bool(true, "London Open (0200-0500 ET)", group=grp_algo, inline="a1")
+use_ny_open    = input.bool(true, "NY Open (0830-1000 ET)", group=grp_algo, inline="a1")
+use_ny_pm      = input.bool(true, "NY Afternoon (1330-1500 ET)", group=grp_algo, inline="a2")
+use_ny_close   = input.bool(false, "NY Close (1500-1600 ET)", group=grp_algo, inline="a2")
+use_asia       = input.bool(false, "Asia Session (2000-0000 ET)", group=grp_algo, inline="a3")
+use_globex_open = input.bool(false, "Globex Open (1800-1900 ET)", group=grp_algo, inline="a3")
+
+// ADR (filter only — dashboard is in Management indicator)
+grp_adr = "📏 ADR Filter"
+enable_adr_filter = input.bool(false, "Enable ADR Exhaustion Filter", group=grp_adr)
+adr_length = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50)
+adr_exhaust_pct = input.float(85.0, "Exhaustion Threshold (%)", group=grp_adr, minval=50, maxval=100)
+
+// Dashboard Settings
+grp_dash = "Dashboard & Visuals"
+showDash    = input.bool(true, "Show Grade Dashboard", group=grp_dash)
+dashPos     = input.string("Top Right", "Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash)
+colorCandles = input.bool(true, "Color Candles by Grade", group=grp_dash)
+useHAOutline = input.bool(true, "Heikin Ashi Outline Color", group=grp_dash, tooltip="Body = grade color, border/wicks = HA direction. Hide default candles.")
+ha_bull_color_in = input.color(#26A69A, "HA Bullish Outline", group=grp_dash, inline="ha1")
+ha_bear_color_in = input.color(#EF5350, "HA Bearish Outline", group=grp_dash, inline="ha1")
+showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash)
+ha_exit_warn = input.bool(true, "HA Momentum Exit Warning", group=grp_dash)
+ha_exit_bars = input.int(2, "HA Bars to Confirm Flip", group=grp_dash, minval=1, maxval=5)
+ribbon_bull_color = input.color(#00ffbb, "Ribbon Bullish Color", group=grp_dash, inline="rib1")
+ribbon_bear_color = input.color(#ff0055, "Ribbon Bearish Color", group=grp_dash, inline="rib1")
+ribbon_transparency = input.int(85, "Ribbon Transparency", group=grp_dash, minval=0, maxval=95, step=5, tooltip="0 = fully opaque, 95 = barely visible. Default 85. Brightens to 65 when DStoch + RSI align.")
+ribbon_consol_color = input.color(#000000, "Ribbon Consolidation Color", group=grp_dash, tooltip="Color the ribbon changes to during sideways consolidation. Default black.")
+ribbon_time_config = input.string("0800-1600:23456", "Ribbon Visible Hours", group=grp_dash, tooltip="Independent time window for the RSI ribbon. Format: TIME1,TIME2:DAYS. The ribbon only appears during these hours. Separate from the signal session config.")
+
+// Anti-Chop Filters
+grp_chop = "🔇 Anti-Chop Filters"
+cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30)
+persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_chop, minval=1, maxval=5)
+adx_floor_bb = input.float(15.0, "ADX Floor for B/B+", group=grp_chop, minval=0)
+suppress_low_vol_bb = input.bool(false, "Suppress B/B+ During LOW Volatility", group=grp_chop)
+macro_trend_filter = input.bool(true, "Block Counter-Trend on B/B+/A-", group=grp_chop)
+require_ribbon_bb = input.bool(false, "Require RSI Ribbon for B/B+", group=grp_chop)
+enable_consol_filter = input.bool(false, "Gray Ribbon During Consolidation", group=grp_chop, tooltip="Turns the RSI ribbon gray when price stays within a tight range for N bars. Prevents false directional signals during sideways chop.")
+consol_range_pts = input.float(10.0, "Consolidation Range (pts)", group=grp_chop, minval=1.0, tooltip="If the highest high minus lowest low over the lookback period is less than this, price is consolidating. NQ: 48, ES: 8")
+consol_bars = input.int(20, "Consolidation Lookback (bars)", group=grp_chop, minval=5, maxval=100, tooltip="Number of bars to measure the price range over.")
+
+// ==========================================
+// --- PRESET OVERRIDES ---
+// ==========================================
+ema_length = use_cl_preset ? 21 : use_ym_preset ? 34 : use_nq_preset ? 34 : ema_length_in
+stoch_ob = use_cl_preset ? 72.0 : use_ym_preset ? 62.0 : use_nq_preset ? 65.0 : stoch_ob_in
+stoch_os = use_cl_preset ? 30.0 : use_ym_preset ? 38.0 : use_nq_preset ? 35.0 : stoch_os_in
+stoch_sell_level = use_cl_preset ? 80.0 : use_ym_preset ? 82.0 : stoch_sell_level_in
+vol_mult = use_cl_preset ? 1.4 : use_ym_preset ? 1.2 : use_nq_preset ? 1.2 : vol_mult_in
+adx_threshold_a_plus = use_cl_preset ? 28.0 : use_ym_preset ? 23.0 : use_nq_preset ? 23.0 : adx_threshold_a_plus_in
+adx_threshold_a = use_cl_preset ? 22.0 : use_ym_preset ? 18.0 : use_nq_preset ? 18.0 : adx_threshold_a_in
+use_low_vol_suppress = use_cl_preset ? true : suppress_low_vol_bb
+preset_label = use_cl_preset ? "🛢️ CL" : use_nq_preset ? "📈 NQ" : use_es_preset ? "📊 ES" : use_ym_preset ? "🔷 YM" : "DEFAULT"
+use_cl = use_cl_preset
+use_nq = use_nq_preset
+
+// ==========================================
+// --- SESSION & ALGO PARSING ---
+// ==========================================
+config_parts = str.split(sessionConfig, ":")
+times_str = array.get(config_parts, 0)
+days_str = array.size(config_parts) > 1 ? array.get(config_parts, 1) : "23456"
+time_windows = str.split(times_str, ",")
+num_windows = array.size(time_windows)
+day_suffix = ":" + days_str
+in_w1 = num_windows >= 1 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 0)) + day_suffix, "America/New_York")) : false
+in_w2 = num_windows >= 2 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 1)) + day_suffix, "America/New_York")) : false
+in_w3 = num_windows >= 3 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 2)) + day_suffix, "America/New_York")) : false
+in_w4 = num_windows >= 4 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 3)) + day_suffix, "America/New_York")) : false
+in_w5 = num_windows >= 5 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 4)) + day_suffix, "America/New_York")) : false
+in_w6 = num_windows >= 6 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 5)) + day_suffix, "America/New_York")) : false
+inSession_multi = in_w1 or in_w2 or in_w3 or in_w4 or in_w5 or in_w6
+active_win_label = in_w1 ? "W1" : in_w2 ? "W2" : in_w3 ? "W3" : in_w4 ? "W4" : in_w5 ? "W5" : in_w6 ? "W6" : ""
+inSession_cl = not na(time(timeframe.period, "0900-1430:23456", "America/New_York"))
+inSession_override = use_cl_preset ? inSession_cl : inSession_multi
+
+in_algo_london     = use_london     and not na(time(timeframe.period, "0200-0500:23456", "America/New_York"))
+in_algo_ny_open    = use_ny_open    and not na(time(timeframe.period, "0830-1000:23456", "America/New_York"))
+in_algo_ny_pm      = use_ny_pm      and not na(time(timeframe.period, "1330-1500:23456", "America/New_York"))
+in_algo_ny_close   = use_ny_close   and not na(time(timeframe.period, "1500-1600:23456", "America/New_York"))
+in_algo_asia       = use_asia       and not na(time(timeframe.period, "2000-0000:23456", "America/New_York"))
+in_algo_globex     = use_globex_open and not na(time(timeframe.period, "1800-1900:123456", "America/New_York"))
+in_any_algo = in_algo_london or in_algo_ny_open or in_algo_ny_pm or in_algo_ny_close or in_algo_asia or in_algo_globex
+algo_window_label = in_algo_london ? "LONDON" : in_algo_ny_open ? "NY OPEN" : in_algo_ny_pm ? "NY PM" : in_algo_ny_close ? "NY CLOSE" : in_algo_asia ? "ASIA" : in_algo_globex ? "GLOBEX" : "—"
+algo_filter = algo_mode == "OFF" ? true : algo_mode == "TRADE WITH" ? in_any_algo : algo_mode == "AVOID" ? not in_any_algo : true
+
+// ==========================================
+// --- ADR FILTER ---
+// ==========================================
+daily_high = request.security(cleanTicker, "D", high[1], lookahead = barmerge.lookahead_on)
+daily_low  = request.security(cleanTicker, "D", low[1], lookahead = barmerge.lookahead_on)
+adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], lookahead = barmerge.lookahead_on)
+today_range = daily_high - daily_low
+adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0
+adr_ok = not enable_adr_filter or adr_pct_used < adr_exhaust_pct
+
+// ==========================================
+// --- HELPER FUNCTIONS ---
+// ==========================================
+calc_double_rsi(src, short_len, long_len, short_smooth, long_smooth) =>
+    rsiS = ta.ema(ta.rsi(src, short_len), short_smooth)
+    rsiL = ta.ema(ta.rsi(src, long_len), long_smooth)
+    diff = rsiS - rsiL
+    [rsiS, rsiL, diff]
+
+calc_double_stoch(len, smooth) =>
+    raw_stoch = ta.stoch(close, high, low, len)
+    db_stoch = ta.ema(ta.ema(raw_stoch, smooth), smooth)
+    db_stoch
+
+get_rsi_direction(diff, thresh) =>
+    diff > thresh ? 1 : diff < -thresh ? -1 : 0
+
+// ==========================================
+// --- CURRENT TIMEFRAME CALCULATIONS ---
+// ==========================================
+[rsiS_curr, rsiL_curr, diff_curr] = calc_double_rsi(close, shortLen, longLen, shortSmooth, longSmooth)
+rsi_dir_curr = get_rsi_direction(diff_curr, threshold)
+
+db_stoch_curr = calc_double_stoch(stochLen, stochSmth)
+stoch_momentum_bull = db_stoch_curr > 50
+stoch_momentum_bear = db_stoch_curr < 50
+stoch_sell_signal = ta.crossunder(db_stoch_curr, stoch_sell_level)
+stoch_buy_signal = ta.crossover(db_stoch_curr, stoch_buy_level)
+stoch_signal_dir = stoch_sell_signal ? -1 : stoch_buy_signal ? 1 : 0
+dstoch_rsi_confluence = (stoch_signal_dir == 1 and rsi_dir_curr == 1) or (stoch_signal_dir == -1 and rsi_dir_curr == -1)
+dstoch_status = stoch_momentum_bull ? "BULL" : stoch_momentum_bear ? "BEAR" : "NEUTRAL"
+
+ema_34 = ta.ema(close, ema_length)
+ema_bull = close > ema_34
+ema_bear = close < ema_34
+
+// HMA Trend
+hma_21 = ta.hma(close, 21)
+hma_34 = ta.hma(close, 34)
+hma_50 = ta.hma(close, 50)
+hma_primary_bull = (close > hma_21) and (hma_21 > hma_34)
+hma_primary_bear = (close < hma_21) and (hma_21 < hma_34)
+hma_50_confirms_bull = hma_34 > hma_50
+hma_50_confirms_bear = hma_34 < hma_50
+hma_trend = hma_primary_bull and hma_50_confirms_bull ? "STRONG LONG" :hma_primary_bull ? "LONG" :hma_primary_bear and hma_50_confirms_bear ? "STRONG SHORT" :hma_primary_bear ? "SHORT" : "NEUTRAL"
+
+// VWAP
+vwap_val = ta.vwap(close)
+vwap_bull = close > vwap_val
+vwap_bear = close < vwap_val
+
+// NY Anchored VWAP
+ny_session_start = not na(time(timeframe.period, "0930-0930:23456", "America/New_York"))
+in_ny_session = not na(time(timeframe.period, "0930-1600:23456", "America/New_York"))
+ny_session_end = not na(time(timeframe.period, "1600-1600:23456", "America/New_York"))
+var float sum_pv = 0.0
+var float sum_v = 0.0
+var float prev_ny_vwap_close = na
+if ny_session_start
+    sum_pv := 0.0
+    sum_v := 0.0
+ny_vwap = sum_v > 0 ? sum_pv / sum_v : na
+if ny_session_end and not na(ny_vwap)
+    prev_ny_vwap_close := ny_vwap
+
+// Volume Filter
+hasVolume = not na(volume) and volume > 0
+vol_ma = ta.sma(hasVolume ? volume : 1, vol_ma_len)
+vol_above_avg = hasVolume ? (volume / vol_ma > vol_mult) : true
+vol_filter = use_vol_filter ? vol_above_avg : true
+
+if in_ny_session and hasVolume
+    typical_price = (high + low + close) / 3
+    sum_pv := sum_pv + (typical_price * volume)
+    sum_v := sum_v + volume
+
+// ADX
+[diPlus, diMinus, adx_value] = ta.dmi(adx_length, adx_length)
+adx_filter_a_plus = not use_adx or adx_value >= adx_threshold_a_plus
+adx_filter_a = not use_adx or adx_value >= adx_threshold_a
+adx_falling = adx_value < adx_value[1]
+
+// ATR (for volatility class only — sizing is in Management indicator)
+atr_val = ta.atr(14)
+atr_sma = ta.sma(atr_val, 50)
+atr_ratio = atr_val / (atr_sma > 0 ? atr_sma : atr_val)
+vol_class = atr_ratio >= 2.0 ? "EXTREME" : atr_ratio >= 1.4 ? "HIGH" : atr_ratio >= 0.8 ? "NORMAL" : "LOW"
+
+// ==========================================
+// --- MULTI-TIMEFRAME ANALYSIS ---
+// ==========================================
+chart_minutes = timeframe.in_seconds() / 60
+mtf_fast = chart_minutes <= 3 ? "5" : chart_minutes <= 5 ? "15" : chart_minutes <= 15 ? "60" : "240"
+mtf_mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes <= 15 ? "240" : "D"
+mtf_slow = chart_minutes <= 3 ? "60" : chart_minutes <= 5 ? "240" : chart_minutes <= 15 ? "D" : "W"
+
+get_mtf_rsi_dir(tf) =>
+    [_, _, diff_raw] = request.security(cleanTicker, tf, calc_double_rsi(close, shortLen, longLen, shortSmooth, longSmooth), lookahead = barmerge.lookahead_on)
+    get_rsi_direction(diff_raw[1], threshold)
+
+rsi_dir_fast = get_mtf_rsi_dir(mtf_fast)
+rsi_dir_mid  = get_mtf_rsi_dir(mtf_mid)
+rsi_dir_slow = get_mtf_rsi_dir(mtf_slow)
+
+mtf_3tf_bull = (rsi_dir_fast == 1) and (rsi_dir_mid == 1) and (rsi_dir_slow == 1)
+mtf_3tf_bear = (rsi_dir_fast == -1) and (rsi_dir_mid == -1) and (rsi_dir_slow == -1)
+mtf_2tf_bull = (rsi_dir_fast == 1) and (rsi_dir_mid == 1)
+mtf_2tf_bear = (rsi_dir_fast == -1) and (rsi_dir_mid == -1)
+mtf_1tf_bull = (rsi_dir_fast == 1)
+mtf_1tf_bear = (rsi_dir_fast == -1)
+
+// ==========================================
+// --- GRADING SYSTEM ---
+// ==========================================
+is_a_plus_long = mtf_3tf_bull and (rsi_dir_curr == 1) and ema_bull and vwap_bull and stoch_momentum_bull and vol_filter and adx_filter_a_plus
+is_a_plus_short = mtf_3tf_bear and (rsi_dir_curr == -1) and ema_bear and vwap_bear and stoch_momentum_bear and vol_filter and adx_filter_a_plus
+
+is_a_long = mtf_3tf_bull and (rsi_dir_curr == 1) and ema_bull and stoch_momentum_bull and adx_filter_a and not is_a_plus_long
+is_a_short = mtf_3tf_bear and (rsi_dir_curr == -1) and ema_bear and stoch_momentum_bear and adx_filter_a and not is_a_plus_short
+
+// Macro trend filter
+hma_macro_long = hma_trend == "LONG" or hma_trend == "STRONG LONG"
+hma_macro_short = hma_trend == "SHORT" or hma_trend == "STRONG SHORT"
+macro_ok_long = not macro_trend_filter or not hma_macro_short
+macro_ok_short = not macro_trend_filter or not hma_macro_long
+
+is_a_minus_long = mtf_2tf_bull and (rsi_dir_curr == 1) and ema_bull and stoch_momentum_bull and macro_ok_long and not is_a_long and not is_a_plus_long
+is_a_minus_short = mtf_2tf_bear and (rsi_dir_curr == -1) and ema_bear and stoch_momentum_bear and macro_ok_short and not is_a_short and not is_a_plus_short
+
+// Anti-chop + ribbon filter for B/B+
+adx_floor_ok = adx_floor_bb <= 0 or adx_value >= adx_floor_bb
+low_vol_ok = not use_low_vol_suppress or vol_class != "LOW"
+bb_chop_filter = adx_floor_ok and low_vol_ok
+ribbon_ok_long = not require_ribbon_bb or rsi_dir_curr == 1
+ribbon_ok_short = not require_ribbon_bb or rsi_dir_curr == -1
+
+// HMA 34 trend for B/B+ (smoother than EMA, better for quick scalps)
+hma_bull = close > hma_34
+hma_bear = close < hma_34
+
+is_b_plus_long = mtf_2tf_bull and hma_bull and bb_chop_filter and macro_ok_long and ribbon_ok_long and not is_a_minus_long and not is_a_long and not is_a_plus_long
+is_b_plus_short = mtf_2tf_bear and hma_bear and bb_chop_filter and macro_ok_short and ribbon_ok_short and not is_a_minus_short and not is_a_short and not is_a_plus_short
+
+is_b_long = mtf_1tf_bull and hma_bull and bb_chop_filter and macro_ok_long and ribbon_ok_long and not is_b_plus_long and not is_a_minus_long and not is_a_long and not is_a_plus_long
+is_b_short = mtf_1tf_bear and hma_bear and bb_chop_filter and macro_ok_short and ribbon_ok_short and not is_b_plus_short and not is_a_minus_short and not is_a_short and not is_a_plus_short
+
+grade = is_a_plus_long or is_a_plus_short ? "A+" :is_a_long or is_a_short ? "A" :is_a_minus_long or is_a_minus_short ? "A-" :is_b_plus_long or is_b_plus_short ? "B+" :is_b_long or is_b_short ? "B" : "NONE"
+
+is_long_setup = is_a_plus_long or is_a_long or is_a_minus_long or is_b_plus_long or is_b_long
+is_short_setup = is_a_plus_short or is_a_short or is_a_minus_short or is_b_plus_short or is_b_short
+direction = is_long_setup ? "LONG" : is_short_setup ? "SHORT" : "NEUTRAL"
+
+// Late-trend warning
+late_trend_flag = (grade == "A+" or grade == "A") and (adx_falling or adr_pct_used > 70)
+
+// SL values
+sl_aplus = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
+sl_a     = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
+sl_aminus = use_cl_preset ? 0.30 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
+sl_bplus  = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 15.0 : 15.0
+sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 15.0 : 15.0
+
+// ==========================================
+// --- TIME & SESSION FILTER ---
+// ==========================================
+inSession = inSession_override
+tradeAllowed = inSession and algo_filter and adr_ok
+
+// ==========================================
+// --- PERSISTENCE & COOLDOWN ---
+// ==========================================
+var int persist_count = 0
+grade_changed = grade != grade[1] or direction != direction[1]
+persist_count := grade_changed ? 1 : (grade != "NONE" ? persist_count + 1 : 0)
+grade_persisted = persist_count >= persist_bars
+
+var int bars_since_signal = 999
+raw_new_signal = grade_persisted and grade != "NONE" and (grade_changed or not grade_persisted[1])
+cooldown_ok = bars_since_signal >= cooldown_bars
+filtered_new_signal = raw_new_signal and cooldown_ok
+bars_since_signal := filtered_new_signal ? 0 : bars_since_signal + 1
+
+var int signal_duration = 0
+signal_duration := grade == "NONE" ? 0 : (filtered_new_signal ? 1 : signal_duration + 1)
+signal_dur_minutes = signal_duration * (timeframe.in_seconds() / 60)
+signal_dur_text = signal_dur_minutes >= 60 ? str.tostring(math.floor(signal_dur_minutes / 60)) + "h " + str.tostring(signal_dur_minutes % 60) + "m" : str.tostring(signal_dur_minutes, "0") + "m"
+
+// Reminder repeat: re-show grade label every N bars while grade is active
+reminder_bars = math.max(1, math.round(10 / (timeframe.in_seconds() / 60)))  // ~10 min between reminders
+is_reminder = grade != "NONE" and signal_duration > 1 and signal_duration % reminder_bars == 0
+show_signal = (filtered_new_signal or is_reminder) and tradeAllowed
+
+// Filtered signal flags (fire on initial signal + repeat reminders)
+sig_a_plus_long  = is_a_plus_long and show_signal and direction == "LONG"
+sig_a_plus_short = is_a_plus_short and show_signal and direction == "SHORT"
+sig_a_long       = is_a_long and show_signal and direction == "LONG"
+sig_a_short      = is_a_short and show_signal and direction == "SHORT"
+sig_a_minus_long = is_a_minus_long and show_signal and direction == "LONG"
+sig_a_minus_short = is_a_minus_short and show_signal and direction == "SHORT"
+sig_b_plus_long  = is_b_plus_long and show_signal and direction == "LONG"
+sig_b_plus_short = is_b_plus_short and show_signal and direction == "SHORT"
+sig_b_long       = is_b_long and show_signal and direction == "LONG"
+sig_b_short      = is_b_short and show_signal and direction == "SHORT"
+
+
+
+// ==========================================
+// --- VISUAL ELEMENTS ---
+// ==========================================
+// EMA
+plot(ema_34, "34 EMA", color=ema_bull ? color.new(color.green, 0) : color.new(color.red, 0), linewidth=2)
+
+// VWAP
+plot(show_vwap ? vwap_val : na, "VWAP", color=color.new(color.yellow, 20), linewidth=2, style=plot.style_circles)
+plot(show_ny_vwap and in_ny_session ? ny_vwap : na, "NY Anchored VWAP", color=color.new(color.white, 30), linewidth=2, style=plot.style_line)
+plot(show_prev_ny_vwap ? prev_ny_vwap_close : na, "Prev NY VWAP", color=color.new(color.gray, 70), linewidth=1, style=plot.style_line)
+
+// RSI Background Ribbon
+// Consolidation detection: resets after 4 consecutive bars outside range
+// Prevents false breakouts that whipsaw back into the range
+var int consol_count = 0
+var float consol_hi = na
+var float consol_lo = na
+var int breakout_count = 0
+
+if consol_count == 0 or na(consol_hi)
+    consol_hi := high
+    consol_lo := low
+    consol_count := 1
+    breakout_count := 0
+else
+    new_hi = math.max(consol_hi, high)
+    new_lo = math.min(consol_lo, low)
+    new_range = new_hi - new_lo
+    if new_range >= consol_range_pts
+        // Range exceeded — count consecutive bars outside
+        breakout_count := breakout_count + 1
+        if breakout_count >= 4
+            // Confirmed breakout — reset everything
+            consol_hi := high
+            consol_lo := low
+            consol_count := 1
+            breakout_count := 0
+        else
+            // Not confirmed yet — keep tracking but don't reset
+            consol_hi := new_hi
+            consol_lo := new_lo
+            consol_count := consol_count + 1
+    else
+        // Back inside range — reset breakout counter
+        breakout_count := 0
+        consol_hi := new_hi
+        consol_lo := new_lo
+        consol_count := consol_count + 1
+
+is_consolidating = enable_consol_filter and consol_count >= consol_bars
+
+// Parse ribbon time window (independent from signal session)
+rib_parts = str.split(ribbon_time_config, ":")
+rib_times_str = array.get(rib_parts, 0)
+rib_days_str = array.size(rib_parts) > 1 ? array.get(rib_parts, 1) : "23456"
+rib_windows = str.split(rib_times_str, ",")
+rib_num_win = array.size(rib_windows)
+rib_day_sfx = ":" + rib_days_str
+rib_in_w1 = rib_num_win >= 1 ? not na(time(timeframe.period, str.trim(array.get(rib_windows, 0)) + rib_day_sfx, "America/New_York")) : false
+rib_in_w2 = rib_num_win >= 2 ? not na(time(timeframe.period, str.trim(array.get(rib_windows, 1)) + rib_day_sfx, "America/New_York")) : false
+rib_in_w3 = rib_num_win >= 3 ? not na(time(timeframe.period, str.trim(array.get(rib_windows, 2)) + rib_day_sfx, "America/New_York")) : false
+ribbonVisible = rib_in_w1 or rib_in_w2 or rib_in_w3
+
+bg_transparency = (brighten_on_confluence and dstoch_rsi_confluence and ribbonVisible) ? math.max(0, ribbon_transparency - 20) : ribbon_transparency
+bg_color = not ribbonVisible ? na : is_consolidating ? color.new(ribbon_consol_color, 90) : diff_curr > threshold ? color.new(ribbon_bull_color, bg_transparency) : diff_curr < -threshold ? color.new(ribbon_bear_color, bg_transparency) : color.new(color.gray, 90)
+bgcolor(bg_color, title="RSI Momentum Ribbon")
+
+// Algo Window Background
+algo_bg_active = show_algo_bg and algo_mode != "OFF" and in_any_algo
+algo_bg_color = algo_mode == "TRADE WITH" ? color.new(#00E5FF, 92) : algo_mode == "AVOID" ? color.new(#FF6B00, 92) : na
+bgcolor(algo_bg_active ? algo_bg_color : na, title="Algo Window Highlight")
+
+// DStoch Crossover Markers
+plotshape(show_stoch_signals and stoch_buy_signal and tradeAllowed, "DStoch BUY Signal", shape.labelup, location.belowbar, color.new(color.aqua, 0), size=size.tiny, text="DS▲", textcolor=color.white)
+plotshape(show_stoch_signals and stoch_sell_signal and tradeAllowed, "DStoch SELL Signal", shape.labeldown, location.abovebar, color.new(color.fuchsia, 0), size=size.tiny, text="DS▼", textcolor=color.white)
+
+// Heikin Ashi Calculation
+haClose = (open + high + low + close) / 4
+var float haOpen = na
+haOpen := na(haOpen[1]) ? (open + close) / 2 : (nz(haOpen[1]) + nz(haClose[1])) / 2
+ha_bull = haClose >= haOpen
+ha_color = ha_bull ? color.new(ha_bull_color_in, 0) : color.new(ha_bear_color_in, 0)
+
+// HA Momentum Exit Warning
+var int ha_against_count = 0
+ha_against = (is_long_setup and not ha_bull) or (is_short_setup and ha_bull)
+ha_against_count := grade == "NONE" ? 0 : ha_against ? ha_against_count + 1 : 0
+ha_exit_signal = ha_exit_warn and ha_against_count == ha_exit_bars and ha_against_count[1] < ha_exit_bars
+
+// Candle Coloring
+candle_color = not colorCandles or not tradeAllowed ? na : is_a_plus_long ? color.new(#00FF00, 0) : is_a_plus_short ? color.new(#FF00FF, 0) : is_a_long ? color.new(#00CC00, 0) : is_a_short ? color.new(#FF0000, 0) : is_a_minus_long ? color.new(#90EE90, 0) : is_a_minus_short ? color.new(#FF6347, 0) : is_b_plus_long ? color.new(#FFFF00, 0) : is_b_plus_short ? color.new(#4169E1, 0) : is_b_long ? color.new(#FFA500, 0) : is_b_short ? color.new(#9370DB, 0) : color.new(#080808, 0)
+
+plotcandle(useHAOutline ? open : na, useHAOutline ? high : na, useHAOutline ? low : na, useHAOutline ? close : na, title="Grade + HA Candles", color=colorCandles ? candle_color : (ha_bull ? color.new(ha_bull_color_in, 0) : color.new(ha_bear_color_in, 0)), wickcolor=ha_color, bordercolor=ha_color)
+barcolor(not useHAOutline ? candle_color : na)
+
+// Signal Shapes
+plotshape(sig_a_plus_long, "A+ Long", shape.labelup, location.belowbar, color.new(#00FF00, 0), size=size.large, text="A+", textcolor=color.white)
+plotshape(sig_a_plus_short, "A+ Short", shape.labeldown, location.abovebar, color.new(#FF00FF, 0), size=size.large, text="A+", textcolor=color.white)
+plotshape(sig_a_long, "A Long", shape.labelup, location.belowbar, color.new(#00CC00, 0), size=size.normal, text="A", textcolor=color.white)
+plotshape(sig_a_short, "A Short", shape.labeldown, location.abovebar, color.new(#FF0000, 0), size=size.normal, text="A", textcolor=color.white)
+plotshape(sig_a_minus_long, "A- Long", shape.labelup, location.belowbar, color.new(#90EE90, 0), size=size.small, text="A-", textcolor=color.white)
+plotshape(sig_a_minus_short, "A- Short", shape.labeldown, location.abovebar, color.new(#FF6347, 0), size=size.small, text="A-", textcolor=color.white)
+plotshape(sig_b_plus_long, "B+ Long Scalp", shape.labelup, location.belowbar, color.new(#FFFF00, 0), size=size.small, text="B+", textcolor=color.white)
+plotshape(sig_b_plus_short, "B+ Short Scalp", shape.labeldown, location.abovebar, color.new(#4169E1, 0), size=size.small, text="B+", textcolor=color.white)
+plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, color.new(#FFA500, 0), size=size.tiny, text="B", textcolor=color.white)
+plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, color.new(#9370DB, 0), size=size.tiny, text="B", textcolor=color.white)
+
+// HA Exit Warning
+plotshape(ha_exit_signal and is_long_setup and tradeAllowed, "HA Exit Long", shape.xcross, location.abovebar, color.new(#FF6B00, 0), size=size.small, text="HA\u2717")
+plotshape(ha_exit_signal and is_short_setup and tradeAllowed, "HA Exit Short", shape.xcross, location.belowbar, color.new(#FF6B00, 0), size=size.small, text="HA\u2717")
+
+// Stop Loss Levels
+stop_level_long = is_a_plus_long ? close - sl_aplus : is_a_long ? close - sl_a : is_a_minus_long ? close - sl_aminus : is_b_plus_long ? close - sl_bplus : is_b_long ? close - sl_b : na
+stop_level_short = is_a_plus_short ? close + sl_aplus : is_a_short ? close + sl_a : is_a_minus_short ? close + sl_aminus : is_b_plus_short ? close + sl_bplus : is_b_short ? close + sl_b : na
+plot(showStopLevels and tradeAllowed and is_long_setup ? stop_level_long : na, "Long Stop", color=color.new(color.red, 30), linewidth=2, style=plot.style_cross)
+plot(showStopLevels and tradeAllowed and is_short_setup ? stop_level_short : na, "Short Stop", color=color.new(color.green, 30), linewidth=2, style=plot.style_cross)
+
+// ==========================================
+// --- MAIN DASHBOARD ---
+// ==========================================
+t_pos = switch dashPos
+    "Top Right"    => position.top_right
+    "Bottom Right" => position.bottom_right
+    "Top Left"     => position.top_left
+    "Bottom Left"  => position.bottom_left
+    => position.top_right
+
+var table dash_table = table.new(t_pos, 2, 10, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
+
+if showDash and barstate.islast
+    // Preset
+    preset_bg = use_cl_preset ? color.new(#FF6B00, 70) : use_nq_preset ? color.new(#818cf8, 70) : use_es_preset ? color.new(#f59e0b, 70) : color.new(color.gray, 85)
+    table.cell(dash_table, 0, 0, "PRESET", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 0, preset_label, bgcolor=preset_bg, text_color=color.white, text_size=size.small)
+
+    // Grade
+    grade_display = late_trend_flag ? grade + " ⚠ LATE" : grade
+    grade_color = late_trend_flag ? color.new(#FF9800, 40) : grade == "A+" ? color.new(#00ff00, 50) : grade == "A" ? color.new(#00cc00, 50) : grade == "A-" ? color.new(#66ff66, 50) : grade == "B+" ? color.new(#ffaa00, 50) : grade == "B" ? color.new(#ff6600, 50) : color.new(color.gray, 80)
+    dir_color = direction == "LONG" ? color.new(color.green, 65) :direction == "SHORT" ? color.new(color.red, 65) :color.new(color.gray, 80)
+    table.cell(dash_table, 0, 1, "SETUP GRADE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.normal)
+    table.cell(dash_table, 1, 1, grade_display, bgcolor=grade_color, text_color=color.white, text_size=size.large)
+    table.cell(dash_table, 0, 2, "DIRECTION", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.normal)
+    table.cell(dash_table, 1, 2, direction, bgcolor=dir_color, text_color=color.white, text_size=size.normal)
+
+    // Signal Age
+    dur_text = grade != "NONE" ? signal_dur_text + " (" + str.tostring(signal_duration) + " bars)" : "—"
+    dur_col = signal_duration <= 3 ? color.new(color.green, 65) : signal_duration <= 10 ? color.new(color.yellow, 65) : color.new(color.orange, 65)
+    table.cell(dash_table, 0, 3, "SIGNAL AGE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 3, dur_text, bgcolor=grade != "NONE" ? dur_col : color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+
+    // Volume
+    vol_status = vol_filter ? "✓ ACTIVE" : "✗ LOW"
+    vol_col = vol_filter ? color.new(color.green, 65) : color.new(color.red, 65)
+    table.cell(dash_table, 0, 4, "VOLUME", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 4, vol_status, bgcolor=vol_col, text_color=color.white, text_size=size.small)
+
+    // Session
+    session_status = use_cl_preset and inSession_cl ? "✓ CL PIT" : tradeAllowed ? "✓ " + active_win_label : "✗ OUTSIDE"
+    session_col = tradeAllowed ? color.new(color.green, 65) : color.new(color.orange, 65)
+    table.cell(dash_table, 0, 5, "SESSION", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 5, session_status, bgcolor=session_col, text_color=color.white, text_size=size.small)
+
+    // Algo
+    algo_display = algo_mode == "OFF" ? "OFF" : in_any_algo ? algo_window_label : "—"
+    algo_col = algo_mode == "OFF" ? color.new(color.gray, 90) : in_any_algo and algo_mode == "TRADE WITH" ? color.new(#00E5FF, 55) : in_any_algo and algo_mode == "AVOID" ? color.new(#FF6B00, 55) : color.new(color.gray, 85)
+    algo_prefix = algo_mode == "TRADE WITH" and in_any_algo ? "🤖 " : algo_mode == "AVOID" and in_any_algo ? "⚠ " : ""
+    table.cell(dash_table, 0, 6, "ALGO", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 6, algo_prefix + algo_display, bgcolor=algo_col, text_color=color.white, text_size=size.small)
+
+    // ADX
+    adx_display = str.tostring(adx_value, "0.0")
+    adx_status = adx_value >= adx_threshold_a_plus ? "🔥 STRONG" : adx_value >= adx_threshold_a ? "✓ GOOD" : "⚠ WEAK"
+    adx_col = adx_value >= adx_threshold_a_plus ? color.new(color.green, 65) : adx_value >= adx_threshold_a ? color.new(color.yellow, 65) : color.new(color.red, 65)
+    table.cell(dash_table, 0, 7, "ADX TREND", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 7, adx_display + " " + adx_status, bgcolor=adx_col, text_color=color.white, text_size=size.small)
+
+    // DStoch
+    dstoch_display = str.tostring(db_stoch_curr, "0.0")
+    dstoch_col = dstoch_status == "BULL" ? color.new(color.green, 65) : dstoch_status == "BEAR" ? color.new(color.red, 65) : color.new(color.gray, 80)
+    table.cell(dash_table, 0, 8, "DSTOCH", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 8, dstoch_display + " " + dstoch_status, bgcolor=dstoch_col, text_color=color.white, text_size=size.small)
+
+    // EMA Trend
+    ema_trend_col = hma_trend == "STRONG LONG" ? color.new(color.green, 55) :hma_trend == "LONG" ? color.new(color.green, 70) :hma_trend == "STRONG SHORT" ? color.new(color.red, 55) :hma_trend == "SHORT" ? color.new(color.red, 70) :color.new(color.gray, 80)
+    table.cell(dash_table, 0, 9, "EMA TREND", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 9, hma_trend, bgcolor=ema_trend_col, text_color=color.white, text_size=size.small)
+
+// ==========================================
+// --- ALERTS ---
+// ==========================================
+alertcondition(sig_a_plus_long, title="🔥 A+ LONG SETUP", message="A+ LONG: All systems aligned!")
+alertcondition(sig_a_plus_short, title="🔥 A+ SHORT SETUP", message="A+ SHORT: All systems aligned!")
+alertcondition(sig_a_long, title="⚡ A LONG SETUP", message="A LONG: Strong confluence!")
+alertcondition(sig_a_short, title="⚡ A SHORT SETUP", message="A SHORT: Strong confluence!")
+alertcondition(sig_a_minus_long, title="✓ A- LONG SETUP", message="A- LONG: Good setup")
+alertcondition(sig_a_minus_short, title="✓ A- SHORT SETUP", message="A- SHORT: Good setup")
+alertcondition(sig_b_plus_long, title="💨 B+ LONG SCALP", message="B+ LONG: Trend scalp!")
+alertcondition(sig_b_plus_short, title="💨 B+ SHORT SCALP", message="B+ SHORT: Trend scalp!")
+alertcondition(sig_b_long, title="⚡ B LONG SCALP", message="B LONG: Quick scalp!")
+alertcondition(sig_b_short, title="⚡ B SHORT SCALP", message="B SHORT: Quick scalp!")
+alertcondition(ha_exit_signal and tradeAllowed, title="⚠ HA MOMENTUM FLIP", message="HA flipped against your position!")
