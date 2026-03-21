@@ -52,7 +52,7 @@ adx_pyramid_rising = input.bool(true, "Pyramid Only When ADX Rising", group=grp_
 adx_breakout_detect = input.bool(true, "Show Breakout Detection", group=grp_adx_adv)
 adx_breakout_low = input.float(12.0, "Breakout: ADX Low", group=grp_adx_adv)
 adx_breakout_high = input.float(20.0, "Breakout: ADX High", group=grp_adx_adv)
-adx_runner_exit = input.float(15.0, "Exit Runner ADX Below", group=grp_adx_adv, minval=0)
+
 
 grp_adr = "📏 ADR (Average Daily Range)"
 show_adr_dash = input.bool(false, "Show ADR on Dashboard", group=grp_adr)
@@ -246,7 +246,6 @@ pyramid_adx_ok = not enable_adx_adv or not adx_pyramid_rising or adx_rising
 var bool adx_was_low = false
 adx_was_low := adx_value < adx_breakout_low ? true : (adx_value > adx_breakout_high ? false : adx_was_low)
 adx_breakout_signal = enable_adx_adv and adx_breakout_detect and adx_was_low[1] and adx_value >= adx_breakout_high and adx_value[1] < adx_breakout_high
-runner_exit_warning = enable_adx_adv and adx_runner_exit > 0 and adx_value < adx_runner_exit and adx_value[1] >= adx_runner_exit and grade != "NONE"
 
 // SL values
 sl_aplus = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
@@ -425,8 +424,6 @@ plotshape(add_trigger and tradeAllowed and pyramid_dir == -1, "Pyramid Add Short
 // ADX Breakout
 plotshape(adx_breakout_signal and tradeAllowed, "ADX Breakout", shape.square, location.belowbar, color.new(#FFD700, 0), size=size.auto, text="BRK")
 
-// Runner Exit Warning
-plotshape(runner_exit_warning and tradeAllowed, "Runner Exit Warning", shape.xcross, location.abovebar, color.new(#FF4444, 0), size=size.small, text="EXIT\nRUNNER")
 
 // ==========================================
 // --- TRADE CONTEXT PANEL ---
@@ -600,4 +597,3 @@ if barstate.islast and tradeAllowed
 alertcondition(add_trigger and pyramid_dir == 1, title="📈 PYRAMID ADD LONG", message="ADD LONG: Grade upgraded or EMA pullback!")
 alertcondition(add_trigger and pyramid_dir == -1, title="📈 PYRAMID ADD SHORT", message="ADD SHORT: Grade upgraded or EMA pullback!")
 alertcondition(adx_breakout_signal, title="💥 ADX BREAKOUT", message="ADX BREAKOUT: Range breakout detected!")
-alertcondition(runner_exit_warning, title="🚨 RUNNER EXIT", message="RUNNER EXIT: ADX dropped — close your runner!")
