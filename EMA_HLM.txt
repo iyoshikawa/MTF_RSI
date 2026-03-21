@@ -1,0 +1,45 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yellow_Yoshi
+// @version=6
+indicator("EMA High/Low/Median Ribbon", overlay=true)
+
+// ─────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────
+// ── EMA Settings ──
+grp_ema       = "EMA Ribbon"
+ema_len       = input.int(9, "EMA Length", minval=1, group=grp_ema)
+show_ribbon   = input.bool(true, "Show EMA Ribbon", group=grp_ema)
+ema_bull_col  = input.color(color.new(#00FF00, 0), "Bullish Color (above)", tooltip="Line color when price is above it", group=grp_ema)
+ema_bear_col  = input.color(color.new(#FF0000, 0), "Bearish Color (below)", tooltip="Line color when price is below it", group=grp_ema)
+
+// ── Ribbon Fill ──
+grp_fill          = "Ribbon Fill"
+show_ribbon_fill  = input.bool(true, "Show Ribbon Fill", group=grp_fill)
+ribbon_bull_col   = input.color(color.new(#00FFCC, 85), "Ribbon Bullish Fill", group=grp_fill)
+ribbon_bear_col   = input.color(color.new(#FF4444, 85), "Ribbon Bearish Fill", group=grp_fill)
+
+// ─────────────────────────────────────────────
+// CALCULATIONS
+// ─────────────────────────────────────────────
+ema_hi  = ta.ema(high, ema_len)
+ema_mid = ta.ema(hl2,  ema_len)
+ema_lo  = ta.ema(low,  ema_len)
+
+// ── Dynamic line colors (green above, red below) ──
+ema_hi_dyn  = close > ema_hi  ? ema_bull_col : ema_bear_col
+ema_mid_dyn = close > ema_mid ? ema_bull_col : ema_bear_col
+ema_lo_dyn  = close > ema_lo  ? ema_bull_col : ema_bear_col
+
+// ── Ribbon fill: bullish when price above all, bearish when below all ──
+is_above_all = close > ema_hi and close > ema_mid and close > ema_lo
+is_below_all = close < ema_hi and close < ema_mid and close < ema_lo
+ribbon_color = show_ribbon_fill ? (is_above_all ? ribbon_bull_col : is_below_all ? ribbon_bear_col : na) : na
+
+// ─────────────────────────────────────────────
+// PLOTTING
+// ─────────────────────────────────────────────
+p_hi  = plot(show_ribbon ? ema_hi  : na, "EMA High",   ema_hi_dyn,  2)
+        plot(show_ribbon ? ema_mid : na, "EMA Median", ema_mid_dyn, 1)
+p_lo  = plot(show_ribbon ? ema_lo  : na, "EMA Low",    ema_lo_dyn,  2)
+fill(p_hi, p_lo, ribbon_color, title="Ribbon Fill")
