@@ -35,6 +35,8 @@ use_vol_filter = input.bool(true, "Enable Volume Filter", group=grp_core)
 suppress_low_vol_bb = input.bool(false, "Suppress B/B+ LOW Vol", group=grp_core)
 macro_trend_filter = input.bool(true, "Block Counter-Trend B/B+/A-", group=grp_core)
 require_ribbon_bb = input.bool(false, "Require RSI Ribbon B/B+", group=grp_core)
+cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_core, minval=1, maxval=30)
+persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_core, minval=1, maxval=5)
 
 // Management-specific settings
 grp_emas = "Additional EMAs"
@@ -265,8 +267,9 @@ tp_b      = use_cl_preset ? 0.08 : use_nq_preset ? 10.0 : use_ym_preset ? 10.0 :
 // ==========================================
 // --- ADR ---
 // ==========================================
-daily_high = request.security(cleanTicker, "D", high[1], lookahead = barmerge.lookahead_on)
-daily_low  = request.security(cleanTicker, "D", low[1], lookahead = barmerge.lookahead_on)
+// Use current day's running high/low for intraday range consumed
+daily_high = request.security(cleanTicker, "D", high, lookahead = barmerge.lookahead_off)
+daily_low  = request.security(cleanTicker, "D", low, lookahead = barmerge.lookahead_off)
 adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], lookahead = barmerge.lookahead_on)
 today_range = daily_high - daily_low
 adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0
@@ -335,9 +338,9 @@ grade_changed = grade != grade[1] or direction != direction[1]
 persist_count := grade_changed ? 1 : (grade != "NONE" ? persist_count + 1 : 0)
 
 var int bars_since_signal = 999
-grade_persisted = persist_count >= 2
+grade_persisted = persist_count >= persist_bars
 raw_new_signal = grade_persisted and grade != "NONE" and (grade_changed or not grade_persisted[1])
-cooldown_ok = bars_since_signal >= 5
+cooldown_ok = bars_since_signal >= cooldown_bars
 filtered_new_signal = raw_new_signal and cooldown_ok
 bars_since_signal := filtered_new_signal ? 0 : bars_since_signal + 1
 
@@ -405,8 +408,9 @@ atr_tp_short = close - atr_val * atr_tp_mult
 // TP Levels: ATR-based for A grades (when toggled), fixed for B grades always
 tp_level_long = showATRTP and is_a_grade_long ? atr_tp_long : is_a_plus_long ? close + tp_aplus : is_a_long ? close + tp_a : is_a_minus_long ? close + tp_aminus : is_b_plus_long ? close + tp_bplus : is_b_long ? close + tp_b : na
 tp_level_short = showATRTP and is_a_grade_short ? atr_tp_short : is_a_plus_short ? close - tp_aplus : is_a_short ? close - tp_a : is_a_minus_short ? close - tp_aminus : is_b_plus_short ? close - tp_bplus : is_b_short ? close - tp_b : na
-plot(showSizingDash and tradeAllowed and is_long_setup ? tp_level_long : na, "Long TP", color=color.new(#00BFFF, 20), linewidth=2, style=plot.style_cross)
-plot(showSizingDash and tradeAllowed and is_short_setup ? tp_level_short : na, "Short TP", color=color.new(#00BFFF, 20), linewidth=2, style=plot.style_cross)
+show_any_tp = showSizingDash or showATRTP
+plot(show_any_tp and tradeAllowed and is_long_setup ? tp_level_long : na, "Long TP", color=color.new(#00BFFF, 20), linewidth=2, style=plot.style_cross)
+plot(show_any_tp and tradeAllowed and is_short_setup ? tp_level_short : na, "Short TP", color=color.new(#00BFFF, 20), linewidth=2, style=plot.style_cross)
 
 // Runner Trail
 runner_trail_val = runner_ema_source == "21 HMA" ? hma_21 : runner_ema_source == "21 EMA" ? ema_21 : ema_34
@@ -470,8 +474,9 @@ if showContextPanel and tradeAllowed and barstate.islast
     // MTF RSI compact
     mtf_all_bull = rsi_dir_fast == 1 and rsi_dir_mid == 1 and rsi_dir_slow == 1
     mtf_all_bear = rsi_dir_fast == -1 and rsi_dir_mid == -1 and rsi_dir_slow == -1
-    mtf_agree_count = (rsi_dir_fast != 0 ? 1 : 0) + (rsi_dir_mid != 0 ? 1 : 0) + (rsi_dir_slow != 0 ? 1 : 0)
-    mtf_text = mtf_all_bull ? "3/3 BULL ▲" : mtf_all_bear ? "3/3 BEAR ▼" : str.tostring(mtf_agree_count) + "/3 MIXED"
+    mtf_bull_count = (rsi_dir_fast == 1 ? 1 : 0) + (rsi_dir_mid == 1 ? 1 : 0) + (rsi_dir_slow == 1 ? 1 : 0)
+    mtf_bear_count = (rsi_dir_fast == -1 ? 1 : 0) + (rsi_dir_mid == -1 ? 1 : 0) + (rsi_dir_slow == -1 ? 1 : 0)
+    mtf_text = mtf_all_bull ? "3/3 BULL ▲" : mtf_all_bear ? "3/3 BEAR ▼" : str.tostring(mtf_bull_count) + "▲ " + str.tostring(mtf_bear_count) + "▼ MIXED"
     mtf_col = mtf_all_bull ? color.new(color.green, 60) : mtf_all_bear ? color.new(color.red, 60) : color.new(color.yellow, 65)
     table.cell(ctx_table, 0, 5, "MTF RSI", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(ctx_table, 1, 5, mtf_text, bgcolor=mtf_col, text_color=color.white, text_size=size.small)
@@ -504,7 +509,7 @@ if showSizingDash and tradeAllowed and barstate.islast
     vol_ratio_display = str.tostring(atr_ratio, "0.0") + "x avg"
     table.cell(size_table, 2, 2, vol_ratio_display, bgcolor=color.new(color.gray, 88), text_color=color.new(color.gray, 30), text_size=size.small)
 
-    stop_ticks = use_cl_preset ? stop_dist * 100 : stop_dist * 4
+    stop_ticks = use_cl_preset ? stop_dist * 100 : use_ym_preset ? stop_dist * 1 : stop_dist * 4
     stop_display = use_cl_preset ? "$" + str.tostring(stop_dist, "0.00") + " (" + str.tostring(stop_ticks, "0") + "t)" : str.tostring(stop_dist, "0.1") + " pts (" + str.tostring(stop_ticks, "0") + "t)"
     stop_dollars = str.tostring(stop_dist * dollar_per_point, "0.0") + "/ct"
     table.cell(size_table, 0, 3, "STOP DIST", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
