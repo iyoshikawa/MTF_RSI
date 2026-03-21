@@ -17,6 +17,7 @@ use_ym_preset = instrument_preset == "🔷 YM/MYM (Dow)"
 
 grp_core = "Core Settings (match Signals)"
 ema_length_in = input.int(34, "EMA Length", group=grp_core)
+rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_core, tooltip="Must match Signals indicator. Standard: Balanced.\nFast: Quicker reversals.\nUltra-Fast: Earliest signals.")
 shortLen    = input.int(5, "Short RSI Period", group=grp_core)
 longLen     = input.int(13, "Long RSI Period", group=grp_core)
 shortSmooth = input.int(2, "Short Smoothing", group=grp_core)
@@ -101,6 +102,14 @@ adx_threshold_a = use_cl_preset ? 22.0 : use_ym_preset ? 18.0 : use_nq_preset ? 
 dollar_per_point = use_cl_preset ? 10.0 : use_ym_preset ? 0.50 : use_nq_preset ? 2.0 : use_es_preset ? 5.0 : dollar_per_point_in
 use_low_vol_suppress = use_cl_preset ? true : suppress_low_vol_bb
 
+// RSI Speed overrides
+rsi_short_len = rsi_speed == "Ultra-Fast" ? 3 : rsi_speed == "Fast" ? 4 : shortLen
+rsi_long_len  = rsi_speed == "Ultra-Fast" ? 8 : rsi_speed == "Fast" ? 10 : longLen
+rsi_short_sm  = rsi_speed == "Ultra-Fast" ? 1 : rsi_speed == "Fast" ? 1 : shortSmooth
+rsi_long_sm   = rsi_speed == "Ultra-Fast" ? 1 : rsi_speed == "Fast" ? 2 : longSmooth
+rsi_thresh    = rsi_speed == "Ultra-Fast" ? 0.5 : rsi_speed == "Fast" ? 0.75 : threshold
+rsi_src       = rsi_speed == "Ultra-Fast" ? hlc3 : close
+
 // ==========================================
 // --- SESSION PARSING ---
 // ==========================================
@@ -138,8 +147,8 @@ calc_double_stoch(len, smooth) =>
 get_rsi_direction(diff, thresh) =>
     diff > thresh ? 1 : diff < -thresh ? -1 : 0
 
-[rsiS_curr, rsiL_curr, diff_curr] = calc_double_rsi(close, shortLen, longLen, shortSmooth, longSmooth)
-rsi_dir_curr = get_rsi_direction(diff_curr, threshold)
+[rsiS_curr, rsiL_curr, diff_curr] = calc_double_rsi(rsi_src, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm)
+rsi_dir_curr = get_rsi_direction(diff_curr, rsi_thresh)
 db_stoch_curr = calc_double_stoch(stochLen, stochSmth)
 stoch_momentum_bull = db_stoch_curr > 50
 stoch_momentum_bear = db_stoch_curr < 50
@@ -190,8 +199,8 @@ mtf_mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes
 mtf_slow = chart_minutes <= 3 ? "60" : chart_minutes <= 5 ? "240" : chart_minutes <= 15 ? "D" : "W"
 
 get_mtf_rsi_dir(tf) =>
-    [_, _, diff_raw] = request.security(cleanTicker, tf, calc_double_rsi(close, shortLen, longLen, shortSmooth, longSmooth), lookahead = barmerge.lookahead_on)
-    get_rsi_direction(diff_raw[1], threshold)
+    [_, _, diff_raw] = request.security(cleanTicker, tf, calc_double_rsi(rsi_src, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm), lookahead = barmerge.lookahead_on)
+    get_rsi_direction(diff_raw[1], rsi_thresh)
 
 rsi_dir_fast = get_mtf_rsi_dir(mtf_fast)
 rsi_dir_mid  = get_mtf_rsi_dir(mtf_mid)
