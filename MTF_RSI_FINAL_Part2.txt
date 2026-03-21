@@ -86,9 +86,11 @@ showRunnerTrail = input.bool(false, "Show Runner Trail Stop", group=grp_runner, 
 runner_ema_source = input.string("34 EMA", "Trail Source", options=["34 EMA", "21 HMA", "21 EMA"], group=grp_runner, tooltip="Which moving average to use as the runner trail. 34 EMA = wider (more room), 21 HMA = faster/smoother, 21 EMA = tightest trail.")
 
 grp_pyramid = "📈 Pyramid Adds"
-enablePyramid = input.bool(false, "Enable Pyramid Add Signals", group=grp_pyramid, tooltip="When enabled, plots add-on entry arrows when price pulls back to the EMA during an active grade. Allows scaling into winning trades.")
-max_adds = input.int(2, "Max Adds Per Trend", group=grp_pyramid, minval=1, maxval=5, tooltip="Maximum number of pyramid add signals per trend direction. Resets when the grade changes. 2 = conservative, 4+ = aggressive.")
-ema_pullback_pct = input.float(0.05, "EMA Pullback Zone (%)", group=grp_pyramid, minval=0.01, maxval=0.5, tooltip="How close price must be to the EMA (as % of price) to trigger an add. 0.05% = very tight pullback required. Larger = more generous zone.")
+enablePyramid = input.bool(false, "Enable Pyramid Add Signals", group=grp_pyramid, tooltip="Plots add-on entry arrows when price bounces off the trail EMA during an active grade. Uses the same EMA selected in Runner Trail Source.")
+max_adds = input.int(2, "Max Adds Per Trend", group=grp_pyramid, minval=1, maxval=5, tooltip="Maximum pyramid adds per trend direction. Resets on direction change. 2 = conservative, 4+ = aggressive.")
+pyramid_trail_source = input.string("Runner Trail", "Pyramid EMA Source", options=["Runner Trail", "34 EMA"], group=grp_pyramid, tooltip="Runner Trail: Uses the same EMA as your Runner Trail Stop setting (21 HMA, 21 EMA, or 34 EMA). Keeps adds and trail in sync.\n34 EMA: Always uses the 34 EMA regardless of runner trail setting.")
+ema_pullback_pct = input.float(0.15, "Pullback Zone (%)", group=grp_pyramid, minval=0.01, maxval=1.0, step=0.05, tooltip="How close price must get to the trail EMA (as % of price) to qualify as a pullback. 0.10% = tight, 0.20% = moderate, 0.30% = generous. Default 0.15%.")
+require_bounce = input.bool(true, "Require Bounce Confirmation", group=grp_pyramid, tooltip="When on, price must touch the pullback zone AND the next bar must close back in the trend direction. Prevents triggering on a bar that slices through the EMA.")
 
 // ==========================================
 // --- PRESET OVERRIDES ---
@@ -370,11 +372,19 @@ if filtered_new_signal and grade_num > 0
 
 grade_upgraded = grade_num > prev_grade_num and grade_num > 0 and prev_grade_num > 0 and ((direction == "LONG" and pyramid_dir == 1) or (direction == "SHORT" and pyramid_dir == -1))
 
-ema_dist_pct = math.abs(close - ema_34) / ema_34 * 100
-near_ema = ema_dist_pct <= ema_pullback_pct
-was_away_from_ema = ema_dist_pct[1] > ema_pullback_pct or ema_dist_pct[2] > ema_pullback_pct
-ema_pullback_long = near_ema and was_away_from_ema and is_long_setup and pyramid_dir == 1 and close > ema_34
-ema_pullback_short = near_ema and was_away_from_ema and is_short_setup and pyramid_dir == -1 and close < ema_34
+// Pyramid pullback — uses runner trail EMA or 34 EMA
+pyramid_ema = pyramid_trail_source == "Runner Trail" ? runner_trail_val : ema_34
+pyr_dist_pct = math.abs(close - pyramid_ema) / pyramid_ema * 100
+near_trail = pyr_dist_pct <= ema_pullback_pct
+was_away_from_trail = pyr_dist_pct[1] > ema_pullback_pct or pyr_dist_pct[2] > ema_pullback_pct
+// Bounce: current bar closed back in trend direction after touching the zone
+bounce_long = not require_bounce or (close > open and close > pyramid_ema)
+bounce_short = not require_bounce or (close < open and close < pyramid_ema)
+// Touch zone: low dipped into zone (long) or high poked into zone (short)
+touch_long = low <= pyramid_ema * (1 + ema_pullback_pct / 100)
+touch_short = high >= pyramid_ema * (1 - ema_pullback_pct / 100)
+ema_pullback_long = touch_long and was_away_from_trail and bounce_long and is_long_setup and pyramid_dir == 1 and close > pyramid_ema
+ema_pullback_short = touch_short and was_away_from_trail and bounce_short and is_short_setup and pyramid_dir == -1 and close < pyramid_ema
 ema_pullback_add = ema_pullback_long or ema_pullback_short
 
 can_add = enablePyramid and add_count < max_adds and pyramid_dir != 0 and pyramid_adx_ok
