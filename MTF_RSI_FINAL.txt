@@ -98,6 +98,20 @@ ribbon_transparency = input.int(85, "Ribbon Transparency", group=grp_dash, minva
 ribbon_consol_color = input.color(#000000, "Ribbon Consolidation Color", group=grp_dash, tooltip="Color the ribbon changes to during sideways consolidation. Default black.")
 ribbon_time_config = input.string("0800-1600:23456", "Ribbon Visible Hours", group=grp_dash, tooltip="Independent time window for the RSI ribbon. Format: TIME1,TIME2:DAYS. The ribbon only appears during these hours. Separate from the signal session config.")
 
+grp_sig_colors = "🎨 Signal Colors"
+sig_long_color_aplus  = input.color(#00FF00, "A+ Long",  group=grp_sig_colors, inline="ca+")
+sig_short_color_aplus = input.color(#FF00FF, "A+ Short", group=grp_sig_colors, inline="ca+")
+sig_long_color_a      = input.color(#00CC00, "A Long",   group=grp_sig_colors, inline="ca")
+sig_short_color_a     = input.color(#FF0000, "A Short",  group=grp_sig_colors, inline="ca")
+sig_long_color_aminus = input.color(#90EE90, "A- Long",  group=grp_sig_colors, inline="ca-")
+sig_short_color_aminus= input.color(#FF6347, "A- Short", group=grp_sig_colors, inline="ca-")
+sig_long_color_bplus  = input.color(#FFFF00, "B+ Long",  group=grp_sig_colors, inline="cb+")
+sig_short_color_bplus = input.color(#4169E1, "B+ Short", group=grp_sig_colors, inline="cb+")
+sig_long_color_b      = input.color(#FFA500, "B Long",   group=grp_sig_colors, inline="cb")
+sig_short_color_b     = input.color(#9370DB, "B Short",  group=grp_sig_colors, inline="cb")
+sig_long_text_color   = input.color(color.white, "Long Text Color",  group=grp_sig_colors, inline="ct")
+sig_short_text_color  = input.color(color.white, "Short Text Color", group=grp_sig_colors, inline="ct")
+
 // Anti-Chop Filters
 grp_chop = "🔇 Anti-Chop Filters"
 cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30)
@@ -470,16 +484,16 @@ plotcandle(useHAOutline ? open : na, useHAOutline ? high : na, useHAOutline ? lo
 barcolor(not useHAOutline ? candle_color : na)
 
 // Signal Shapes
-plotshape(sig_a_plus_long, "A+ Long", shape.labelup, location.belowbar, color.new(#00FF00, 0), size=size.large, text="A+", textcolor=color.white)
-plotshape(sig_a_plus_short, "A+ Short", shape.labeldown, location.abovebar, color.new(#FF00FF, 0), size=size.large, text="A+", textcolor=color.white)
-plotshape(sig_a_long, "A Long", shape.labelup, location.belowbar, color.new(#00CC00, 0), size=size.normal, text="A", textcolor=color.white)
-plotshape(sig_a_short, "A Short", shape.labeldown, location.abovebar, color.new(#FF0000, 0), size=size.normal, text="A", textcolor=color.white)
-plotshape(sig_a_minus_long, "A- Long", shape.labelup, location.belowbar, color.new(#90EE90, 0), size=size.small, text="A-", textcolor=color.white)
-plotshape(sig_a_minus_short, "A- Short", shape.labeldown, location.abovebar, color.new(#FF6347, 0), size=size.small, text="A-", textcolor=color.white)
-plotshape(sig_b_plus_long, "B+ Long Scalp", shape.labelup, location.belowbar, color.new(#FFFF00, 0), size=size.small, text="B+", textcolor=color.white)
-plotshape(sig_b_plus_short, "B+ Short Scalp", shape.labeldown, location.abovebar, color.new(#4169E1, 0), size=size.small, text="B+", textcolor=color.white)
-plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, color.new(#FFA500, 0), size=size.tiny, text="B", textcolor=color.white)
-plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, color.new(#9370DB, 0), size=size.tiny, text="B", textcolor=color.white)
+plotshape(sig_a_plus_long, "A+ Long", shape.labelup, location.belowbar, sig_long_color_aplus, size=size.large, text="A+", textcolor=sig_long_text_color)
+plotshape(sig_a_plus_short, "A+ Short", shape.labeldown, location.abovebar, sig_short_color_aplus, size=size.large, text="A+", textcolor=sig_short_text_color)
+plotshape(sig_a_long, "A Long", shape.labelup, location.belowbar, sig_long_color_a, size=size.normal, text="A", textcolor=sig_long_text_color)
+plotshape(sig_a_short, "A Short", shape.labeldown, location.abovebar, sig_short_color_a, size=size.normal, text="A", textcolor=sig_short_text_color)
+plotshape(sig_a_minus_long, "A- Long", shape.labelup, location.belowbar, sig_long_color_aminus, size=size.small, text="A-", textcolor=sig_long_text_color)
+plotshape(sig_a_minus_short, "A- Short", shape.labeldown, location.abovebar, sig_short_color_aminus, size=size.small, text="A-", textcolor=sig_short_text_color)
+plotshape(sig_b_plus_long, "B+ Long Scalp", shape.labelup, location.belowbar, sig_long_color_bplus, size=size.small, text="B+", textcolor=sig_long_text_color)
+plotshape(sig_b_plus_short, "B+ Short Scalp", shape.labeldown, location.abovebar, sig_short_color_bplus, size=size.small, text="B+", textcolor=sig_short_text_color)
+plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, sig_long_color_b, size=size.tiny, text="B", textcolor=sig_long_text_color)
+plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, sig_short_color_b, size=size.tiny, text="B", textcolor=sig_short_text_color)
 
 // HA Exit Warning
 plotshape(ha_exit_signal and is_long_setup and tradeAllowed, "HA Exit Long", shape.xcross, location.abovebar, color.new(#FF6B00, 0), size=size.small, text="HA\u2717")
