@@ -16,79 +16,79 @@ use_es_preset = instrument_preset == "📊 ES/MES (S&P 500)"
 use_ym_preset = instrument_preset == "🔷 YM/MYM (Dow)"
 
 grp_core = "Core Settings (match Signals)"
-ema_length_in = input.int(34, "EMA Length", group=grp_core)
+ema_length_in = input.int(34, "EMA Length", group=grp_core, tooltip="Primary EMA for trend direction. Must match Signals indicator. Overridden by instrument preset.")
 rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_core, tooltip="Must match Signals indicator setting.\n\nStandard (5/13, smooth 2/3, zone 1.0): Balanced defaults.\nFast (4/10, smooth 1/2, zone 0.75): ~2-3 bars earlier reversals.\nUltra-Fast (3/8, smooth 1/1, zone 0.5, hlc3): Earliest signals — enable consolidation filter for chop.")
 shortLen    = input.int(5, "Short RSI Period", group=grp_core, tooltip="Lookback for the fast RSI. Lower = more responsive but noisier. Range: 3-7. Overridden by RSI Speed preset.")
 longLen     = input.int(13, "Long RSI Period", group=grp_core, tooltip="Lookback for the slow RSI anchor. Keep at least 2x Short RSI Period. Range: 8-21. Overridden by RSI Speed preset.")
 shortSmooth = input.int(2, "Short Smoothing", group=grp_core, tooltip="EMA smoothing on Short RSI. 1 = no smoothing. Range: 1-5. Overridden by RSI Speed preset.")
 longSmooth  = input.int(3, "Long Smoothing", group=grp_core, tooltip="EMA smoothing on Long RSI. 1 = no smoothing. Range: 1-5. Overridden by RSI Speed preset.")
 threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_core, tooltip="Min RSI diff to register direction. Lower = more sensitive. Range: 0.3-2.0. Overridden by RSI Speed preset.")
-stochLen  = input.int(10, "Stoch Period", group=grp_core)
-stochSmth = input.int(3, "Stoch Smoothing", group=grp_core)
-adx_length = input.int(14, "ADX Length", group=grp_core)
-use_adx = input.bool(true, "Enable ADX Filter", group=grp_core)
-adx_threshold_a_plus_in = input.float(25, "ADX Threshold A+", group=grp_core)
-adx_threshold_a_in = input.float(20, "ADX Threshold A", group=grp_core)
-adx_floor_bb = input.float(15.0, "ADX Floor B/B+", group=grp_core)
-vol_ma_len = input.int(20, "Volume MA Length", group=grp_core)
-vol_mult_in   = input.float(1.1, "Volume Multiplier", group=grp_core)
-use_vol_filter = input.bool(true, "Enable Volume Filter", group=grp_core)
-suppress_low_vol_bb = input.bool(false, "Suppress B/B+ LOW Vol", group=grp_core)
-macro_trend_filter = input.bool(true, "Block Counter-Trend B/B+/A-", group=grp_core)
-require_ribbon_bb = input.bool(false, "Require RSI Ribbon B/B+", group=grp_core)
-cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_core, minval=1, maxval=30)
-persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_core, minval=1, maxval=5)
+stochLen  = input.int(10, "Stoch Period", group=grp_core, tooltip="Double Stochastic lookback. Must match Signals indicator.")
+stochSmth = input.int(3, "Stoch Smoothing", group=grp_core, tooltip="Double-EMA smoothing on stochastic. Must match Signals.")
+adx_length = input.int(14, "ADX Length", group=grp_core, tooltip="ADX lookback period. Must match Signals.")
+use_adx = input.bool(true, "Enable ADX Filter", group=grp_core, tooltip="Require ADX above threshold for A+/A grades. Must match Signals.")
+adx_threshold_a_plus_in = input.float(25, "ADX Threshold A+", group=grp_core, tooltip="Min ADX for A+ grade. Overridden by instrument preset. Must match Signals.")
+adx_threshold_a_in = input.float(20, "ADX Threshold A", group=grp_core, tooltip="Min ADX for A grade. Overridden by instrument preset. Must match Signals.")
+adx_floor_bb = input.float(15.0, "ADX Floor B/B+", group=grp_core, tooltip="Min ADX for B/B+ grades. 0 = disabled. Must match Signals.")
+vol_ma_len = input.int(20, "Volume MA Length", group=grp_core, tooltip="SMA period for volume baseline. Must match Signals.")
+vol_mult_in   = input.float(1.1, "Volume Multiplier", group=grp_core, tooltip="Volume must be this × MA to qualify for A+. Overridden by instrument preset. Must match Signals.")
+use_vol_filter = input.bool(true, "Enable Volume Filter", group=grp_core, tooltip="Require above-average volume for A+ grade. Must match Signals.")
+suppress_low_vol_bb = input.bool(false, "Suppress B/B+ LOW Vol", group=grp_core, tooltip="Block B/B+ in low volume. Auto-enabled for CL. Must match Signals.")
+macro_trend_filter = input.bool(true, "Block Counter-Trend B/B+/A-", group=grp_core, tooltip="Prevent weaker grades from firing against the 233 EMA trend. Must match Signals.")
+require_ribbon_bb = input.bool(false, "Require RSI Ribbon B/B+", group=grp_core, tooltip="B/B+ only fire when RSI ribbon is active. Must match Signals.")
+cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_core, minval=1, maxval=30, tooltip="Bars to wait between signals. Must match Signals.")
+persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_core, minval=1, maxval=5, tooltip="Hold grade for this many bars minimum. Must match Signals.")
 
 // Management-specific settings
 grp_emas = "Additional EMAs"
-show_ema_21 = input.bool(false, "Show 21 EMA", group=grp_emas)
-show_ema_50 = input.bool(false, "Show 50 EMA", group=grp_emas)
-show_ema_233 = input.bool(false, "Show 233 EMA", group=grp_emas)
+show_ema_21 = input.bool(false, "Show 21 EMA", group=grp_emas, tooltip="Plots the 21-period EMA. Fast-moving average useful for scalp entries and runner trail reference.")
+show_ema_50 = input.bool(false, "Show 50 EMA", group=grp_emas, tooltip="Plots the 50-period EMA. Intermediate trend reference — often acts as dynamic support/resistance.")
+show_ema_233 = input.bool(false, "Show 233 EMA", group=grp_emas, tooltip="Plots the 233-period EMA. Macro trend direction — the macro trend filter uses this to block counter-trend B/B+/A- signals.")
 
 grp_adx_adv = "📊 ADX Advanced"
-enable_adx_adv = input.bool(false, "Enable ADX Advanced Features", group=grp_adx_adv)
-adx_sizing_mode = input.bool(false, "Dynamic Sizing by ADX", group=grp_adx_adv)
-adx_runner_gate = input.float(20.0, "Runner ADX Gate", group=grp_adx_adv, minval=0)
-adx_pyramid_rising = input.bool(true, "Pyramid Only When ADX Rising", group=grp_adx_adv)
-adx_breakout_detect = input.bool(true, "Show Breakout Detection", group=grp_adx_adv)
-adx_breakout_low = input.float(12.0, "Breakout: ADX Low", group=grp_adx_adv)
-adx_breakout_high = input.float(20.0, "Breakout: ADX High", group=grp_adx_adv)
+enable_adx_adv = input.bool(false, "Enable ADX Advanced Features", group=grp_adx_adv, tooltip="Master toggle for all ADX Advanced features below. When off, none of the advanced ADX features apply.")
+adx_sizing_mode = input.bool(false, "Dynamic Sizing by ADX", group=grp_adx_adv, tooltip="Adjusts suggested position size based on ADX strength. Higher ADX = larger size, lower ADX = smaller. Shown in the sizing dashboard.")
+adx_runner_gate = input.float(20.0, "Runner ADX Gate", group=grp_adx_adv, minval=0, tooltip="ADX must be above this to show the runner trail stop. Prevents trailing in weak trends. 0 = always show runner.")
+adx_pyramid_rising = input.bool(true, "Pyramid Only When ADX Rising", group=grp_adx_adv, tooltip="Only allow pyramid adds when ADX is increasing (trend strengthening). Prevents adding into a weakening trend.")
+adx_breakout_detect = input.bool(true, "Show Breakout Detection", group=grp_adx_adv, tooltip="Plots a BRK marker when ADX surges from low to high range, signaling a breakout from consolidation.")
+adx_breakout_low = input.float(12.0, "Breakout: ADX Low", group=grp_adx_adv, tooltip="ADX must have been below this recently to qualify as a breakout. Lower = stricter (requires deeper consolidation).")
+adx_breakout_high = input.float(20.0, "Breakout: ADX High", group=grp_adx_adv, tooltip="ADX must cross above this to confirm the breakout. The jump from Low to High signals a new trend emerging.")
 
 
 grp_adr = "📏 ADR (Average Daily Range)"
-show_adr_dash = input.bool(false, "Show ADR on Dashboard", group=grp_adr)
-adr_length = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50)
+show_adr_dash = input.bool(false, "Show ADR on Dashboard", group=grp_adr, tooltip="Displays average daily range and remaining range on the management dashboard. Helps gauge how much move is left in the day.")
+adr_length = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50, tooltip="Number of trading days to average for the daily range. 10 = ~2 weeks. Lower = more responsive to recent volatility.")
 
 grp_levels = "📊 Globex Levels"
-show_globex_hl = input.bool(false, "Show Previous 2 Globex High/Low", group=grp_levels)
-show_globex_poc = input.bool(false, "Show Previous Globex POC", group=grp_levels)
-globex_hl_color_1 = input.color(color.new(#FF9800, 30), "Day -1 H/L Color", group=grp_levels, inline="c1")
-globex_hl_color_2 = input.color(color.new(#FF9800, 60), "Day -2 H/L Color", group=grp_levels, inline="c1")
-globex_poc_color = input.color(color.new(#E040FB, 30), "POC Color", group=grp_levels, inline="c2")
-globex_line_style = input.string("Dashed", "Line Style", options=["Solid", "Dashed", "Dotted"], group=grp_levels)
+show_globex_hl = input.bool(false, "Show Previous 2 Globex High/Low", group=grp_levels, tooltip="Plots the high and low of the previous two Globex (overnight) sessions as horizontal levels. Key support/resistance for the RTH session.")
+show_globex_poc = input.bool(false, "Show Previous Globex POC", group=grp_levels, tooltip="Plots the Point of Control (price with most volume) from the prior Globex session. Acts as a magnet/pivot for price.")
+globex_hl_color_1 = input.color(color.new(#FF9800, 30), "Day -1 H/L Color", group=grp_levels, inline="c1", tooltip="Color for the most recent Globex session's high/low lines.")
+globex_hl_color_2 = input.color(color.new(#FF9800, 60), "Day -2 H/L Color", group=grp_levels, inline="c1", tooltip="Color for the second prior Globex session's high/low lines. Fainter by default.")
+globex_poc_color = input.color(color.new(#E040FB, 30), "POC Color", group=grp_levels, inline="c2", tooltip="Color for the Globex POC level line.")
+globex_line_style = input.string("Dashed", "Line Style", options=["Solid", "Dashed", "Dotted"], group=grp_levels, tooltip="Visual style for all Globex level lines.")
 
 grp_time = "⏰ Time & Session (match Signals)"
 sessionConfig = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_time, tooltip="Must match the Signals indicator session config exactly.")
 
 grp_mgmt = "Dashboard & Management"
-showContextPanel = input.bool(true, "Show Trade Context Panel", group=grp_mgmt)
-showSizingDash = input.bool(false, "Show Volatility/Sizing Dashboard", group=grp_mgmt)
-showATRStops = input.bool(false, "Show ATR Stop Reference (A grades)", group=grp_mgmt)
+showContextPanel = input.bool(true, "Show Trade Context Panel", group=grp_mgmt, tooltip="Shows a panel with current grade, direction, MTF alignment, ADX, stochastic, and key context for trade decisions.")
+showSizingDash = input.bool(false, "Show Volatility/Sizing Dashboard", group=grp_mgmt, tooltip="Displays ATR, suggested position size based on max pain, stop distances, and TP levels. Essential for risk management.")
+showATRStops = input.bool(false, "Show ATR Stop Reference (A grades)", group=grp_mgmt, tooltip="Plots ATR-based stop-loss reference marks (orange crosses) below/above price for A-grade signals. Distance = ATR × 1.5.")
 showATRTP = input.bool(false, "Show ATR Take Profit (A grades)", group=grp_mgmt, tooltip="Plots ATR-based TP markers for A+, A, and A- grades. Adapts to daily volatility — wider targets on big days, tighter on slow days. B/B+ keep fixed-point TPs.")
 atr_tp_mult = input.float(2.0, "ATR TP Multiplier", group=grp_mgmt, minval=0.5, maxval=5.0, step=0.5, tooltip="TP distance = ATR × this multiplier. 1.5 = conservative, 2.0 = moderate, 2.5 = aggressive.")
-atr_period = input.int(14, "ATR Period", group=grp_mgmt)
-max_pain_dollars = input.float(400.0, "Max Pain ($)", group=grp_mgmt)
-dollar_per_point_in = input.float(5.0, "$ Per Point Per Contract", group=grp_mgmt)
-sizing_dash_pos = input.string("Bottom Right", "Sizing Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_mgmt)
+atr_period = input.int(14, "ATR Period", group=grp_mgmt, tooltip="Lookback for Average True Range. Used for stop distances, TP calculations, and position sizing. Standard: 14.")
+max_pain_dollars = input.float(400.0, "Max Pain ($)", group=grp_mgmt, tooltip="Maximum dollar amount you're willing to lose per trade. The sizing dashboard divides this by stop distance to suggest contract count.")
+dollar_per_point_in = input.float(5.0, "$ Per Point Per Contract", group=grp_mgmt, tooltip="Dollar value of 1 point move per contract. ES=5, NQ=2 (MNQ=2), CL=10, YM=0.50. Overridden by instrument preset.")
+sizing_dash_pos = input.string("Bottom Right", "Sizing Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_mgmt, tooltip="Corner of the chart where the volatility/sizing dashboard is placed.")
 
 grp_runner = "🏃 Runner Trail Stop"
-showRunnerTrail = input.bool(false, "Show Runner Trail Stop", group=grp_runner)
-runner_ema_source = input.string("34 EMA", "Trail Source", options=["34 EMA", "21 HMA", "21 EMA"], group=grp_runner)
+showRunnerTrail = input.bool(false, "Show Runner Trail Stop", group=grp_runner, tooltip="Plots a trailing stop line based on the selected EMA. Use for managing a 'runner' position — exit when price closes below/above the trail.")
+runner_ema_source = input.string("34 EMA", "Trail Source", options=["34 EMA", "21 HMA", "21 EMA"], group=grp_runner, tooltip="Which moving average to use as the runner trail. 34 EMA = wider (more room), 21 HMA = faster/smoother, 21 EMA = tightest trail.")
 
 grp_pyramid = "📈 Pyramid Adds"
-enablePyramid = input.bool(false, "Enable Pyramid Add Signals", group=grp_pyramid)
-max_adds = input.int(2, "Max Adds Per Trend", group=grp_pyramid, minval=1, maxval=5)
-ema_pullback_pct = input.float(0.05, "EMA Pullback Zone (%)", group=grp_pyramid, minval=0.01, maxval=0.5)
+enablePyramid = input.bool(false, "Enable Pyramid Add Signals", group=grp_pyramid, tooltip="When enabled, plots add-on entry arrows when price pulls back to the EMA during an active grade. Allows scaling into winning trades.")
+max_adds = input.int(2, "Max Adds Per Trend", group=grp_pyramid, minval=1, maxval=5, tooltip="Maximum number of pyramid add signals per trend direction. Resets when the grade changes. 2 = conservative, 4+ = aggressive.")
+ema_pullback_pct = input.float(0.05, "EMA Pullback Zone (%)", group=grp_pyramid, minval=0.01, maxval=0.5, tooltip="How close price must be to the EMA (as % of price) to trigger an add. 0.05% = very tight pullback required. Larger = more generous zone.")
 
 // ==========================================
 // --- PRESET OVERRIDES ---
