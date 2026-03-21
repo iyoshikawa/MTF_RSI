@@ -10,10 +10,8 @@ indicator("EMA High/Low/Median Ribbon", overlay=true)
 grp_ema       = "EMA Ribbon"
 ema_len       = input.int(9, "EMA Length", minval=1, group=grp_ema)
 show_ribbon   = input.bool(true, "Show EMA Ribbon", group=grp_ema)
-ema_hi_col    = input.color(color.new(#FF6B6B, 0), "EMA High Color", group=grp_ema)
-ema_mid_col   = input.color(color.new(#FFFFFF, 0), "EMA Median Color", group=grp_ema)
-ema_lo_col    = input.color(color.new(#00FF88, 0), "EMA Low Color", group=grp_ema)
-ema_bear_col  = input.color(color.new(#FF0000, 0), "EMA Bearish Color", tooltip="Line turns this color when price is below it", group=grp_ema)
+ema_bull_col  = input.color(color.new(#00FF00, 0), "Bullish Color (above)", tooltip="Line color when price is above it", group=grp_ema)
+ema_bear_col  = input.color(color.new(#FF0000, 0), "Bearish Color (below)", tooltip="Line color when price is below it", group=grp_ema)
 
 // ── Ribbon Fill ──
 grp_fill          = "Ribbon Fill"
@@ -28,10 +26,10 @@ ema_hi  = ta.ema(high, ema_len)
 ema_mid = ta.ema(hl2,  ema_len)
 ema_lo  = ta.ema(low,  ema_len)
 
-// ── Dynamic line colors (turn bearish when price is below) ──
-ema_hi_dyn  = close > ema_hi  ? ema_hi_col  : ema_bear_col
-ema_mid_dyn = close > ema_mid ? ema_mid_col : ema_bear_col
-ema_lo_dyn  = close > ema_lo  ? ema_lo_col  : ema_bear_col
+// ── Dynamic line colors (green above, red below) ──
+ema_hi_dyn  = close > ema_hi  ? ema_bull_col : ema_bear_col
+ema_mid_dyn = close > ema_mid ? ema_bull_col : ema_bear_col
+ema_lo_dyn  = close > ema_lo  ? ema_bull_col : ema_bear_col
 
 // ── Ribbon fill: bullish when price above all, bearish when below all ──
 is_above_all = close > ema_hi and close > ema_mid and close > ema_lo
