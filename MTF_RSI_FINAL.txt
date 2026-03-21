@@ -27,12 +27,12 @@ show_prev_ny_vwap = input.bool(true, "Show Previous NY VWAP Level", group=grp_co
 
 // RSI Settings
 grp_rsi = "RSI Configuration"
-rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_rsi, tooltip="Standard: Balanced defaults.\nFast: ~2-3 bars quicker direction changes, slightly more whipsaws.\nUltra-Fast: Earliest possible signals, best in strong trends. Enable consolidation filter to reduce noise.")
-shortLen    = input.int(5, "Short RSI Period", group=grp_rsi)
-longLen     = input.int(13, "Long RSI Period", group=grp_rsi)
-shortSmooth = input.int(2, "Short Smoothing", group=grp_rsi)
-longSmooth  = input.int(3, "Long Smoothing", group=grp_rsi)
-threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_rsi)
+rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_rsi, tooltip="Preset that overrides all RSI settings below for quicker or slower direction detection.\n\nStandard (5/13, smooth 2/3, zone 1.0): Balanced — fewest false signals.\nFast (4/10, smooth 1/2, zone 0.75): ~2-3 bars earlier reversals. Good for most sessions.\nUltra-Fast (3/8, smooth 1/1, zone 0.5, hlc3 source): Earliest possible signals. Best in strong trends — enable 'Gray Ribbon During Consolidation' to reduce chop whipsaws.\n\nMust match between Signals and Management indicators.")
+shortLen    = input.int(5, "Short RSI Period", group=grp_rsi, tooltip="Lookback for the fast RSI. Lower = more responsive but noisier. Range: 3-7. Overridden by RSI Speed preset.")
+longLen     = input.int(13, "Long RSI Period", group=grp_rsi, tooltip="Lookback for the slow RSI anchor. Lower = faster crossovers but less trend stability. Range: 8-21. Keep at least 2x Short RSI Period. Overridden by RSI Speed preset.")
+shortSmooth = input.int(2, "Short Smoothing", group=grp_rsi, tooltip="EMA smoothing on the Short RSI. 1 = no smoothing (raw RSI). Higher = smoother but more lag. Range: 1-5. Overridden by RSI Speed preset.")
+longSmooth  = input.int(3, "Long Smoothing", group=grp_rsi, tooltip="EMA smoothing on the Long RSI. 1 = no smoothing. Higher = more stable anchor but slower reversals. Range: 1-5. Overridden by RSI Speed preset.")
+threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_rsi, tooltip="Min RSI diff (short minus long) to register a direction. Lower = more sensitive to weak momentum, higher = only strong moves trigger. Range: 0.3-2.0. If you shorten RSI periods, keep this at 0.75+ to filter noise. Overridden by RSI Speed preset.")
 
 // Stochastic Settings
 grp_stoch = "Stochastic Configuration"

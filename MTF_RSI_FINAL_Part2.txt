@@ -17,12 +17,12 @@ use_ym_preset = instrument_preset == "🔷 YM/MYM (Dow)"
 
 grp_core = "Core Settings (match Signals)"
 ema_length_in = input.int(34, "EMA Length", group=grp_core)
-rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_core, tooltip="Must match Signals indicator. Standard: Balanced.\nFast: Quicker reversals.\nUltra-Fast: Earliest signals.")
-shortLen    = input.int(5, "Short RSI Period", group=grp_core)
-longLen     = input.int(13, "Long RSI Period", group=grp_core)
-shortSmooth = input.int(2, "Short Smoothing", group=grp_core)
-longSmooth  = input.int(3, "Long Smoothing", group=grp_core)
-threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_core)
+rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_core, tooltip="Must match Signals indicator setting.\n\nStandard (5/13, smooth 2/3, zone 1.0): Balanced defaults.\nFast (4/10, smooth 1/2, zone 0.75): ~2-3 bars earlier reversals.\nUltra-Fast (3/8, smooth 1/1, zone 0.5, hlc3): Earliest signals — enable consolidation filter for chop.")
+shortLen    = input.int(5, "Short RSI Period", group=grp_core, tooltip="Lookback for the fast RSI. Lower = more responsive but noisier. Range: 3-7. Overridden by RSI Speed preset.")
+longLen     = input.int(13, "Long RSI Period", group=grp_core, tooltip="Lookback for the slow RSI anchor. Keep at least 2x Short RSI Period. Range: 8-21. Overridden by RSI Speed preset.")
+shortSmooth = input.int(2, "Short Smoothing", group=grp_core, tooltip="EMA smoothing on Short RSI. 1 = no smoothing. Range: 1-5. Overridden by RSI Speed preset.")
+longSmooth  = input.int(3, "Long Smoothing", group=grp_core, tooltip="EMA smoothing on Long RSI. 1 = no smoothing. Range: 1-5. Overridden by RSI Speed preset.")
+threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_core, tooltip="Min RSI diff to register direction. Lower = more sensitive. Range: 0.3-2.0. Overridden by RSI Speed preset.")
 stochLen  = input.int(10, "Stoch Period", group=grp_core)
 stochSmth = input.int(3, "Stoch Smoothing", group=grp_core)
 adx_length = input.int(14, "ADX Length", group=grp_core)
