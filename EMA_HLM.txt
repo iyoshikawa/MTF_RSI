@@ -1,0 +1,15 @@
+//@version=5
+indicator("EMA High/Low/Median", overlay=true)
+
+ema_len = input.int(21, "EMA Length", minval=1)
+col_high = input.color(color.red, "High EMA Color")
+col_low = input.color(color.green, "Low EMA Color")
+col_mid = input.color(color.yellow, "Median EMA Color")
+
+ema_high = ta.ema(high, ema_len)
+ema_low = ta.ema(low, ema_len)
+ema_mid = ta.ema((high + low) / 2, ema_len)
+
+plot(ema_high, "EMA High", color=col_high, linewidth=2)
+plot(ema_low, "EMA Low", color=col_low, linewidth=2)
+plot(ema_mid, "EMA Median", color=col_mid, linewidth=1, style=plot.style_line)
