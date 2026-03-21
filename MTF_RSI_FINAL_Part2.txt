@@ -88,7 +88,8 @@ runner_ema_source = input.string("34 EMA", "Trail Source", options=["34 EMA", "2
 grp_pyramid = "📈 Pyramid Adds"
 enablePyramid = input.bool(false, "Enable Pyramid Add Signals", group=grp_pyramid, tooltip="Plots add-on entry arrows when price bounces off the trail EMA during an active grade. Uses the same EMA selected in Runner Trail Source.")
 max_adds = input.int(2, "Max Adds Per Trend", group=grp_pyramid, minval=1, maxval=5, tooltip="Maximum pyramid adds per trend direction. Resets on direction change. 2 = conservative, 4+ = aggressive.")
-pyramid_trail_source = input.string("Runner Trail", "Pyramid EMA Source", options=["Runner Trail", "34 EMA"], group=grp_pyramid, tooltip="Runner Trail: Uses the same EMA as your Runner Trail Stop setting (21 HMA, 21 EMA, or 34 EMA). Keeps adds and trail in sync.\n34 EMA: Always uses the 34 EMA regardless of runner trail setting.")
+pyramid_trail_source = input.string("Runner Trail", "Pyramid EMA Source", options=["Runner Trail", "34 EMA", "Dual Confirm"], group=grp_pyramid, tooltip="Runner Trail: Syncs to your Runner Trail Stop EMA.\n34 EMA: Always uses 34 EMA.\nDual Confirm: Uses Runner Trail EMA for pullback + requires a custom HMA to confirm trend direction. Highest quality adds.")
+dual_hma_len = input.int(21, "Dual Confirm HMA Length", group=grp_pyramid, minval=5, maxval=100, tooltip="HMA length for dual confirmation. Must confirm trend direction before an add triggers. 21 = responsive, 34 = smoother, 50 = conservative.")
 ema_pullback_pct = input.float(0.15, "Pullback Zone (%)", group=grp_pyramid, minval=0.01, maxval=1.0, step=0.05, tooltip="How close price must get to the trail EMA (as % of price) to qualify as a pullback. 0.10% = tight, 0.20% = moderate, 0.30% = generous. Default 0.15%.")
 require_bounce = input.bool(true, "Require Bounce Confirmation", group=grp_pyramid, tooltip="When on, price must touch the pullback zone AND the next bar must close back in the trend direction. Prevents triggering on a bar that slices through the EMA.")
 
@@ -166,6 +167,7 @@ ema_233 = ta.ema(close, 233)
 hma_21 = ta.hma(close, 21)
 hma_34 = ta.hma(close, 34)
 hma_50 = ta.hma(close, 50)
+hma_pyramid = ta.hma(close, dual_hma_len)
 hma_primary_bull = (close > hma_21) and (hma_21 > hma_34)
 hma_primary_bear = (close < hma_21) and (hma_21 < hma_34)
 hma_50_confirms_bull = hma_34 > hma_50
@@ -372,8 +374,8 @@ if filtered_new_signal and grade_num > 0
 
 grade_upgraded = grade_num > prev_grade_num and grade_num > 0 and prev_grade_num > 0 and ((direction == "LONG" and pyramid_dir == 1) or (direction == "SHORT" and pyramid_dir == -1))
 
-// Pyramid pullback — uses runner trail EMA or 34 EMA
-pyramid_ema = pyramid_trail_source == "Runner Trail" ? runner_trail_val : ema_34
+// Pyramid pullback — uses runner trail EMA, 34 EMA, or runner trail + HMA dual confirm
+pyramid_ema = pyramid_trail_source == "34 EMA" ? ema_34 : runner_trail_val
 pyr_dist_pct = math.abs(close - pyramid_ema) / pyramid_ema * 100
 near_trail = pyr_dist_pct <= ema_pullback_pct
 was_away_from_trail = pyr_dist_pct[1] > ema_pullback_pct or pyr_dist_pct[2] > ema_pullback_pct
@@ -385,7 +387,11 @@ touch_long = low <= pyramid_ema * (1 + ema_pullback_pct / 100)
 touch_short = high >= pyramid_ema * (1 - ema_pullback_pct / 100)
 ema_pullback_long = touch_long and was_away_from_trail and bounce_long and is_long_setup and pyramid_dir == 1 and close > pyramid_ema
 ema_pullback_short = touch_short and was_away_from_trail and bounce_short and is_short_setup and pyramid_dir == -1 and close < pyramid_ema
-ema_pullback_add = ema_pullback_long or ema_pullback_short
+// Dual confirm: custom HMA must agree with trend direction
+dual_hma_bull = hma_pyramid > hma_pyramid[1] and close > hma_pyramid
+dual_hma_bear = hma_pyramid < hma_pyramid[1] and close < hma_pyramid
+dual_confirm_ok = pyramid_trail_source != "Dual Confirm" or (pyramid_dir == 1 and dual_hma_bull) or (pyramid_dir == -1 and dual_hma_bear)
+ema_pullback_add = (ema_pullback_long or ema_pullback_short) and dual_confirm_ok
 
 can_add = enablePyramid and add_count < max_adds and pyramid_dir != 0 and pyramid_adx_ok
 add_trigger = can_add and (grade_upgraded or ema_pullback_add) and not filtered_new_signal
