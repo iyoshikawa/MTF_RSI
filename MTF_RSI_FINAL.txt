@@ -158,8 +158,9 @@ algo_filter = algo_mode == "OFF" ? true : algo_mode == "TRADE WITH" ? in_any_alg
 // ==========================================
 // --- ADR FILTER ---
 // ==========================================
-daily_high = request.security(cleanTicker, "D", high[1], lookahead = barmerge.lookahead_on)
-daily_low  = request.security(cleanTicker, "D", low[1], lookahead = barmerge.lookahead_on)
+// Use current day's running high/low for intraday range consumed
+daily_high = request.security(cleanTicker, "D", high, lookahead = barmerge.lookahead_off)
+daily_low  = request.security(cleanTicker, "D", low, lookahead = barmerge.lookahead_off)
 adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], lookahead = barmerge.lookahead_on)
 today_range = daily_high - daily_low
 adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0
@@ -226,9 +227,6 @@ var float prev_ny_vwap_close = na
 if ny_session_start
     sum_pv := 0.0
     sum_v := 0.0
-ny_vwap = sum_v > 0 ? sum_pv / sum_v : na
-if ny_session_end and not na(ny_vwap)
-    prev_ny_vwap_close := ny_vwap
 
 // Volume Filter
 hasVolume = not na(volume) and volume > 0
@@ -236,10 +234,15 @@ vol_ma = ta.sma(hasVolume ? volume : 1, vol_ma_len)
 vol_above_avg = hasVolume ? (volume / vol_ma > vol_mult) : true
 vol_filter = use_vol_filter ? vol_above_avg : true
 
+// Accumulate BEFORE reading VWAP so current bar is included
 if in_ny_session and hasVolume
     typical_price = (high + low + close) / 3
     sum_pv := sum_pv + (typical_price * volume)
     sum_v := sum_v + volume
+
+ny_vwap = sum_v > 0 ? sum_pv / sum_v : na
+if ny_session_end and not na(ny_vwap)
+    prev_ny_vwap_close := ny_vwap
 
 // ADX
 [diPlus, diMinus, adx_value] = ta.dmi(adx_length, adx_length)
@@ -555,7 +558,7 @@ if showDash and barstate.islast
 
     // EMA Trend
     ema_trend_col = hma_trend == "STRONG LONG" ? color.new(color.green, 55) :hma_trend == "LONG" ? color.new(color.green, 70) :hma_trend == "STRONG SHORT" ? color.new(color.red, 55) :hma_trend == "SHORT" ? color.new(color.red, 70) :color.new(color.gray, 80)
-    table.cell(dash_table, 0, 9, "EMA TREND", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 0, 9, "HMA TREND", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(dash_table, 1, 9, hma_trend, bgcolor=ema_trend_col, text_color=color.white, text_size=size.small)
 
 // ==========================================
