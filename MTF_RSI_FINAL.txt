@@ -143,6 +143,7 @@ consol_cp3_expect = input.float(0.60, "Expected Range % by CP3", group=grp_conso
 enable_prior_compress = input.bool(true, "Highlight Prior Day Compression", group=grp_consol_filter, tooltip="Flags when prior day(s) had tight range, signaling potential expansion today.")
 compress_days = input.int(2, "Consecutive Compression Days", group=grp_consol_filter, minval=1, maxval=5, tooltip="Number of consecutive tight-range days to flag expansion potential.")
 suppress_on_tight_consol = input.bool(false, "Suppress B/B+ in Tight Consolidation", group=grp_consol_filter, tooltip="Blocks B and B+ signals when the session regime is Tight Consolidation. Prevents scalps in dead range.")
+suppress_all_tight_consol = input.bool(false, "Suppress ALL Grades in Tight Consolidation", group=grp_consol_filter, tooltip="Blocks ALL signals (A+, A, A-, B+, B) when the session regime is Tight Consolidation. Full sit-out mode for dead range days.")
 show_consol_bg = input.bool(true, "Show Regime Background Shading", group=grp_consol_filter, tooltip="Tints the chart background based on consolidation regime: blue = tight, yellow = mild, red = expansion.")
 
 // ==========================================
@@ -428,7 +429,8 @@ sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 15.0 :
 // --- TIME & SESSION FILTER ---
 // ==========================================
 inSession = inSession_override
-tradeAllowed = inSession and algo_filter and adr_ok
+consol_all_ok = not suppress_all_tight_consol or not is_tight_consol
+tradeAllowed = inSession and algo_filter and adr_ok and consol_all_ok
 
 // ==========================================
 // --- PERSISTENCE & COOLDOWN ---
