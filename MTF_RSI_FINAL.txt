@@ -1,5 +1,5 @@
 //@version=5
-indicator("MTF RSI Signals [v7.4.3]", overlay=true, max_labels_count=500)
+indicator("MTF RSI Signals [v7.5.0]", overlay=true, max_labels_count=500)
 
 // Clean ticker for request.security (avoids session/extended hours issues)
 cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
@@ -125,6 +125,26 @@ enable_consol_filter = input.bool(false, "Gray Ribbon During Consolidation", gro
 consol_range_pts = input.float(10.0, "Consolidation Range (pts)", group=grp_chop, minval=1.0, tooltip="If the highest high minus lowest low over the lookback period is less than this, price is consolidating. NQ: 48, ES: 8")
 consol_bars = input.int(20, "Consolidation Lookback (bars)", group=grp_chop, minval=5, maxval=100, tooltip="Number of bars to measure the price range over.")
 
+// Consolidation Filter (Range vs ATR)
+grp_consol_filter = "📊 Consolidation Filter (Range vs ATR)"
+enable_consol_regime = input.bool(true, "Enable Consolidation Regime Detection", group=grp_consol_filter, tooltip="Classifies the current session as Tight Consolidation, Mild Consolidation, Normal, or Expansion based on developing range vs daily ATR. Shows regime in dashboard.")
+consol_atr_length = input.int(14, "ATR Length", group=grp_consol_filter, minval=1, maxval=50, tooltip="Daily ATR lookback period for range classification. 14 = standard.")
+consol_tight_thresh = input.float(0.50, "Tight Consolidation (x ATR)", group=grp_consol_filter, minval=0.1, maxval=1.0, step=0.05, tooltip="Range below this fraction of ATR = tight consolidation. Fade or sit out.")
+consol_mild_thresh = input.float(0.75, "Mild Consolidation (x ATR)", group=grp_consol_filter, minval=0.1, maxval=1.5, step=0.05, tooltip="Range between tight and this = mild consolidation. Lean mean-revert.")
+consol_expansion_thresh = input.float(1.00, "Expansion (x ATR)", group=grp_consol_filter, minval=0.5, maxval=2.0, step=0.05, tooltip="Range above this fraction = expansion/trend day. Lean into trend continuation.")
+
+consol_cp1_hour = input.int(10, "Checkpoint 1 Hour (ET)", group=grp_consol_filter, minval=0, maxval=23, tooltip="First intraday checkpoint (ET hour, 24hr). Default 10 = 10:00 AM.")
+consol_cp2_hour = input.int(12, "Checkpoint 2 Hour (ET)", group=grp_consol_filter, minval=0, maxval=23)
+consol_cp3_hour = input.int(14, "Checkpoint 3 Hour (ET)", group=grp_consol_filter, minval=0, maxval=23)
+consol_cp1_expect = input.float(0.30, "Expected Range % by CP1", group=grp_consol_filter, minval=0.05, maxval=1.0, step=0.05, tooltip="If range is below this fraction of ATR at checkpoint 1, session is likely consolidating.")
+consol_cp2_expect = input.float(0.45, "Expected Range % by CP2", group=grp_consol_filter, minval=0.05, maxval=1.0, step=0.05)
+consol_cp3_expect = input.float(0.60, "Expected Range % by CP3", group=grp_consol_filter, minval=0.05, maxval=1.0, step=0.05)
+
+enable_prior_compress = input.bool(true, "Highlight Prior Day Compression", group=grp_consol_filter, tooltip="Flags when prior day(s) had tight range, signaling potential expansion today.")
+compress_days = input.int(2, "Consecutive Compression Days", group=grp_consol_filter, minval=1, maxval=5, tooltip="Number of consecutive tight-range days to flag expansion potential.")
+suppress_on_tight_consol = input.bool(false, "Suppress B/B+ in Tight Consolidation", group=grp_consol_filter, tooltip="Blocks B and B+ signals when the session regime is Tight Consolidation. Prevents scalps in dead range.")
+show_consol_bg = input.bool(true, "Show Regime Background Shading", group=grp_consol_filter, tooltip="Tints the chart background based on consolidation regime: blue = tight, yellow = mild, red = expansion.")
+
 // ==========================================
 // --- PRESET OVERRIDES ---
 // ==========================================
@@ -188,6 +208,56 @@ adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], 
 today_range = daily_high - daily_low
 adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0
 adr_ok = not enable_adr_filter or adr_pct_used < adr_exhaust_pct
+
+// ==========================================
+// --- CONSOLIDATION REGIME (Range vs ATR) ---
+// ==========================================
+// Daily ATR for consolidation (uses configurable length)
+consol_daily_atr = request.security(cleanTicker, "D", ta.rma(ta.tr, consol_atr_length), lookahead=barmerge.lookahead_on)
+
+// Developing session range (reuses daily_high/daily_low from ADR section)
+consol_session_range = daily_high - daily_low
+consol_range_ratio = consol_daily_atr > 0 ? consol_session_range / consol_daily_atr : 0.0
+
+// Previous day ranges for compression detection
+consol_prev_high = request.security(cleanTicker, "D", high[1], lookahead=barmerge.lookahead_on)
+consol_prev_low  = request.security(cleanTicker, "D", low[1], lookahead=barmerge.lookahead_on)
+consol_prev_range = consol_prev_high - consol_prev_low
+consol_prev_ratio = consol_daily_atr > 0 ? consol_prev_range / consol_daily_atr : 0.0
+
+consol_prev2_high = request.security(cleanTicker, "D", high[2], lookahead=barmerge.lookahead_on)
+consol_prev2_low  = request.security(cleanTicker, "D", low[2], lookahead=barmerge.lookahead_on)
+consol_prev2_range = consol_prev2_high - consol_prev2_low
+consol_prev2_ratio = consol_daily_atr > 0 ? consol_prev2_range / consol_daily_atr : 0.0
+
+// Day classification
+is_tight_consol = enable_consol_regime and consol_range_ratio < consol_tight_thresh
+is_mild_consol  = enable_consol_regime and consol_range_ratio >= consol_tight_thresh and consol_range_ratio < consol_mild_thresh
+is_normal_range = enable_consol_regime and consol_range_ratio >= consol_mild_thresh and consol_range_ratio < consol_expansion_thresh
+is_expansion_day = enable_consol_regime and consol_range_ratio >= consol_expansion_thresh
+
+consol_regime = is_tight_consol ? "TIGHT CONSOL" : is_mild_consol ? "MILD CONSOL" : is_expansion_day ? "EXPANSION" : is_normal_range ? "NORMAL" : "OFF"
+
+// Time-based intraday checkpoints (ET)
+consol_et_hour = hour(time, "America/New_York")
+
+consol_passed_cp1 = consol_et_hour >= consol_cp1_hour
+consol_passed_cp2 = consol_et_hour >= consol_cp2_hour
+consol_passed_cp3 = consol_et_hour >= consol_cp3_hour
+
+cp1_consolidating = consol_passed_cp1 and consol_range_ratio < consol_cp1_expect
+cp2_consolidating = consol_passed_cp2 and consol_range_ratio < consol_cp2_expect
+cp3_consolidating = consol_passed_cp3 and consol_range_ratio < consol_cp3_expect
+
+consol_score = (cp1_consolidating ? 1 : 0) + (cp2_consolidating ? 1 : 0) + (cp3_consolidating ? 1 : 0)
+
+// Prior day compression detection
+prev_day_was_tight = consol_prev_ratio < consol_tight_thresh
+prev2_day_was_tight = consol_prev2_ratio < consol_tight_thresh
+consol_compression_alert = enable_prior_compress and (compress_days >= 2 ? (prev_day_was_tight and prev2_day_was_tight) : prev_day_was_tight)
+
+// Consolidation guidance text
+consol_guidance = is_tight_consol ? "FADE / SIT OUT" : is_mild_consol ? "CAUTION - MEAN REVERT" : is_expansion_day ? "TREND CONTINUATION" : "NORMAL SETUPS OK"
 
 // ==========================================
 // --- HELPER FUNCTIONS ---
@@ -323,7 +393,8 @@ is_a_minus_short = mtf_2tf_bear and (rsi_dir_curr == -1) and ema_bear and stoch_
 // Anti-chop + ribbon filter for B/B+
 adx_floor_ok = adx_floor_bb <= 0 or adx_value >= adx_floor_bb
 low_vol_ok = not use_low_vol_suppress or vol_class != "LOW"
-bb_chop_filter = adx_floor_ok and low_vol_ok
+consol_ok_bb = not suppress_on_tight_consol or not is_tight_consol
+bb_chop_filter = adx_floor_ok and low_vol_ok and consol_ok_bb
 ribbon_ok_long = not require_ribbon_bb or rsi_dir_curr == 1
 ribbon_ok_short = not require_ribbon_bb or rsi_dir_curr == -1
 
@@ -469,6 +540,11 @@ algo_bg_active = show_algo_bg and algo_mode != "OFF" and in_any_algo
 algo_bg_color = algo_mode == "TRADE WITH" ? color.new(#00E5FF, 92) : algo_mode == "AVOID" ? color.new(#FF6B00, 92) : na
 bgcolor(algo_bg_active ? algo_bg_color : na, title="Algo Window Highlight")
 
+// Consolidation Regime Background
+consol_bg_color = show_consol_bg and enable_consol_regime ? (is_tight_consol ? color.new(#4488FF, 92) : is_mild_consol ? color.new(#FFD700, 93) : is_expansion_day ? color.new(#FF4444, 93) : na) : na
+bgcolor(consol_bg_color, title="Consolidation Regime BG")
+bgcolor(show_consol_bg and consol_compression_alert ? color.new(#FF9F43, 88) : na, title="Compression Alert BG")
+
 // DStoch Crossover Markers
 plotshape(show_stoch_signals and stoch_buy_signal and tradeAllowed, "DStoch BUY Signal", shape.labelup, location.belowbar, color.new(color.aqua, 0), size=size.tiny, text="DS▲", textcolor=color.white)
 plotshape(show_stoch_signals and stoch_sell_signal and tradeAllowed, "DStoch SELL Signal", shape.labeldown, location.abovebar, color.new(color.fuchsia, 0), size=size.tiny, text="DS▼", textcolor=color.white)
@@ -524,7 +600,7 @@ t_pos = switch dashPos
     "Bottom Left"  => position.bottom_left
     => position.top_right
 
-var table dash_table = table.new(t_pos, 2, 10, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
+var table dash_table = table.new(t_pos, 2, 13, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
 
 if showDash and barstate.islast
     // Preset
@@ -584,6 +660,24 @@ if showDash and barstate.islast
     table.cell(dash_table, 0, 9, "HMA TREND", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(dash_table, 1, 9, hma_trend, bgcolor=ema_trend_col, text_color=color.white, text_size=size.small)
 
+    // Consolidation Regime
+    if enable_consol_regime
+        regime_col = is_tight_consol ? color.new(#4488FF, 40) : is_mild_consol ? color.new(#FFD700, 50) : is_expansion_day ? color.new(#FF4444, 40) : color.new(color.gray, 80)
+        range_pct_display = str.tostring(math.round(consol_range_ratio * 100)) + "% ATR"
+        table.cell(dash_table, 0, 10, "REGIME", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 10, consol_regime + " (" + range_pct_display + ")", bgcolor=regime_col, text_color=color.white, text_size=size.small)
+
+        // Checkpoint score
+        score_col = consol_score >= 2 ? color.new(#4488FF, 50) : consol_score == 1 ? color.new(#FFD700, 60) : color.new(color.green, 65)
+        table.cell(dash_table, 0, 11, "CP SCORE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 11, str.tostring(consol_score) + "/3", bgcolor=score_col, text_color=color.white, text_size=size.small)
+
+        // Compression alert
+        compress_text = consol_compression_alert ? "LOADED" : prev_day_was_tight ? "1-DAY TIGHT" : "—"
+        compress_col = consol_compression_alert ? color.new(#FFD700, 40) : prev_day_was_tight ? color.new(#FF9F43, 55) : color.new(color.gray, 85)
+        table.cell(dash_table, 0, 12, "COMPRESS", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 12, compress_text, bgcolor=compress_col, text_color=color.white, text_size=size.small)
+
 // ==========================================
 // --- ALERTS ---
 // ==========================================
@@ -598,3 +692,9 @@ alertcondition(sig_b_plus_short, title="💨 B+ SHORT SCALP", message="B+ SHORT:
 alertcondition(sig_b_long, title="⚡ B LONG SCALP", message="B LONG: Quick scalp!")
 alertcondition(sig_b_short, title="⚡ B SHORT SCALP", message="B SHORT: Quick scalp!")
 alertcondition(ha_exit_signal and tradeAllowed, title="⚠ HA MOMENTUM FLIP", message="HA flipped against your position!")
+
+// Consolidation Filter Alerts
+isNewDay_consol = ta.change(time("D")) != 0
+alertcondition(is_tight_consol and not is_tight_consol[1], title="📊 TIGHT CONSOLIDATION", message="Session entered tight consolidation — range below 50% of ATR. Fade or sit out.")
+alertcondition(is_expansion_day and not is_expansion_day[1], title="📊 EXPANSION DAY", message="Range exceeded ATR — expansion/trend day in progress. Lean into continuation.")
+alertcondition(isNewDay_consol and consol_compression_alert, title="📊 COMPRESSION SETUP", message="Prior day(s) compressed — watch for expansion breakout today.")
