@@ -20,45 +20,46 @@ use_ym_preset = instrument_preset == "🔷 YM/MYM (Dow)"
 // --- CORE CONFIGURATION ---
 // ==========================================
 grp_core = "Core Settings"
-ema_length_in = input.int(34, "EMA Length", group=grp_core)
-show_vwap = input.bool(true, "Show VWAP", group=grp_core)
-show_ny_vwap = input.bool(true, "Show NY Session Anchored VWAP", group=grp_core)
-show_prev_ny_vwap = input.bool(true, "Show Previous NY VWAP Level", group=grp_core)
+ema_length_in = input.int(34, "EMA Length", group=grp_core, tooltip="Primary EMA for trend direction. Price above = bullish bias, below = bearish. Overridden by instrument preset. Default: 34.")
+show_vwap = input.bool(true, "Show VWAP", group=grp_core, tooltip="Plots the session VWAP line. Used in A+ grade requirement — price must be on the right side of VWAP.")
+show_ny_vwap = input.bool(true, "Show NY Session Anchored VWAP", group=grp_core, tooltip="Plots a VWAP anchored to the NY session open (0930 ET). Useful for tracking institutional fair value during RTH.")
+show_prev_ny_vwap = input.bool(true, "Show Previous NY VWAP Level", group=grp_core, tooltip="Shows the prior NY session's closing VWAP as a horizontal reference level.")
 
 // RSI Settings
 grp_rsi = "RSI Configuration"
-shortLen    = input.int(5, "Short RSI Period", group=grp_rsi)
-longLen     = input.int(13, "Long RSI Period", group=grp_rsi)
-shortSmooth = input.int(2, "Short Smoothing", group=grp_rsi)
-longSmooth  = input.int(3, "Long Smoothing", group=grp_rsi)
-threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_rsi)
+rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_rsi, tooltip="Preset that overrides all RSI settings below for quicker or slower direction detection.\n\nStandard (5/13, smooth 2/3, zone 1.0): Balanced — fewest false signals.\nFast (4/10, smooth 1/2, zone 0.75): ~2-3 bars earlier reversals. Good for most sessions.\nUltra-Fast (3/8, smooth 1/1, zone 0.5, hlc3 source): Earliest possible signals. Best in strong trends — enable 'Gray Ribbon During Consolidation' to reduce chop whipsaws.\n\nMust match between Signals and Management indicators.")
+shortLen    = input.int(5, "Short RSI Period", group=grp_rsi, tooltip="Lookback for the fast RSI. Lower = more responsive but noisier. Range: 3-7. Overridden by RSI Speed preset.")
+longLen     = input.int(13, "Long RSI Period", group=grp_rsi, tooltip="Lookback for the slow RSI anchor. Lower = faster crossovers but less trend stability. Range: 8-21. Keep at least 2x Short RSI Period. Overridden by RSI Speed preset.")
+shortSmooth = input.int(2, "Short Smoothing", group=grp_rsi, tooltip="EMA smoothing on the Short RSI. 1 = no smoothing (raw RSI). Higher = smoother but more lag. Range: 1-5. Overridden by RSI Speed preset.")
+longSmooth  = input.int(3, "Long Smoothing", group=grp_rsi, tooltip="EMA smoothing on the Long RSI. 1 = no smoothing. Higher = more stable anchor but slower reversals. Range: 1-5. Overridden by RSI Speed preset.")
+threshold   = input.float(1.0, "RSI Neutral Zone", group=grp_rsi, tooltip="Min RSI diff (short minus long) to register a direction. Lower = more sensitive to weak momentum, higher = only strong moves trigger. Range: 0.3-2.0. If you shorten RSI periods, keep this at 0.75+ to filter noise. Overridden by RSI Speed preset.")
 
 // Stochastic Settings
 grp_stoch = "Stochastic Configuration"
-stochLen  = input.int(10, "Stoch Period", group=grp_stoch)
-stochSmth = input.int(3, "Stoch Smoothing", group=grp_stoch)
-stoch_os_in  = input.float(35, "Oversold Level", group=grp_stoch)
-stoch_ob_in  = input.float(60, "Overbought Level", group=grp_stoch)
+stochLen  = input.int(10, "Stoch Period", group=grp_stoch, tooltip="Lookback period for the Double Stochastic. Lower = more responsive. Default: 10.")
+stochSmth = input.int(3, "Stoch Smoothing", group=grp_stoch, tooltip="Double-EMA smoothing applied to the stochastic. Lower = faster but noisier. Default: 3.")
+stoch_os_in  = input.float(35, "Oversold Level", group=grp_stoch, tooltip="DStoch below this = oversold / bearish momentum. Used in grade logic — stoch must confirm direction. Overridden by instrument preset.")
+stoch_ob_in  = input.float(60, "Overbought Level", group=grp_stoch, tooltip="DStoch above this = overbought / bullish momentum. Used in grade logic — stoch must confirm direction. Overridden by instrument preset.")
 
 // DStoch Crossover Signals
 grp_stoch_signals = "DStoch Crossover Signals"
-show_stoch_signals = input.bool(true, "Show DStoch Crossover Signals", group=grp_stoch_signals)
-stoch_sell_level_in = input.float(85, "Sell Signal Level (cross down)", group=grp_stoch_signals)
-stoch_buy_level = input.float(12, "Buy Signal Level (cross up)", group=grp_stoch_signals)
-brighten_on_confluence = input.bool(true, "Brighten Background When DStoch + RSI Align", group=grp_stoch_signals)
+show_stoch_signals = input.bool(true, "Show DStoch Crossover Signals", group=grp_stoch_signals, tooltip="Plots DS arrow markers when DStoch crosses above the buy level or below the sell level.")
+stoch_sell_level_in = input.float(85, "Sell Signal Level (cross down)", group=grp_stoch_signals, tooltip="When DStoch crosses down through this level, a sell arrow appears. Higher = fewer but more extreme signals. Overridden by instrument preset.")
+stoch_buy_level = input.float(12, "Buy Signal Level (cross up)", group=grp_stoch_signals, tooltip="When DStoch crosses up through this level, a buy arrow appears. Lower = fewer but more extreme signals.")
+brighten_on_confluence = input.bool(true, "Brighten Background When DStoch + RSI Align", group=grp_stoch_signals, tooltip="When the RSI ribbon direction and DStoch momentum agree, the ribbon background brightens (transparency drops by 20). Helps visually spot high-conviction zones.")
 
 // Volume Settings
 grp_vol = "Volume Filter"
-vol_ma_len = input.int(20, "Volume MA Length", group=grp_vol)
-vol_mult_in   = input.float(1.1, "Volume Multiplier", group=grp_vol)
-use_vol_filter = input.bool(true, "Enable Volume Filter", group=grp_vol)
+vol_ma_len = input.int(20, "Volume MA Length", group=grp_vol, tooltip="SMA period for the volume baseline. Current bar volume must exceed this average × multiplier. Default: 20.")
+vol_mult_in   = input.float(1.1, "Volume Multiplier", group=grp_vol, tooltip="Volume must be at least this × the MA to qualify. 1.0 = average volume, 1.5 = 50% above average. Lower = more signals, higher = only high-volume bars. Overridden by instrument preset.")
+use_vol_filter = input.bool(true, "Enable Volume Filter", group=grp_vol, tooltip="When enabled, A+ grades require above-average volume. Disable if your instrument has unreliable volume data.")
 
 // ADX Settings
 grp_adx = "ADX Trend Strength Filter"
-use_adx = input.bool(true, "Enable ADX Filter", group=grp_adx)
-adx_length = input.int(14, "ADX Length", group=grp_adx)
-adx_threshold_a_plus_in = input.float(25, "ADX Threshold for A+", group=grp_adx)
-adx_threshold_a_in = input.float(20, "ADX Threshold for A", group=grp_adx)
+use_adx = input.bool(true, "Enable ADX Filter", group=grp_adx, tooltip="When enabled, A+ and A grades require ADX above their thresholds, confirming trend strength. Disable for instruments where ADX is unreliable.")
+adx_length = input.int(14, "ADX Length", group=grp_adx, tooltip="Lookback period for the ADX calculation. Standard is 14. Lower = more responsive to trend changes.")
+adx_threshold_a_plus_in = input.float(25, "ADX Threshold for A+", group=grp_adx, tooltip="ADX must be above this for A+ grade. Higher = only fire in strong trends. Overridden by instrument preset. CL: 28, NQ/YM: 23.")
+adx_threshold_a_in = input.float(20, "ADX Threshold for A", group=grp_adx, tooltip="ADX must be above this for A grade. Lower than A+ since A is a slightly weaker signal. Overridden by instrument preset. CL: 22, NQ/YM: 18.")
 
 // Time & Session Settings
 grp_time = "⏰ Time & Session Filters"
@@ -66,46 +67,60 @@ sessionConfig = input.string("0930-1145,1330-1600:23456", "Session Config", grou
 
 // Algo Windows
 grp_algo = "🤖 Algo Windows"
-algo_mode = input.string("OFF", "Algo Window Mode", options=["OFF", "TRADE WITH", "AVOID"], group=grp_algo)
-show_algo_bg = input.bool(true, "Highlight Algo Windows on Chart", group=grp_algo)
-use_london     = input.bool(true, "London Open (0200-0500 ET)", group=grp_algo, inline="a1")
-use_ny_open    = input.bool(true, "NY Open (0830-1000 ET)", group=grp_algo, inline="a1")
-use_ny_pm      = input.bool(true, "NY Afternoon (1330-1500 ET)", group=grp_algo, inline="a2")
-use_ny_close   = input.bool(false, "NY Close (1500-1600 ET)", group=grp_algo, inline="a2")
-use_asia       = input.bool(false, "Asia Session (2000-0000 ET)", group=grp_algo, inline="a3")
-use_globex_open = input.bool(false, "Globex Open (1800-1900 ET)", group=grp_algo, inline="a3")
+algo_mode = input.string("OFF", "Algo Window Mode", options=["OFF", "TRADE WITH", "AVOID"], group=grp_algo, tooltip="OFF: Algo windows ignored. TRADE WITH: Only show signals during selected windows. AVOID: Suppress signals during selected windows (dodge algo manipulation).")
+show_algo_bg = input.bool(true, "Highlight Algo Windows on Chart", group=grp_algo, tooltip="Shades the chart background during active algo windows so you can see when they are in effect.")
+use_london     = input.bool(true, "London Open (0200-0500 ET)", group=grp_algo, inline="a1", tooltip="London session open — high volatility from European institutional flow.")
+use_ny_open    = input.bool(true, "NY Open (0830-1000 ET)", group=grp_algo, inline="a1", tooltip="NY open / news window — highest volume period for US futures.")
+use_ny_pm      = input.bool(true, "NY Afternoon (1330-1500 ET)", group=grp_algo, inline="a2", tooltip="Afternoon session — often sees trend continuation or reversals after lunch.")
+use_ny_close   = input.bool(false, "NY Close (1500-1600 ET)", group=grp_algo, inline="a2", tooltip="Final hour — MOC orders and rebalancing. Often choppy, disabled by default.")
+use_asia       = input.bool(false, "Asia Session (2000-0000 ET)", group=grp_algo, inline="a3", tooltip="Asia session — low volume, tight ranges on US futures. Disabled by default.")
+use_globex_open = input.bool(false, "Globex Open (1800-1900 ET)", group=grp_algo, inline="a3", tooltip="Globex open — initial electronic session. Often gappy and thin. Disabled by default.")
 
 // ADR (filter only — dashboard is in Management indicator)
 grp_adr = "📏 ADR Filter"
-enable_adr_filter = input.bool(false, "Enable ADR Exhaustion Filter", group=grp_adr)
-adr_length = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50)
-adr_exhaust_pct = input.float(85.0, "Exhaustion Threshold (%)", group=grp_adr, minval=50, maxval=100)
+enable_adr_filter = input.bool(false, "Enable ADR Exhaustion Filter", group=grp_adr, tooltip="When enabled, suppresses new signals if today's range has already consumed this % of the average daily range. Prevents entries when the day's move is likely exhausted.")
+adr_length = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50, tooltip="Number of trading days to average for the daily range. 10 = ~2 weeks. Lower = more responsive to recent volatility changes.")
+adr_exhaust_pct = input.float(85.0, "Exhaustion Threshold (%)", group=grp_adr, minval=50, maxval=100, tooltip="If today's high-low range exceeds this % of ADR, signals are suppressed. 85% = conservative, 95% = permissive.")
 
 // Dashboard Settings
 grp_dash = "Dashboard & Visuals"
-showDash    = input.bool(true, "Show Grade Dashboard", group=grp_dash)
-dashPos     = input.string("Top Right", "Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash)
-colorCandles = input.bool(true, "Color Candles by Grade", group=grp_dash)
+showDash    = input.bool(true, "Show Grade Dashboard", group=grp_dash, tooltip="Shows the grade table (A+/A/A-/B+/B) with direction, MTF alignment, ADX, and stochastic info.")
+dashPos     = input.string("Top Right", "Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash, tooltip="Corner of the chart where the grade dashboard is placed.")
+colorCandles = input.bool(true, "Color Candles by Grade", group=grp_dash, tooltip="Colors candle bodies based on the current grade. Green shades for long grades, red/purple shades for short grades, gray for no signal.")
 useHAOutline = input.bool(true, "Heikin Ashi Outline Color", group=grp_dash, tooltip="Body = grade color, border/wicks = HA direction. Hide default candles.")
-ha_bull_color_in = input.color(#26A69A, "HA Bullish Outline", group=grp_dash, inline="ha1")
-ha_bear_color_in = input.color(#EF5350, "HA Bearish Outline", group=grp_dash, inline="ha1")
-showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash)
-ha_exit_warn = input.bool(true, "HA Momentum Exit Warning", group=grp_dash)
-ha_exit_bars = input.int(2, "HA Bars to Confirm Flip", group=grp_dash, minval=1, maxval=5)
-ribbon_bull_color = input.color(#00ffbb, "Ribbon Bullish Color", group=grp_dash, inline="rib1")
-ribbon_bear_color = input.color(#ff0055, "Ribbon Bearish Color", group=grp_dash, inline="rib1")
+ha_bull_color_in = input.color(#26A69A, "HA Bullish Outline", group=grp_dash, inline="ha1", tooltip="Wick/border color when Heikin Ashi candle direction is bullish.")
+ha_bear_color_in = input.color(#EF5350, "HA Bearish Outline", group=grp_dash, inline="ha1", tooltip="Wick/border color when Heikin Ashi candle direction is bearish.")
+showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash, tooltip="Plots horizontal stop-loss reference levels based on ATR distance from entry price for the current grade.")
+ha_exit_warn = input.bool(true, "HA Momentum Exit Warning", group=grp_dash, tooltip="Shows an HA X marker when Heikin Ashi candles flip direction against your trade for N consecutive bars. Early exit warning.")
+ha_exit_bars = input.int(2, "HA Bars to Confirm Flip", group=grp_dash, minval=1, maxval=5, tooltip="Number of consecutive HA candles in the opposite direction before the exit warning triggers. 1 = very sensitive, 3+ = more patient.")
+ribbon_bull_color = input.color(#00ffbb, "Ribbon Bullish Color", group=grp_dash, inline="rib1", tooltip="Background ribbon color when RSI diff is bullish (above threshold).")
+ribbon_bear_color = input.color(#ff0055, "Ribbon Bearish Color", group=grp_dash, inline="rib1", tooltip="Background ribbon color when RSI diff is bearish (below negative threshold).")
 ribbon_transparency = input.int(85, "Ribbon Transparency", group=grp_dash, minval=0, maxval=95, step=5, tooltip="0 = fully opaque, 95 = barely visible. Default 85. Brightens to 65 when DStoch + RSI align.")
 ribbon_consol_color = input.color(#000000, "Ribbon Consolidation Color", group=grp_dash, tooltip="Color the ribbon changes to during sideways consolidation. Default black.")
 ribbon_time_config = input.string("0800-1600:23456", "Ribbon Visible Hours", group=grp_dash, tooltip="Independent time window for the RSI ribbon. Format: TIME1,TIME2:DAYS. The ribbon only appears during these hours. Separate from the signal session config.")
 
+grp_sig_colors = "🎨 Signal Colors"
+sig_long_color_aplus  = input.color(#00FF00, "A+ Long",  group=grp_sig_colors, inline="ca+", tooltip="Label color for each grade's long/short signal. Pair on each row: left = long, right = short.")
+sig_short_color_aplus = input.color(#FF00FF, "A+ Short", group=grp_sig_colors, inline="ca+")
+sig_long_color_a      = input.color(#00CC00, "A Long",   group=grp_sig_colors, inline="ca")
+sig_short_color_a     = input.color(#FF0000, "A Short",  group=grp_sig_colors, inline="ca")
+sig_long_color_aminus = input.color(#90EE90, "A- Long",  group=grp_sig_colors, inline="ca-")
+sig_short_color_aminus= input.color(#FF6347, "A- Short", group=grp_sig_colors, inline="ca-")
+sig_long_color_bplus  = input.color(#FFFF00, "B+ Long",  group=grp_sig_colors, inline="cb+")
+sig_short_color_bplus = input.color(#4169E1, "B+ Short", group=grp_sig_colors, inline="cb+")
+sig_long_color_b      = input.color(#FFA500, "B Long",   group=grp_sig_colors, inline="cb")
+sig_short_color_b     = input.color(#9370DB, "B Short",  group=grp_sig_colors, inline="cb")
+sig_long_text_color   = input.color(color.white, "Long Text Color",  group=grp_sig_colors, inline="ct", tooltip="Text color inside long/short signal labels (the A+, A, A-, B+, B letters).")
+sig_short_text_color  = input.color(color.white, "Short Text Color", group=grp_sig_colors, inline="ct")
+
 // Anti-Chop Filters
 grp_chop = "🔇 Anti-Chop Filters"
-cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30)
-persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_chop, minval=1, maxval=5)
-adx_floor_bb = input.float(15.0, "ADX Floor for B/B+", group=grp_chop, minval=0)
-suppress_low_vol_bb = input.bool(false, "Suppress B/B+ During LOW Volatility", group=grp_chop)
-macro_trend_filter = input.bool(true, "Block Counter-Trend on B/B+/A-", group=grp_chop)
-require_ribbon_bb = input.bool(false, "Require RSI Ribbon for B/B+", group=grp_chop)
+cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30, tooltip="After a signal fires, suppress new signals for this many bars. Prevents rapid-fire signals in choppy conditions. 5 = default, increase if seeing too many signals.")
+persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_chop, minval=1, maxval=5, tooltip="Once a grade appears, hold it for at least this many bars even if conditions briefly lapse. Prevents grade flickering. 1 = no persistence, 3+ = very sticky.")
+adx_floor_bb = input.float(15.0, "ADX Floor for B/B+", group=grp_chop, minval=0, tooltip="Minimum ADX required for B and B+ grades to fire. Filters out scalp signals in dead/ranging markets. 0 = disabled.")
+suppress_low_vol_bb = input.bool(false, "Suppress B/B+ During LOW Volatility", group=grp_chop, tooltip="Blocks B/B+ signals when volume is below average. Prevents weak scalp signals in thin markets. Auto-enabled for CL preset.")
+macro_trend_filter = input.bool(true, "Block Counter-Trend on B/B+/A-", group=grp_chop, tooltip="Prevents B, B+, and A- grades from firing against the slow timeframe (233 EMA) trend. Only allows these weaker grades in the macro direction.")
+require_ribbon_bb = input.bool(false, "Require RSI Ribbon for B/B+", group=grp_chop, tooltip="When enabled, B and B+ signals only fire if the RSI ribbon is actively colored (not gray/neutral). Extra confirmation layer for scalp grades.")
 enable_consol_filter = input.bool(false, "Gray Ribbon During Consolidation", group=grp_chop, tooltip="Turns the RSI ribbon gray when price stays within a tight range for N bars. Prevents false directional signals during sideways chop.")
 consol_range_pts = input.float(10.0, "Consolidation Range (pts)", group=grp_chop, minval=1.0, tooltip="If the highest high minus lowest low over the lookback period is less than this, price is consolidating. NQ: 48, ES: 8")
 consol_bars = input.int(20, "Consolidation Lookback (bars)", group=grp_chop, minval=5, maxval=100, tooltip="Number of bars to measure the price range over.")
@@ -124,6 +139,14 @@ use_low_vol_suppress = use_cl_preset ? true : suppress_low_vol_bb
 preset_label = use_cl_preset ? "🛢️ CL" : use_nq_preset ? "📈 NQ" : use_es_preset ? "📊 ES" : use_ym_preset ? "🔷 YM" : "DEFAULT"
 use_cl = use_cl_preset
 use_nq = use_nq_preset
+
+// RSI Speed overrides
+rsi_short_len = rsi_speed == "Ultra-Fast" ? 3 : rsi_speed == "Fast" ? 4 : shortLen
+rsi_long_len  = rsi_speed == "Ultra-Fast" ? 8 : rsi_speed == "Fast" ? 10 : longLen
+rsi_short_sm  = rsi_speed == "Ultra-Fast" ? 1 : rsi_speed == "Fast" ? 1 : shortSmooth
+rsi_long_sm   = rsi_speed == "Ultra-Fast" ? 1 : rsi_speed == "Fast" ? 2 : longSmooth
+rsi_thresh    = rsi_speed == "Ultra-Fast" ? 0.5 : rsi_speed == "Fast" ? 0.75 : threshold
+rsi_src       = rsi_speed == "Ultra-Fast" ? hlc3 : close
 
 // ==========================================
 // --- SESSION & ALGO PARSING ---
@@ -186,8 +209,8 @@ get_rsi_direction(diff, thresh) =>
 // ==========================================
 // --- CURRENT TIMEFRAME CALCULATIONS ---
 // ==========================================
-[rsiS_curr, rsiL_curr, diff_curr] = calc_double_rsi(close, shortLen, longLen, shortSmooth, longSmooth)
-rsi_dir_curr = get_rsi_direction(diff_curr, threshold)
+[rsiS_curr, rsiL_curr, diff_curr] = calc_double_rsi(rsi_src, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm)
+rsi_dir_curr = get_rsi_direction(diff_curr, rsi_thresh)
 
 db_stoch_curr = calc_double_stoch(stochLen, stochSmth)
 stoch_momentum_bull = db_stoch_curr > 50
@@ -265,8 +288,8 @@ mtf_mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes
 mtf_slow = chart_minutes <= 3 ? "60" : chart_minutes <= 5 ? "240" : chart_minutes <= 15 ? "D" : "W"
 
 get_mtf_rsi_dir(tf) =>
-    [_, _, diff_raw] = request.security(cleanTicker, tf, calc_double_rsi(close, shortLen, longLen, shortSmooth, longSmooth), lookahead = barmerge.lookahead_on)
-    get_rsi_direction(diff_raw[1], threshold)
+    [_, _, diff_raw] = request.security(cleanTicker, tf, calc_double_rsi(rsi_src, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm), lookahead = barmerge.lookahead_on)
+    get_rsi_direction(diff_raw[1], rsi_thresh)
 
 rsi_dir_fast = get_mtf_rsi_dir(mtf_fast)
 rsi_dir_mid  = get_mtf_rsi_dir(mtf_mid)
@@ -438,7 +461,7 @@ rib_in_w3 = rib_num_win >= 3 ? not na(time(timeframe.period, str.trim(array.get(
 ribbonVisible = rib_in_w1 or rib_in_w2 or rib_in_w3
 
 bg_transparency = (brighten_on_confluence and dstoch_rsi_confluence and ribbonVisible) ? math.max(0, ribbon_transparency - 20) : ribbon_transparency
-bg_color = not ribbonVisible ? na : is_consolidating ? color.new(ribbon_consol_color, 90) : diff_curr > threshold ? color.new(ribbon_bull_color, bg_transparency) : diff_curr < -threshold ? color.new(ribbon_bear_color, bg_transparency) : color.new(color.gray, 90)
+bg_color = not ribbonVisible ? na : is_consolidating ? color.new(ribbon_consol_color, 90) : diff_curr > rsi_thresh ? color.new(ribbon_bull_color, bg_transparency) : diff_curr < -rsi_thresh ? color.new(ribbon_bear_color, bg_transparency) : color.new(color.gray, 90)
 bgcolor(bg_color, title="RSI Momentum Ribbon")
 
 // Algo Window Background
@@ -470,16 +493,16 @@ plotcandle(useHAOutline ? open : na, useHAOutline ? high : na, useHAOutline ? lo
 barcolor(not useHAOutline ? candle_color : na)
 
 // Signal Shapes
-plotshape(sig_a_plus_long, "A+ Long", shape.labelup, location.belowbar, color.new(#00FF00, 0), size=size.large, text="A+", textcolor=color.white)
-plotshape(sig_a_plus_short, "A+ Short", shape.labeldown, location.abovebar, color.new(#FF00FF, 0), size=size.large, text="A+", textcolor=color.white)
-plotshape(sig_a_long, "A Long", shape.labelup, location.belowbar, color.new(#00CC00, 0), size=size.normal, text="A", textcolor=color.white)
-plotshape(sig_a_short, "A Short", shape.labeldown, location.abovebar, color.new(#FF0000, 0), size=size.normal, text="A", textcolor=color.white)
-plotshape(sig_a_minus_long, "A- Long", shape.labelup, location.belowbar, color.new(#90EE90, 0), size=size.small, text="A-", textcolor=color.white)
-plotshape(sig_a_minus_short, "A- Short", shape.labeldown, location.abovebar, color.new(#FF6347, 0), size=size.small, text="A-", textcolor=color.white)
-plotshape(sig_b_plus_long, "B+ Long Scalp", shape.labelup, location.belowbar, color.new(#FFFF00, 0), size=size.small, text="B+", textcolor=color.white)
-plotshape(sig_b_plus_short, "B+ Short Scalp", shape.labeldown, location.abovebar, color.new(#4169E1, 0), size=size.small, text="B+", textcolor=color.white)
-plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, color.new(#FFA500, 0), size=size.tiny, text="B", textcolor=color.white)
-plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, color.new(#9370DB, 0), size=size.tiny, text="B", textcolor=color.white)
+plotshape(sig_a_plus_long, "A+ Long", shape.labelup, location.belowbar, sig_long_color_aplus, size=size.large, text="A+", textcolor=sig_long_text_color)
+plotshape(sig_a_plus_short, "A+ Short", shape.labeldown, location.abovebar, sig_short_color_aplus, size=size.large, text="A+", textcolor=sig_short_text_color)
+plotshape(sig_a_long, "A Long", shape.labelup, location.belowbar, sig_long_color_a, size=size.normal, text="A", textcolor=sig_long_text_color)
+plotshape(sig_a_short, "A Short", shape.labeldown, location.abovebar, sig_short_color_a, size=size.normal, text="A", textcolor=sig_short_text_color)
+plotshape(sig_a_minus_long, "A- Long", shape.labelup, location.belowbar, sig_long_color_aminus, size=size.small, text="A-", textcolor=sig_long_text_color)
+plotshape(sig_a_minus_short, "A- Short", shape.labeldown, location.abovebar, sig_short_color_aminus, size=size.small, text="A-", textcolor=sig_short_text_color)
+plotshape(sig_b_plus_long, "B+ Long Scalp", shape.labelup, location.belowbar, sig_long_color_bplus, size=size.small, text="B+", textcolor=sig_long_text_color)
+plotshape(sig_b_plus_short, "B+ Short Scalp", shape.labeldown, location.abovebar, sig_short_color_bplus, size=size.small, text="B+", textcolor=sig_short_text_color)
+plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, sig_long_color_b, size=size.tiny, text="B", textcolor=sig_long_text_color)
+plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, sig_short_color_b, size=size.tiny, text="B", textcolor=sig_short_text_color)
 
 // HA Exit Warning
 plotshape(ha_exit_signal and is_long_setup and tradeAllowed, "HA Exit Long", shape.xcross, location.abovebar, color.new(#FF6B00, 0), size=size.small, text="HA\u2717")
