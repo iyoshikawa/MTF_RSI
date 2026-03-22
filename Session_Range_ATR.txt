@@ -1,0 +1,224 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MTF_RSI Suite — Session Range vs ATR Filter
+
+//@version=5
+indicator("Session Range vs ATR Filter", overlay=true, max_labels_count=500)
+
+// ==========================================
+// --- INPUTS ---
+// ==========================================
+grp_atr = "📊 ATR Settings"
+atr_length = input.int(14, "ATR Length", group=grp_atr, minval=1, maxval=50, tooltip="Daily ATR lookback period. 14 = standard.")
+atr_smoothing = input.string("RMA", "ATR Smoothing", options=["RMA", "SMA", "EMA"], group=grp_atr, tooltip="Smoothing method for ATR calculation.")
+
+grp_thresh = "⏱️ Time Checkpoints & Thresholds"
+thresh_10am = input.float(30.0, "10:00 AM — Consolidation Below (%)", group=grp_thresh, minval=5.0, maxval=80.0, step=5.0, tooltip="If session range is below this % of ATR by 10:00 AM ET, session is likely consolidating.")
+thresh_12pm = input.float(45.0, "12:00 PM — Consolidation Below (%)", group=grp_thresh, minval=10.0, maxval=80.0, step=5.0, tooltip="If session range is below this % of ATR by 12:00 PM ET, you're almost certainly in a range day.")
+thresh_2pm = input.float(55.0, "2:00 PM — Consolidation Below (%)", group=grp_thresh, minval=10.0, maxval=90.0, step=5.0, tooltip="If still compressed by 2:00 PM, only risk is a late squeeze. Full trend day odds are very low.")
+thresh_expansion = input.float(75.0, "Expansion Day Threshold (%)", group=grp_thresh, minval=40.0, maxval=120.0, step=5.0, tooltip="If session range exceeds this % of ATR at any checkpoint, it's an expansion day. Lean into trend continuation.")
+
+grp_prior = "📅 Prior Day Context"
+enable_prior_day = input.bool(true, "Enable Prior Day Compression Signal", group=grp_prior, tooltip="When yesterday's range was also tight (under threshold), today has higher odds of an expansion move — compressed energy tends to release.")
+prior_day_thresh = input.float(50.0, "Prior Day Tight Range (%)", group=grp_prior, minval=20.0, maxval=80.0, step=5.0, tooltip="If prior day's full range was below this % of ATR, it counts as a compression day.")
+two_day_compression = input.bool(true, "Highlight 2-Day Compression", group=grp_prior, tooltip="Mark sessions where both yesterday AND the day before were compressed. Strong expansion setup.")
+
+grp_display = "🎨 Display"
+show_table = input.bool(true, "Show Dashboard", group=grp_display)
+show_range_line = input.bool(true, "Show Developing Range Box", group=grp_display, tooltip="Draws the session high/low as a shaded box.")
+show_labels = input.bool(true, "Show Checkpoint Labels", group=grp_display, tooltip="Labels at 10am/12pm/2pm showing range % of ATR.")
+table_position = input.string("Top Right", "Dashboard Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=grp_display)
+box_consol_color = input.color(color.new(#FF6B6B, 85), "Consolidation Box", group=grp_display)
+box_expansion_color = input.color(color.new(#4ECDC4, 85), "Expansion Box", group=grp_display)
+box_neutral_color = input.color(color.new(#95A5A6, 90), "Neutral Box", group=grp_display)
+
+// ==========================================
+// --- TIMEZONE & SESSION DETECTION ---
+// ==========================================
+// All time logic in ET (America/New_York)
+et_hour = hour(time, "America/New_York")
+et_minute = minute(time, "America/New_York")
+et_time = et_hour * 100 + et_minute
+
+// Session boundaries (RTH: 9:30 AM - 4:00 PM ET)
+is_rth = (et_time >= 930 and et_time < 1600)
+new_session = is_rth and not is_rth[1]
+
+// Checkpoint flags (trigger once per session)
+at_10am = et_time >= 1000 and et_time[1] < 1000 and is_rth
+at_12pm = et_time >= 1200 and et_time[1] < 1200 and is_rth
+at_2pm  = et_time >= 1400 and et_time[1] < 1400 and is_rth
+
+// ==========================================
+// --- DAILY ATR (prior close basis) ---
+// ==========================================
+// Request daily ATR — uses prior completed days only
+daily_atr_raw = request.security(syminfo.tickerid, "D", ta.atr(atr_length), lookahead=barmerge.lookahead_on)
+daily_atr = atr_smoothing == "SMA" ? request.security(syminfo.tickerid, "D", ta.sma(ta.tr, atr_length), lookahead=barmerge.lookahead_on) : atr_smoothing == "EMA" ? request.security(syminfo.tickerid, "D", ta.ema(ta.tr, atr_length), lookahead=barmerge.lookahead_on) : daily_atr_raw
+
+// ==========================================
+// --- DEVELOPING SESSION RANGE ---
+// ==========================================
+var float session_high = na
+var float session_low = na
+var float prev_day_range = na
+var float prev2_day_range = na
+
+if new_session
+    // Store completed session range before reset
+    if not na(session_high) and not na(session_low)
+        prev2_day_range := prev_day_range
+        prev_day_range := session_high - session_low
+    session_high := high
+    session_low := low
+else if is_rth
+    session_high := math.max(nz(session_high, high), high)
+    session_low := math.min(nz(session_low, low), low)
+
+developing_range = is_rth and not na(session_high) and not na(session_low) ? session_high - session_low : na
+range_pct = not na(developing_range) and not na(daily_atr) and daily_atr > 0 ? (developing_range / daily_atr) * 100 : na
+
+// ==========================================
+// --- CHECKPOINT READINGS ---
+// ==========================================
+var float reading_10am = na
+var float reading_12pm = na
+var float reading_2pm = na
+var string session_regime = "WAITING"
+
+if new_session
+    reading_10am := na
+    reading_12pm := na
+    reading_2pm := na
+    session_regime := "WAITING"
+
+if at_10am and not na(range_pct)
+    reading_10am := range_pct
+
+if at_12pm and not na(range_pct)
+    reading_12pm := range_pct
+
+if at_2pm and not na(range_pct)
+    reading_2pm := range_pct
+
+// ==========================================
+// --- REGIME CLASSIFICATION ---
+// ==========================================
+// Check expansion first (at any checkpoint), then consolidation
+is_expansion = (not na(range_pct) and range_pct >= thresh_expansion)
+is_consol_10 = not na(reading_10am) and reading_10am < thresh_10am
+is_consol_12 = not na(reading_12pm) and reading_12pm < thresh_12pm
+is_consol_2  = not na(reading_2pm) and reading_2pm < thresh_2pm
+
+// Regime updates at each checkpoint
+if is_expansion
+    session_regime := "EXPANSION"
+else if not na(reading_2pm)
+    session_regime := is_consol_2 ? "CONSOLIDATION" : "NORMAL"
+else if not na(reading_12pm)
+    session_regime := is_consol_12 ? "CONSOLIDATION" : "DEVELOPING"
+else if not na(reading_10am)
+    session_regime := is_consol_10 ? "LIKELY CONSOL" : "DEVELOPING"
+
+// ==========================================
+// --- PRIOR DAY COMPRESSION ---
+// ==========================================
+prior_day_pct = not na(prev_day_range) and not na(daily_atr) and daily_atr > 0 ? (prev_day_range / daily_atr) * 100 : na
+prior2_day_pct = not na(prev2_day_range) and not na(daily_atr) and daily_atr > 0 ? (prev2_day_range / daily_atr) * 100 : na
+
+prior_was_tight = enable_prior_day and not na(prior_day_pct) and prior_day_pct < prior_day_thresh
+prior2_was_tight = two_day_compression and not na(prior2_day_pct) and prior2_day_pct < prior_day_thresh
+is_2day_compression = prior_was_tight and prior2_was_tight
+
+// ==========================================
+// --- CHECKPOINT LABELS ---
+// ==========================================
+if show_labels and at_10am and not na(range_pct) and is_rth
+    lbl_color = range_pct >= thresh_expansion ? color.new(#4ECDC4, 0) : range_pct < thresh_10am ? color.new(#FF6B6B, 0) : color.new(#95A5A6, 0)
+    label.new(bar_index, session_high, "10AM\n" + str.tostring(range_pct, "#.0") + "%", style=label.style_label_down, color=lbl_color, textcolor=color.white, size=size.small)
+
+if show_labels and at_12pm and not na(range_pct) and is_rth
+    lbl_color = range_pct >= thresh_expansion ? color.new(#4ECDC4, 0) : range_pct < thresh_12pm ? color.new(#FF6B6B, 0) : color.new(#95A5A6, 0)
+    label.new(bar_index, session_high, "12PM\n" + str.tostring(range_pct, "#.0") + "%", style=label.style_label_down, color=lbl_color, textcolor=color.white, size=size.small)
+
+if show_labels and at_2pm and not na(range_pct) and is_rth
+    lbl_color = range_pct >= thresh_expansion ? color.new(#4ECDC4, 0) : range_pct < thresh_2pm ? color.new(#FF6B6B, 0) : color.new(#95A5A6, 0)
+    label.new(bar_index, session_high, "2PM\n" + str.tostring(range_pct, "#.0") + "%", style=label.style_label_down, color=lbl_color, textcolor=color.white, size=size.small)
+
+// ==========================================
+// --- SESSION RANGE BOX ---
+// ==========================================
+var box range_box = na
+if show_range_line and is_rth and not na(session_high) and not na(session_low)
+    box_color = session_regime == "EXPANSION" ? box_expansion_color : session_regime == "CONSOLIDATION" or session_regime == "LIKELY CONSOL" ? box_consol_color : box_neutral_color
+    if new_session
+        range_box := box.new(bar_index, session_high, bar_index, session_low, border_color=color.new(box_color, 60), bgcolor=box_color, border_width=1)
+    else if not na(range_box)
+        box.set_right(range_box, bar_index)
+        box.set_top(range_box, session_high)
+        box.set_bottom(range_box, session_low)
+        box.set_bgcolor(range_box, box_color)
+        box.set_border_color(range_box, color.new(box_color, 60))
+
+// ==========================================
+// --- DASHBOARD TABLE ---
+// ==========================================
+if show_table and barstate.islast
+    tbl_pos = table_position == "Top Left" ? position.top_left : table_position == "Bottom Right" ? position.bottom_right : table_position == "Bottom Left" ? position.bottom_left : position.top_right
+    var table dash = table.new(tbl_pos, 2, 9, bgcolor=color.new(#1a1a2e, 5), border_width=1, border_color=color.new(#333333, 0), frame_width=1, frame_color=color.new(#444444, 0))
+
+    // Header
+    regime_color = session_regime == "EXPANSION" ? color.new(#4ECDC4, 0) : session_regime == "CONSOLIDATION" ? color.new(#FF6B6B, 0) : session_regime == "LIKELY CONSOL" ? color.new(#FF9F43, 0) : color.new(#95A5A6, 0)
+    table.cell(dash, 0, 0, "RANGE vs ATR", text_color=color.white, text_size=size.small, bgcolor=color.new(#0d1117, 0))
+    table.cell(dash, 1, 0, session_regime, text_color=color.white, text_size=size.small, bgcolor=regime_color)
+
+    // Current range
+    table.cell(dash, 0, 1, "Range", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    range_text = not na(developing_range) ? str.tostring(developing_range, "#.1") + " (" + str.tostring(range_pct, "#.0") + "%)" : "—"
+    table.cell(dash, 1, 1, range_text, text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    // ATR
+    table.cell(dash, 0, 2, "14d ATR", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    table.cell(dash, 1, 2, not na(daily_atr) ? str.tostring(daily_atr, "#.1") : "—", text_color=color.white, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    // Checkpoint readings
+    make_checkpoint_text(val, thresh) =>
+        not na(val) ? str.tostring(val, "#.0") + "%" + (val < thresh ? " ✗" : val >= thresh_expansion ? " ★" : " ✓") : "—"
+
+    table.cell(dash, 0, 3, "10:00 AM", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    table.cell(dash, 1, 3, make_checkpoint_text(reading_10am, thresh_10am), text_color=not na(reading_10am) and reading_10am < thresh_10am ? color.new(#FF6B6B, 0) : not na(reading_10am) and reading_10am >= thresh_expansion ? color.new(#4ECDC4, 0) : color.white, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    table.cell(dash, 0, 4, "12:00 PM", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    table.cell(dash, 1, 4, make_checkpoint_text(reading_12pm, thresh_12pm), text_color=not na(reading_12pm) and reading_12pm < thresh_12pm ? color.new(#FF6B6B, 0) : not na(reading_12pm) and reading_12pm >= thresh_expansion ? color.new(#4ECDC4, 0) : color.white, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    table.cell(dash, 0, 5, "2:00 PM", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    table.cell(dash, 1, 5, make_checkpoint_text(reading_2pm, thresh_2pm), text_color=not na(reading_2pm) and reading_2pm < thresh_2pm ? color.new(#FF6B6B, 0) : not na(reading_2pm) and reading_2pm >= thresh_expansion ? color.new(#4ECDC4, 0) : color.white, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    // Prior day context
+    table.cell(dash, 0, 6, "Prior Day", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    prior_text = not na(prior_day_pct) ? str.tostring(prior_day_pct, "#.0") + "%" + (prior_was_tight ? " TIGHT" : "") : "—"
+    table.cell(dash, 1, 6, prior_text, text_color=prior_was_tight ? color.new(#FF9F43, 0) : color.white, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    // 2-day compression
+    table.cell(dash, 0, 7, "2-Day Squeeze", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    squeeze_text = is_2day_compression ? "⚡ LOADED" : prior_was_tight ? "1-Day Tight" : "—"
+    squeeze_color = is_2day_compression ? color.new(#FFD700, 0) : prior_was_tight ? color.new(#FF9F43, 0) : color.white
+    table.cell(dash, 1, 7, squeeze_text, text_color=squeeze_color, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+    // Action guidance
+    table.cell(dash, 0, 8, "Action", text_color=color.new(#aaaaaa, 0), text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+    action_text = session_regime == "EXPANSION" ? "TREND / BREAKOUT" : session_regime == "CONSOLIDATION" ? (is_2day_compression ? "FADE or WAIT BREAK" : "FADE / SIT OUT") : session_regime == "LIKELY CONSOL" ? "CAUTION" : "MONITOR"
+    table.cell(dash, 1, 8, action_text, text_color=regime_color, text_size=size.tiny, bgcolor=color.new(#0d1117, 0))
+
+// ==========================================
+// --- BAR COLORING (subtle) ---
+// ==========================================
+barcolor(is_rth and session_regime == "EXPANSION" ? color.new(#4ECDC4, 70) : is_rth and (session_regime == "CONSOLIDATION" or session_regime == "LIKELY CONSOL") ? color.new(#FF6B6B, 70) : na)
+
+// ==========================================
+// --- ALERTS ---
+// ==========================================
+alertcondition(at_10am and not na(range_pct) and range_pct < thresh_10am, title="10AM Consolidation", message="10:00 AM — Session range at {{close}} is under " + str.tostring(thresh_10am) + "% of ATR. Likely consolidation day.")
+alertcondition(at_12pm and not na(range_pct) and range_pct < thresh_12pm, title="12PM Consolidation Confirmed", message="12:00 PM — Range still compressed. High probability range day. Fade or sit out.")
+alertcondition(at_2pm and not na(range_pct) and range_pct < thresh_2pm, title="2PM Still Compressed", message="2:00 PM — Full compression day. Only risk is late squeeze.")
+alertcondition(is_expansion and not is_expansion[1], title="Expansion Day Detected", message="Range exceeded " + str.tostring(thresh_expansion) + "% of ATR — Expansion day! Lean into trend continuation.")
+alertcondition(new_session and is_2day_compression, title="2-Day Compression Setup", message="⚡ 2-Day compression — prior two sessions were tight range. Expansion odds elevated today.")
