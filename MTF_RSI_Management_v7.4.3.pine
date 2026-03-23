@@ -1,5 +1,5 @@
 //@version=5
-indicator("MTF RSI Management [v7.4.2]", overlay=true, max_labels_count=500)
+indicator("MTF RSI Management [v7.4.3]", overlay=true, max_labels_count=500)
 
 // Clean ticker for request.security (avoids session/extended hours issues)
 cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
@@ -260,21 +260,21 @@ var bool adx_was_low = false
 adx_was_low := adx_value < adx_breakout_low ? true : (adx_value > adx_breakout_high ? false : adx_was_low)
 adx_breakout_signal = enable_adx_adv and adx_breakout_detect and adx_was_low[1] and adx_value >= adx_breakout_high and adx_value[1] < adx_breakout_high
 
-// SL values (YM: 1pt = 1tick = $5 full / $0.50 MYM)
-sl_aplus = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 15.0 : 15.0
-sl_a     = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 15.0 : 15.0
-sl_aminus = use_cl_preset ? 0.30 : use_nq_preset ? 20.0 : use_ym_preset ? 12.0 : 15.0
-sl_bplus  = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 10.0 : 15.0
-sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 8.0 : 15.0
+// SL values (NQ: backtested CONS-TIGHT | YM: 1pt = 1tick)
+sl_aplus = use_cl_preset ? 0.40 : use_nq_preset ? 13.0 : use_ym_preset ? 15.0 : 15.0
+sl_a     = use_cl_preset ? 0.40 : use_nq_preset ? 13.0 : use_ym_preset ? 15.0 : 15.0
+sl_aminus = use_cl_preset ? 0.30 : use_nq_preset ? 10.0 : use_ym_preset ? 12.0 : 15.0
+sl_bplus  = use_cl_preset ? 0.30 : use_nq_preset ? 10.0 : use_ym_preset ? 10.0 : 15.0
+sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 8.0 : use_ym_preset ? 8.0 : 15.0
 
 stop_dist = grade == "A+" ? sl_aplus : grade == "A" ? sl_a : grade == "A-" ? sl_aminus : grade == "B+" ? sl_bplus : grade == "B" ? sl_b : atr_val
 
-// TP values (YM: wider targets on A grades for runner potential)
-tp_aplus = use_cl_preset ? 0.20 : use_nq_preset ? 20.0 : use_ym_preset ? 35.0 : 6.0
+// TP values (NQ: backtested CONS-TIGHT | YM: wider targets for runners)
+tp_aplus = use_cl_preset ? 0.20 : use_nq_preset ? 25.0 : use_ym_preset ? 35.0 : 6.0
 tp_a     = use_cl_preset ? 0.20 : use_nq_preset ? 20.0 : use_ym_preset ? 25.0 : 6.0
 tp_aminus = use_cl_preset ? 0.15 : use_nq_preset ? 15.0 : use_ym_preset ? 18.0 : 4.0
-tp_bplus  = use_cl_preset ? 0.10 : use_nq_preset ? 10.0 : use_ym_preset ? 15.0 : 3.0
-tp_b      = use_cl_preset ? 0.08 : use_nq_preset ? 10.0 : use_ym_preset ? 10.0 : 2.0
+tp_bplus  = use_cl_preset ? 0.10 : use_nq_preset ? 15.0 : use_ym_preset ? 15.0 : 3.0
+tp_b      = use_cl_preset ? 0.08 : use_nq_preset ? 12.0 : use_ym_preset ? 10.0 : 2.0
 
 // ==========================================
 // --- ADR ---

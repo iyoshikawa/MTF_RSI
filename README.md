@@ -16,11 +16,12 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 |------|-------------|
 | `MTF_RSI_Signals_v7.5.3.pine` | Latest Signals — RSI Speed, MTF Speed, Divergence detection |
 | `MTF_RSI_Signals_v7.12.0_Backtested.pine` | Backtested variant — presets optimized via coordinate descent |
-| `MTF_RSI_Management_v7.4.2.pine` | Trade management — sizing, TP/SL, runners, pyramids |
+| `MTF_RSI_Management_v7.4.3.pine` | Trade management — sizing, TP/SL, runners, pyramids |
 | `MTF_RSI_Core_Library.pine` | Shared calculation functions (prep for Pine v6 migration) |
 | `EMA_HighLowMedian_Ribbon.pine` | Standalone EMA High/Low/Median ribbon overlay |
 | `Session_Range_vs_ATR_Filter.pine` | Standalone session range vs ATR filter |
 | `Backtest_Report_v7.12.0.md` | Optimization methodology and results for v7.12.0 presets |
+| `Backtest_Report_ES_NQ_TPSL.md` | ES & NQ TP/SL optimization — 4 param sets × 8 seeds |
 | `YM_1MIN_SETTINGS.md` | Detailed YM/MYM 1-minute chart configuration guide |
 | `MTF_RSI_Indicator_Guide.pdf` | User guide |
 | `MTF_RSI_Library_Setup.pdf` | Library setup documentation |
@@ -63,13 +64,13 @@ Tick = 0.25 pts · 4 ticks/point · NQ: $5/tick ($20/pt) · MNQ: $0.50/tick ($2/
 
 | Grade | SL (pts) | SL (ticks) | TP (pts) | TP (ticks) | R:R | $/ct (MNQ) | $/ct (NQ) |
 |-------|----------|-----------|----------|-----------|-----|------------|-----------|
-| A+ | 20 | 80 | 20 | 80 | Runner | $40 | $400 |
-| A | 20 | 80 | 20 | 80 | Runner | $40 | $400 |
-| A- | 20 | 80 | 15 | 60 | 0.75:1 | $40 | $400 |
-| B+ | 25 | 100 | 10 | 40 | 0.40:1 | $50 | $500 |
-| B | 25 | 100 | 10 | 40 | 0.40:1 | $50 | $500 |
+| A+ | 13 | 52 | 25 | 100 | 1.92:1 | $26 | $260 |
+| A | 13 | 52 | 20 | 80 | 1.54:1 | $26 | $260 |
+| A- | 10 | 40 | 15 | 60 | 1.50:1 | $20 | $200 |
+| B+ | 10 | 40 | 15 | 60 | 1.50:1 | $20 | $200 |
+| B | 8 | 32 | 12 | 48 | 1.50:1 | $16 | $160 |
 
-> **⚠️ Known issue:** NQ B-grade R:R needs work. B+ and B stops at 25 pts are wide for 1-min scalps and 10pt TP creates negative expectancy below ~65% win rate. Recommended 1-min overrides: B+ → 15pt SL / 15pt TP, B → 12pt SL / 12pt TP. The v7.12.0 backtested variant has improved values (B+ SL=20, B SL=25). Enable ATR TP for A grades — fixed 20pt leaves money on the table when NQ trends 50-100+ points.
+> **Backtested in v7.4.3** (NQ-CONS-TIGHT). Validated across 8 seeds: avg WR 45.1%, PF 1.30, +1264.9 pts MNQ P&L. Every grade maintains 1.50:1+ R:R. A+/A grades should enable ATR TP and runner trail for trending sessions. See `Backtest_Report_ES_NQ_TPSL.md` for full methodology.
 
 ### 📊 ES/MES (S&P 500)
 
@@ -83,17 +84,14 @@ Tick = 0.25 pts · 4 ticks/point · ES: $12.50/tick ($50/pt) · MES: $1.25/tick 
 | B+ | 15 | 60 | 3 | 12 | 0.20:1 | $75 | $750 |
 | B | 15 | 60 | 2 | 8 | 0.13:1 | $75 | $750 |
 
-> **⚠️ ES has no preset-specific TP/SL — it falls through to DEFAULT values.** These R:R ratios are not viable for 1-min trading. ES needs a dedicated preset update. Recommended 1-min targets:
+> **ES uses DEFAULT values — backtested and kept.** The wide 15pt SL with small TPs looks like bad R:R (0.40:1 at best), but synthetic backtesting across 8 seeds confirmed this approach: 61.1% avg WR, PF 1.24, all seeds positive. Every attempt to tighten SL (3-12 pts) failed — ES 1-min ATR (~1.8 pts) chews through tight stops before TP hits. The high-WR / low-RR profile works because 15pt stops almost never trigger.
 >
-> | Grade | Suggested SL (pts) | Suggested TP (pts) | Target R:R |
-> |-------|-------------------|-------------------|------------|
-> | A+ | 6 | 12–15 | 2:1+ (runner) |
-> | A | 6 | 10–12 | 1.7:1 (runner) |
-> | A- | 5 | 8 | 1.6:1 |
-> | B+ | 4 | 5–6 | 1.25:1+ |
-> | B | 3 | 4 | 1.3:1 |
+> **To improve ES beyond this:**
+> - Enable **ATR-based TP** on A grades to capture bigger moves on trending days
+> - Consider trading ES on **2-3 min charts** where the noise-to-signal ratio favors fixed stops
+> - Real entries near structure (EMA/VWAP) may allow tighter stops — the synthetic backtest doesn't capture entry quality
 >
-> The v7.12.0 backtested variant has ES-specific SL values (A+=8, A=6, A-=5, B+=8, B=12) that are closer to correct. TP optimization for ES is pending.
+> See `Backtest_Report_ES_NQ_TPSL.md` for full results.
 
 ### 🔷 YM/MYM (Dow Futures)
 
@@ -142,8 +140,9 @@ MTF Speed settings available in v7.5.3. Conservative is recommended for most 1-m
 
 | Version | Indicator | Changes |
 |---------|-----------|---------|
-| v7.5.3 | Signals | RSI Speed presets, MTF Speed presets, RSI Divergence detection, YM SL fix |
+| v7.5.3 | Signals | RSI Speed presets, MTF Speed presets, RSI Divergence detection, YM SL fix, NQ SL fix |
 | v7.12.0 | Signals | Backtested presets via coordinate descent (ES-specific SL, tuned NQ/CL/YM) |
+| v7.4.3 | Management | NQ SL/TP backtested optimization (CONS-TIGHT), version bump |
 | v7.4.2 | Management | YM SL/TP optimization, tick multiplier fix, dollar_per_point tooltip |
 | v7.5.0 | Signals | Consolidation filter, anti-chop improvements (superseded by v7.5.3) |
 | v7.4.1 | Management | Initial release — sizing dashboard, runners, pyramids |
