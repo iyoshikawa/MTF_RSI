@@ -1,5 +1,5 @@
 //@version=5
-indicator("MTF RSI Signals [v7.5.0]", overlay=true, max_labels_count=500)
+indicator("MTF RSI Signals [v7.5.3]", overlay=true, max_labels_count=500)
 
 // Clean ticker for request.security (avoids session/extended hours issues)
 cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
@@ -27,7 +27,7 @@ show_prev_ny_vwap = input.bool(true, "Show Previous NY VWAP Level", group=grp_co
 
 // RSI Settings
 grp_rsi = "RSI Configuration"
-rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_rsi, tooltip="Preset that overrides all RSI settings below for quicker or slower direction detection.\n\nStandard (5/13, smooth 2/3, zone 1.0): Balanced — fewest false signals.\nFast (4/10, smooth 1/2, zone 0.75): ~2-3 bars earlier reversals. Good for most sessions.\nUltra-Fast (3/8, smooth 1/1, zone 0.5, hlc3 source): Earliest possible signals. Best in strong trends — enable 'Gray Ribbon During Consolidation' to reduce chop whipsaws.\n\nMust match between Signals and Management indicators.")
+rsi_speed = input.string("Standard", "RSI Speed", options=["Standard", "Fast", "Ultra-Fast"], group=grp_rsi, tooltip="Preset that overrides all RSI settings below for quicker or slower direction detection.Standard (5/13, smooth 2/3, zone 1.0): Balanced — fewest false signals.Fast (4/10, smooth 1/2, zone 0.75): ~2-3 bars earlier reversals. Good for most sessions.Ultra-Fast (3/8, smooth 1/1, zone 0.5, hlc3 source): Earliest possible signals. Best in strong trends — enable 'Gray Ribbon During Consolidation' to reduce chop whipsaws.Must match between Signals and Management indicators.")
 shortLen    = input.int(5, "Short RSI Period", group=grp_rsi, tooltip="Lookback for the fast RSI. Lower = more responsive but noisier. Range: 3-7. Overridden by RSI Speed preset.")
 longLen     = input.int(13, "Long RSI Period", group=grp_rsi, tooltip="Lookback for the slow RSI anchor. Lower = faster crossovers but less trend stability. Range: 8-21. Keep at least 2x Short RSI Period. Overridden by RSI Speed preset.")
 shortSmooth = input.int(2, "Short Smoothing", group=grp_rsi, tooltip="EMA smoothing on the Short RSI. 1 = no smoothing (raw RSI). Higher = smoother but more lag. Range: 1-5. Overridden by RSI Speed preset.")
@@ -47,6 +47,11 @@ show_stoch_signals = input.bool(true, "Show DStoch Crossover Signals", group=grp
 stoch_sell_level_in = input.float(85, "Sell Signal Level (cross down)", group=grp_stoch_signals, tooltip="When DStoch crosses down through this level, a sell arrow appears. Higher = fewer but more extreme signals. Overridden by instrument preset.")
 stoch_buy_level = input.float(12, "Buy Signal Level (cross up)", group=grp_stoch_signals, tooltip="When DStoch crosses up through this level, a buy arrow appears. Lower = fewer but more extreme signals.")
 brighten_on_confluence = input.bool(true, "Brighten Background When DStoch + RSI Align", group=grp_stoch_signals, tooltip="When the RSI ribbon direction and DStoch momentum agree, the ribbon background brightens (transparency drops by 20). Helps visually spot high-conviction zones.")
+ds_buy_color = input.color(color.aqua, "Buy Marker Color", group=grp_stoch_signals, inline="dsc1", tooltip="Background color of the DS▲ buy label on the chart.")
+ds_sell_color = input.color(color.fuchsia, "Sell Marker Color", group=grp_stoch_signals, inline="dsc1", tooltip="Background color of the DS▼ sell label on the chart.")
+ds_buy_text_color = input.color(color.white, "Buy Text", group=grp_stoch_signals, inline="dsc2", tooltip="Text color inside the DS▲ buy label.")
+ds_sell_text_color = input.color(color.white, "Sell Text", group=grp_stoch_signals, inline="dsc2", tooltip="Text color inside the DS▼ sell label.")
+ds_marker_size = input.string("tiny", "Marker Size", options=["tiny", "small", "normal", "large"], group=grp_stoch_signals, tooltip="Size of the DStoch crossover markers on the chart.\n\ntiny (default): minimal, won't crowd grade labels.\nsmall: slightly more visible.\nnormal/large: high visibility if DStoch signals are primary to your workflow.")
 
 // Volume Settings
 grp_vol = "Volume Filter"
@@ -61,9 +66,16 @@ adx_length = input.int(14, "ADX Length", group=grp_adx, tooltip="Lookback period
 adx_threshold_a_plus_in = input.float(25, "ADX Threshold for A+", group=grp_adx, tooltip="ADX must be above this for A+ grade. Higher = only fire in strong trends. Overridden by instrument preset. CL: 28, NQ/YM: 23.")
 adx_threshold_a_in = input.float(20, "ADX Threshold for A", group=grp_adx, tooltip="ADX must be above this for A grade. Lower than A+ since A is a slightly weaker signal. Overridden by instrument preset. CL: 22, NQ/YM: 18.")
 
+// MTF Timeframe Selection
+grp_mtf = "🕐 MTF Timeframe Selection"
+mtf_speed = input.string("Conservative", "MTF Speed", options=["Conservative", "Moderate", "Aggressive", "Custom"], group=grp_mtf, tooltip="Controls which higher timeframes are used for multi-timeframe RSI alignment.\n\nConservative (default): Widest timeframe spread. Slowest to confirm A+ but highest conviction. Best for swing-style entries and holding through pullbacks.\n  1-min chart: 5 / 15 / 60\n  3-min chart: 5 / 15 / 60\n  5-min chart: 15 / 60 / 240\n\nModerate: Faster A+ signals by using 30-min instead of 60-min as slow TF. Ideal for session-based NY futures trading where you don't need hourly confirmation.\n  1-min chart: 5 / 15 / 30\n  3-min chart: 5 / 15 / 30\n  5-min chart: 15 / 60 / 120\n\nAggressive: Tightest spread. Fastest signals but lower conviction on the slow TF. Best in strong trending sessions; enable anti-chop filters to compensate.\n  1-min chart: 5 / 9 / 15\n  3-min chart: 5 / 9 / 15\n  5-min chart: 9 / 15 / 60\n\nCustom: Enter your own three timeframes in the fields below.\n\nMust match between Signals and Management indicators.")
+custom_tf_fast = input.timeframe("5", "Custom Fast TF", group=grp_mtf, tooltip="Only used when MTF Speed is set to 'Custom'.\n\nThe fastest (lowest) higher timeframe. This drives B-grade (1 TF) and contributes to all higher grades.\n\nMust be higher than your chart timeframe.\nCommon values: 3, 5, 9, 15\n\nExamples by chart TF:\n  1-min chart: 5\n  3-min chart: 5 or 9\n  5-min chart: 15")
+custom_tf_mid  = input.timeframe("15", "Custom Mid TF", group=grp_mtf, tooltip="Only used when MTF Speed is set to 'Custom'.\n\nThe middle timeframe. Combined with Fast TF, this drives A-/B+ grades (2 TF alignment).\n\nMust be higher than Custom Fast TF.\nCommon values: 9, 15, 30, 60\n\nExamples by chart TF:\n  1-min chart: 15 or 30\n  3-min chart: 15 or 30\n  5-min chart: 60")
+custom_tf_slow = input.timeframe("30", "Custom Slow TF", group=grp_mtf, tooltip="Only used when MTF Speed is set to 'Custom'.\n\nThe slowest (highest) higher timeframe. All three TFs aligned drives A/A+ grades (3 TF alignment). This is the main bottleneck for A+ signal speed — lower values = faster A+ signals but less macro confirmation.\n\nMust be higher than Custom Mid TF.\nCommon values: 15, 30, 60, 240, D\n\nExamples by chart TF:\n  1-min chart: 30 or 60\n  3-min chart: 30 or 60\n  5-min chart: 120 or 240")
+
 // Time & Session Settings
 grp_time = "⏰ Time & Session Filters"
-sessionConfig = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_time, tooltip="Format: TIME1,TIME2,TIME3:DAYS\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri")
+sessionConfig = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_time, tooltip="Format: TIME1,TIME2,TIME3:DAYSDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri")
 
 // Algo Windows
 grp_algo = "🤖 Algo Windows"
@@ -93,6 +105,9 @@ ha_bear_color_in = input.color(#EF5350, "HA Bearish Outline", group=grp_dash, in
 showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash, tooltip="Plots horizontal stop-loss reference levels based on ATR distance from entry price for the current grade.")
 ha_exit_warn = input.bool(true, "HA Momentum Exit Warning", group=grp_dash, tooltip="Shows an HA X marker when Heikin Ashi candles flip direction against your trade for N consecutive bars. Early exit warning.")
 ha_exit_bars = input.int(2, "HA Bars to Confirm Flip", group=grp_dash, minval=1, maxval=5, tooltip="Number of consecutive HA candles in the opposite direction before the exit warning triggers. 1 = very sensitive, 3+ = more patient.")
+ha_exit_color = input.color(#FF6B00, "HA Exit Marker Color", group=grp_dash, inline="hae1", tooltip="Color of the HA exit warning marker and its text on the chart.")
+ha_exit_text_color = input.color(#FF6B00, "HA Exit Text", group=grp_dash, inline="hae1", tooltip="Text color of the HA✗ marker. Default matches marker color for a unified look.")
+ha_exit_size = input.string("small", "HA Exit Marker Size", options=["tiny", "small", "normal", "large"], group=grp_dash, tooltip="Size of the HA exit warning markers.\n\nsmall (default): visible but subordinate to grade labels.\ntiny: minimal footprint.\nnormal/large: high visibility if exit warnings are critical to your workflow.")
 ribbon_bull_color = input.color(#00ffbb, "Ribbon Bullish Color", group=grp_dash, inline="rib1", tooltip="Background ribbon color when RSI diff is bullish (above threshold).")
 ribbon_bear_color = input.color(#ff0055, "Ribbon Bearish Color", group=grp_dash, inline="rib1", tooltip="Background ribbon color when RSI diff is bearish (below negative threshold).")
 ribbon_transparency = input.int(85, "Ribbon Transparency", group=grp_dash, minval=0, maxval=95, step=5, tooltip="0 = fully opaque, 95 = barely visible. Default 85. Brightens to 65 when DStoch + RSI align.")
@@ -112,6 +127,21 @@ sig_long_color_b      = input.color(#FFA500, "B Long",   group=grp_sig_colors, i
 sig_short_color_b     = input.color(#9370DB, "B Short",  group=grp_sig_colors, inline="cb")
 sig_long_text_color   = input.color(color.white, "Long Text Color",  group=grp_sig_colors, inline="ct", tooltip="Text color inside long/short signal labels (the A+, A, A-, B+, B letters).")
 sig_short_text_color  = input.color(color.white, "Short Text Color", group=grp_sig_colors, inline="ct")
+
+// Line Colors & Widths
+grp_lines = "🎨 Line Colors & Widths"
+ema_bull_color = input.color(color.green, "EMA Bullish", group=grp_lines, inline="ema1", tooltip="EMA line color when price is above the EMA (bullish bias).")
+ema_bear_color = input.color(color.red, "EMA Bearish", group=grp_lines, inline="ema1", tooltip="EMA line color when price is below the EMA (bearish bias).")
+ema_line_width = input.int(2, "EMA Width", group=grp_lines, minval=1, maxval=4, tooltip="Thickness of the EMA line.\n\n1: subtle.\n2 (default): standard.\n3-4: high visibility.\n\nSuggested range: 1-3.")
+vwap_color = input.color(color.yellow, "VWAP", group=grp_lines, inline="vw1", tooltip="Color of the session VWAP line (plotted as circles).")
+vwap_line_width = input.int(2, "VWAP Width", group=grp_lines, inline="vw1", tooltip="Thickness of the session VWAP circles.\n\nSuggested range: 1-3.")
+ny_vwap_color = input.color(color.white, "NY Anchored VWAP", group=grp_lines, inline="vw2", tooltip="Color of the NY session anchored VWAP line (0930 ET).")
+ny_vwap_line_width = input.int(2, "NY VWAP Width", group=grp_lines, inline="vw2", tooltip="Thickness of the NY anchored VWAP line.\n\nSuggested range: 1-3.")
+prev_ny_vwap_color = input.color(color.gray, "Prev NY VWAP", group=grp_lines, inline="vw3", tooltip="Color of the previous day's NY session closing VWAP level.")
+prev_ny_vwap_width = input.int(1, "Prev VWAP Width", group=grp_lines, inline="vw3", tooltip="Thickness of the previous NY VWAP line.\n\n1 (default): subtle reference.\n2: more prominent.\n\nSuggested range: 1-2.")
+stop_long_color = input.color(color.red, "Stop Long", group=grp_lines, inline="sl1", tooltip="Color of the suggested stop-loss level for long positions.")
+stop_short_color = input.color(color.green, "Stop Short", group=grp_lines, inline="sl1", tooltip="Color of the suggested stop-loss level for short positions.")
+stop_line_width = input.int(2, "Stop Width", group=grp_lines, tooltip="Thickness of the stop-loss level crosses.\n\nSuggested range: 1-3.")
 
 // Anti-Chop Filters
 grp_chop = "🔇 Anti-Chop Filters"
@@ -145,6 +175,22 @@ compress_days = input.int(2, "Consecutive Compression Days", group=grp_consol_fi
 suppress_on_tight_consol = input.bool(false, "Suppress B/B+ in Tight Consolidation", group=grp_consol_filter, tooltip="Blocks B and B+ signals when the session regime is Tight Consolidation. Prevents scalps in dead range.")
 suppress_all_tight_consol = input.bool(false, "Suppress ALL Grades in Tight Consolidation", group=grp_consol_filter, tooltip="Blocks ALL signals (A+, A, A-, B+, B) when the session regime is Tight Consolidation. Full sit-out mode for dead range days.")
 show_consol_bg = input.bool(true, "Show Regime Background Shading", group=grp_consol_filter, tooltip="Tints the chart background based on consolidation regime: blue = tight, yellow = mild, red = expansion.")
+
+// RSI Divergence Detection
+grp_div = "🔀 RSI Divergence"
+enable_divergence = input.bool(true, "Enable RSI Divergence Detection", group=grp_div, tooltip="Detects regular (classic) divergence between price swings and the short RSI oscillator.\n\nBearish divergence: price prints a higher high but RSI prints a lower high — momentum is weakening even as price pushes up. Warns that a long position may be losing steam.\n\nBullish divergence: price prints a lower low but RSI prints a higher low — selling pressure is fading even as price drops. Warns that a short position may be losing steam.\n\nThis is a WARNING overlay — it does not gate entries or modify grades. It adds a dashboard row, optional chart markers, and feeds into the Late Trend flag.")
+div_lookback = input.int(5, "Pivot Lookback (bars)", group=grp_div, minval=2, maxval=15, tooltip="Number of bars required on EACH side of a swing point to confirm it as a pivot high or low.\n\nLower (2-3): detects more pivots, faster signals, but more noise — best in strong trends.\nDefault (5): balanced — ~15 min confirmation on a 3-min chart, ~25 min on 5-min.\nHigher (8-15): fewer but higher-conviction pivots — best for swing-style or 15-min charts.\n\nSuggested range: 3-10. Must match the tempo of your chart timeframe.")
+div_max_bars = input.int(50, "Max Bars Between Pivots", group=grp_div, minval=10, maxval=100, tooltip="Maximum distance (in bars) between two consecutive pivots to form a valid divergence pair. Prevents ancient/stale pivots from triggering false divergence signals.\n\nLower (15-25): only very recent pivot pairs count — tighter, fewer signals.\nDefault (50): ~2.5 hours on a 3-min chart — covers a full session move.\nHigher (75-100): catches slower-developing divergence — better for 15-min+ charts.\n\nSuggested range: 20-80.")
+show_div_markers = input.bool(true, "Show Divergence Markers on Chart", group=grp_div, tooltip="Plots a small labeled marker (DIV▼ or DIV▲) on the bar where divergence is first detected. Appears above price for bearish, below for bullish.")
+show_div_lines = input.bool(true, "Draw Divergence Lines on Price", group=grp_div, tooltip="Draws a dashed line connecting the two price pivot points that form the divergence. Bearish line connects two swing highs, bullish line connects two swing lows. Lines are deleted when a new divergence of the same type is detected.")
+
+// Divergence Visual Customization
+grp_div_vis = "🔀 Divergence Visuals"
+div_bear_color = input.color(color.new(#FF4444, 20), "Bearish Divergence Color", group=grp_div_vis, inline="dc1", tooltip="Color for bearish divergence markers and price lines. Used when price makes a higher high but RSI makes a lower high.")
+div_bull_color = input.color(color.new(#44BBFF, 20), "Bullish Divergence Color", group=grp_div_vis, inline="dc1", tooltip="Color for bullish divergence markers and price lines. Used when price makes a lower low but RSI makes a higher low.")
+div_marker_size = input.string("small", "Marker Size", options=["tiny", "small", "normal", "large"], group=grp_div_vis, tooltip="Size of the DIV▼ / DIV▲ chart markers.\n\ntiny: minimal footprint, won't crowd other signals.\nsmall (default): visible but subordinate to grade labels.\nnormal: same prominence as grade A signals.\nlarge: maximum visibility.\n\nSuggested: small or tiny if you have many other overlays.")
+div_line_width = input.int(2, "Divergence Line Width", group=grp_div_vis, minval=1, maxval=4, tooltip="Thickness of the dashed line connecting divergence pivot points.\n\n1: subtle, blends with other chart elements.\n2 (default): clearly visible without dominating.\n3-4: high visibility, useful on busy charts.\n\nSuggested range: 1-3.")
+div_line_style_in = input.string("Dashed", "Divergence Line Style", options=["Solid", "Dashed", "Dotted"], group=grp_div_vis, tooltip="Line style for divergence connection lines.\n\nDashed (default): distinguishable from EMA/VWAP solid lines.\nDotted: very subtle, minimal visual weight.\nSolid: maximum visibility.")
 
 // ==========================================
 // --- PRESET OVERRIDES ---
@@ -202,11 +248,24 @@ algo_filter = algo_mode == "OFF" ? true : algo_mode == "TRADE WITH" ? in_any_alg
 // ==========================================
 // --- ADR FILTER ---
 // ==========================================
-// Use current day's running high/low for intraday range consumed
-daily_high = request.security(cleanTicker, "D", high, lookahead = barmerge.lookahead_off)
-daily_low  = request.security(cleanTicker, "D", low, lookahead = barmerge.lookahead_off)
+// Developing RTH session high/low — tracks bar-by-bar during 0930-1600 ET
+// Replaces request.security("D", high/low) which only returns completed daily bars
+rth_is_open = not na(time(timeframe.period, "0930-1600:23456", "America/New_York"))
+rth_just_opened = rth_is_open and not rth_is_open[1]
+
+var float daily_high = na
+var float daily_low = na
+
+if rth_just_opened
+    daily_high := high
+    daily_low  := low
+else if rth_is_open
+    daily_high := math.max(nz(daily_high, high), high)
+    daily_low  := math.min(nz(daily_low, low), low)
+
+// ADR baseline — average of prior completed daily ranges (unchanged, correctly uses [1])
 adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], lookahead = barmerge.lookahead_on)
-today_range = daily_high - daily_low
+today_range = not na(daily_high) and not na(daily_low) ? daily_high - daily_low : 0.0
 adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0
 adr_ok = not enable_adr_filter or adr_pct_used < adr_exhaust_pct
 
@@ -268,6 +327,12 @@ calc_double_rsi(src, short_len, long_len, short_smooth, long_smooth) =>
     rsiL = ta.ema(ta.rsi(src, long_len), long_smooth)
     diff = rsiS - rsiL
     [rsiS, rsiL, diff]
+
+// Diff-only version — avoids 3-element tuple through request.security (saves 2 outputs per call)
+calc_rsi_diff(src, short_len, long_len, short_smooth, long_smooth) =>
+    rsiS = ta.ema(ta.rsi(src, short_len), short_smooth)
+    rsiL = ta.ema(ta.rsi(src, long_len), long_smooth)
+    rsiS - rsiL
 
 calc_double_stoch(len, smooth) =>
     raw_stoch = ta.stoch(close, high, low, len)
@@ -351,15 +416,92 @@ atr_ratio = atr_val / (atr_sma > 0 ? atr_sma : atr_val)
 vol_class = atr_ratio >= 2.0 ? "EXTREME" : atr_ratio >= 1.4 ? "HIGH" : atr_ratio >= 0.8 ? "NORMAL" : "LOW"
 
 // ==========================================
+// --- RSI DIVERGENCE DETECTION ---
+// ==========================================
+// Regular divergence: price vs short RSI (rsiS_curr) using pivot-based detection.
+// Bearish: price higher high + RSI lower high = momentum weakening, caution on longs.
+// Bullish: price lower low + RSI higher low = selling exhausted, caution on shorts.
+// Pivots are confirmed div_lookback bars after they form.
+
+// Detect pivots on price and RSI
+rsi_ph = enable_divergence ? ta.pivothigh(rsiS_curr, div_lookback, div_lookback) : na
+rsi_pl = enable_divergence ? ta.pivotlow(rsiS_curr, div_lookback, div_lookback) : na
+price_ph = enable_divergence ? ta.pivothigh(high, div_lookback, div_lookback) : na
+price_pl = enable_divergence ? ta.pivotlow(low, div_lookback, div_lookback) : na
+
+// Track the two most recent pivot highs (for bearish divergence)
+var float prev_price_ph = na
+var float prev_rsi_ph = na
+var int   prev_ph_bar = na
+var float curr_price_ph = na
+var float curr_rsi_ph = na
+var int   curr_ph_bar = na
+
+if not na(price_ph) and not na(rsi_ph)
+    prev_price_ph := curr_price_ph
+    prev_rsi_ph   := curr_rsi_ph
+    prev_ph_bar   := curr_ph_bar
+    curr_price_ph := price_ph
+    curr_rsi_ph   := rsi_ph
+    curr_ph_bar   := bar_index - div_lookback
+
+// Track the two most recent pivot lows (for bullish divergence)
+var float prev_price_pl = na
+var float prev_rsi_pl = na
+var int   prev_pl_bar = na
+var float curr_price_pl = na
+var float curr_rsi_pl = na
+var int   curr_pl_bar = na
+
+if not na(price_pl) and not na(rsi_pl)
+    prev_price_pl := curr_price_pl
+    prev_rsi_pl   := curr_rsi_pl
+    prev_pl_bar   := curr_pl_bar
+    curr_price_pl := price_pl
+    curr_rsi_pl   := rsi_pl
+    curr_pl_bar   := bar_index - div_lookback
+
+// Bearish divergence: new price high > previous, but RSI high < previous
+ph_pair_valid = not na(prev_price_ph) and not na(curr_price_ph) and not na(curr_ph_bar) and not na(prev_ph_bar)
+ph_not_stale = ph_pair_valid and (curr_ph_bar - prev_ph_bar) <= div_max_bars
+raw_bear_div = ph_not_stale and (curr_price_ph > prev_price_ph) and (curr_rsi_ph < prev_rsi_ph)
+
+// Bullish divergence: new price low < previous, but RSI low > previous
+pl_pair_valid = not na(prev_price_pl) and not na(curr_price_pl) and not na(curr_pl_bar) and not na(prev_pl_bar)
+pl_not_stale = pl_pair_valid and (curr_pl_bar - prev_pl_bar) <= div_max_bars
+raw_bull_div = pl_not_stale and (curr_price_pl < prev_price_pl) and (curr_rsi_pl > prev_rsi_pl)
+
+// NOTE: Divergence persistence flags, lines, and position-awareness are computed
+// after the grading system (they depend on grade/direction/is_long_setup).
+
+// ==========================================
 // --- MULTI-TIMEFRAME ANALYSIS ---
 // ==========================================
 chart_minutes = timeframe.in_seconds() / 60
-mtf_fast = chart_minutes <= 3 ? "5" : chart_minutes <= 5 ? "15" : chart_minutes <= 15 ? "60" : "240"
-mtf_mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes <= 15 ? "240" : "D"
-mtf_slow = chart_minutes <= 3 ? "60" : chart_minutes <= 5 ? "240" : chart_minutes <= 15 ? "D" : "W"
+
+// Conservative: original wide spread — maximum conviction, slowest A+ confirmation
+mtf_cons_fast = chart_minutes <= 3 ? "5"  : chart_minutes <= 5 ? "15" : chart_minutes <= 15 ? "60"  : "240"
+mtf_cons_mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes <= 15 ? "240" : "D"
+mtf_cons_slow = chart_minutes <= 3 ? "60" : chart_minutes <= 5 ? "240": chart_minutes <= 15 ? "D"   : "W"
+
+// Moderate: 30-min slow TF instead of 60 — faster A+ for session trading
+mtf_mod_fast = chart_minutes <= 3 ? "5"  : chart_minutes <= 5 ? "15" : chart_minutes <= 15 ? "60"  : "120"
+mtf_mod_mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes <= 15 ? "120" : "240"
+mtf_mod_slow = chart_minutes <= 3 ? "30" : chart_minutes <= 5 ? "120": chart_minutes <= 15 ? "240" : "D"
+
+// Aggressive: tightest spread — fastest signals, use with anti-chop filters
+mtf_agg_fast = chart_minutes <= 3 ? "5" : chart_minutes <= 5 ? "9"  : chart_minutes <= 15 ? "30" : "60"
+mtf_agg_mid  = chart_minutes <= 3 ? "9" : chart_minutes <= 5 ? "15" : chart_minutes <= 15 ? "60" : "120"
+mtf_agg_slow = chart_minutes <= 3 ? "15": chart_minutes <= 5 ? "60" : chart_minutes <= 15 ? "120": "240"
+
+// Select active timeframes based on MTF Speed setting
+// Custom uses input.timeframe() fields which return 'input string' — compatible with request.security()
+mtf_fast = mtf_speed == "Moderate" ? mtf_mod_fast : mtf_speed == "Aggressive" ? mtf_agg_fast : mtf_speed == "Custom" ? custom_tf_fast : mtf_cons_fast
+mtf_mid  = mtf_speed == "Moderate" ? mtf_mod_mid  : mtf_speed == "Aggressive" ? mtf_agg_mid  : mtf_speed == "Custom" ? custom_tf_mid  : mtf_cons_mid
+mtf_slow = mtf_speed == "Moderate" ? mtf_mod_slow : mtf_speed == "Aggressive" ? mtf_agg_slow : mtf_speed == "Custom" ? custom_tf_slow : mtf_cons_slow
 
 get_mtf_rsi_dir(tf) =>
-    [_, _, diff_raw] = request.security(cleanTicker, tf, calc_double_rsi(rsi_src, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm), lookahead = barmerge.lookahead_on)
+    diff_raw = request.security(cleanTicker, tf, calc_rsi_diff(rsi_src, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm), lookahead = barmerge.lookahead_on)
     get_rsi_direction(diff_raw[1], rsi_thresh)
 
 rsi_dir_fast = get_mtf_rsi_dir(mtf_fast)
@@ -415,8 +557,50 @@ is_long_setup = is_a_plus_long or is_a_long or is_a_minus_long or is_b_plus_long
 is_short_setup = is_a_plus_short or is_a_short or is_a_minus_short or is_b_plus_short or is_b_short
 direction = is_long_setup ? "LONG" : is_short_setup ? "SHORT" : "NEUTRAL"
 
-// Late-trend warning
-late_trend_flag = (grade == "A+" or grade == "A") and (adx_falling or adr_pct_used > 70)
+// ==========================================
+// --- RSI DIVERGENCE (Part 2: Persistence & Position Awareness) ---
+// ==========================================
+// Fires on the bar the second pivot is confirmed, then persists until:
+// direction flips, grade goes NONE, or a new same-type pivot without divergence.
+var bool div_bear_active = false
+var bool div_bull_active = false
+
+bear_cleared = not na(price_ph) and not na(rsi_ph) and not raw_bear_div
+bull_cleared = not na(price_pl) and not na(rsi_pl) and not raw_bull_div
+
+if raw_bear_div and not raw_bear_div[1]
+    div_bear_active := true
+if bear_cleared or direction == "SHORT" or grade == "NONE"
+    div_bear_active := false
+
+if raw_bull_div and not raw_bull_div[1]
+    div_bull_active := true
+if bull_cleared or direction == "LONG" or grade == "NONE"
+    div_bull_active := false
+
+// Divergence visual resolvers
+div_lstyle = div_line_style_in == "Solid" ? line.style_solid : div_line_style_in == "Dotted" ? line.style_dotted : line.style_dashed
+div_msize = div_marker_size == "tiny" ? size.tiny : div_marker_size == "normal" ? size.normal : div_marker_size == "large" ? size.large : size.small
+ds_msize = ds_marker_size == "tiny" ? size.tiny : ds_marker_size == "normal" ? size.normal : ds_marker_size == "large" ? size.large : size.small
+ha_exit_msize = ha_exit_size == "tiny" ? size.tiny : ha_exit_size == "normal" ? size.normal : ha_exit_size == "large" ? size.large : size.small
+
+// Divergence is working against current position direction
+div_against_position = (div_bear_active and is_long_setup) or (div_bull_active and is_short_setup)
+
+// Divergence lines on price chart (connecting the two pivot swing points)
+var line div_bear_line = na
+var line div_bull_line = na
+
+if raw_bear_div and not raw_bear_div[1] and show_div_lines and enable_divergence
+    line.delete(div_bear_line)
+    div_bear_line := line.new(prev_ph_bar, prev_price_ph, curr_ph_bar, curr_price_ph, color=div_bear_color, width=div_line_width, style=div_lstyle)
+
+if raw_bull_div and not raw_bull_div[1] and show_div_lines and enable_divergence
+    line.delete(div_bull_line)
+    div_bull_line := line.new(prev_pl_bar, prev_price_pl, curr_pl_bar, curr_price_pl, color=div_bull_color, width=div_line_width, style=div_lstyle)
+
+// Late-trend warning (includes divergence against position)
+late_trend_flag = (grade == "A+" or grade == "A") and (adx_falling or adr_pct_used > 70 or div_against_position)
 
 // SL values
 // SL values (YM: 1pt = 1tick = $5 full / $0.50 MYM)
@@ -449,13 +633,19 @@ bars_since_signal := filtered_new_signal ? 0 : bars_since_signal + 1
 
 var int signal_duration = 0
 signal_duration := grade == "NONE" ? 0 : (filtered_new_signal ? 1 : signal_duration + 1)
-signal_dur_minutes = signal_duration * (timeframe.in_seconds() / 60)
-signal_dur_text = signal_dur_minutes >= 60 ? str.tostring(math.floor(signal_dur_minutes / 60)) + "h " + str.tostring(signal_dur_minutes % 60) + "m" : str.tostring(signal_dur_minutes, "0") + "m"
 
 // Reminder repeat: re-show grade label every N bars while grade is active
 reminder_bars = math.max(1, math.round(10 / (timeframe.in_seconds() / 60)))  // ~10 min between reminders
 is_reminder = grade != "NONE" and signal_duration > 1 and signal_duration % reminder_bars == 0
 show_signal = (filtered_new_signal or is_reminder) and tradeAllowed
+
+// Reset age counter when reminder confirms same grade is still active
+// Dashboard now shows "time since last confirmation" instead of total signal age
+if is_reminder
+    signal_duration := 1
+
+signal_dur_minutes = signal_duration * (timeframe.in_seconds() / 60)
+signal_dur_text = signal_dur_minutes >= 60 ? str.tostring(math.floor(signal_dur_minutes / 60)) + "h " + str.tostring(signal_dur_minutes % 60) + "m" : str.tostring(signal_dur_minutes, "0") + "m"
 
 // Filtered signal flags (fire on initial signal + repeat reminders)
 sig_a_plus_long  = is_a_plus_long and show_signal and direction == "LONG"
@@ -475,12 +665,12 @@ sig_b_short      = is_b_short and show_signal and direction == "SHORT"
 // --- VISUAL ELEMENTS ---
 // ==========================================
 // EMA
-plot(ema_34, "34 EMA", color=ema_bull ? color.new(color.green, 0) : color.new(color.red, 0), linewidth=2)
+plot(ema_34, "34 EMA", color=ema_bull ? ema_bull_color : ema_bear_color, linewidth=ema_line_width)
 
 // VWAP
-plot(show_vwap ? vwap_val : na, "VWAP", color=color.new(color.yellow, 20), linewidth=2, style=plot.style_circles)
-plot(show_ny_vwap and in_ny_session ? ny_vwap : na, "NY Anchored VWAP", color=color.new(color.white, 30), linewidth=2, style=plot.style_line)
-plot(show_prev_ny_vwap ? prev_ny_vwap_close : na, "Prev NY VWAP", color=color.new(color.gray, 70), linewidth=1, style=plot.style_line)
+plot(show_vwap ? vwap_val : na, "VWAP", color=color.new(vwap_color, 20), linewidth=vwap_line_width, style=plot.style_circles)
+plot(show_ny_vwap and in_ny_session ? ny_vwap : na, "NY Anchored VWAP", color=color.new(ny_vwap_color, 30), linewidth=ny_vwap_line_width, style=plot.style_line)
+plot(show_prev_ny_vwap ? prev_ny_vwap_close : na, "Prev NY VWAP", color=color.new(prev_ny_vwap_color, 70), linewidth=prev_ny_vwap_width, style=plot.style_line)
 
 // RSI Background Ribbon
 // Consolidation detection: resets after 4 consecutive bars outside range
@@ -545,12 +735,16 @@ bgcolor(algo_bg_active ? algo_bg_color : na, title="Algo Window Highlight")
 
 // Consolidation Regime Background
 consol_bg_color = show_consol_bg and enable_consol_regime ? (is_tight_consol ? color.new(#4488FF, 92) : is_mild_consol ? color.new(#FFD700, 93) : is_expansion_day ? color.new(#FF4444, 93) : na) : na
-bgcolor(consol_bg_color, title="Consolidation Regime BG")
-bgcolor(show_consol_bg and consol_compression_alert ? color.new(#FF9F43, 88) : na, title="Compression Alert BG")
+// Consolidation Regime + Compression Background (combined to save plot output)
+consol_combined_bg = show_consol_bg and consol_compression_alert ? color.new(#FF9F43, 88) : consol_bg_color
+bgcolor(consol_combined_bg, title="Consolidation Regime BG")
 
 // DStoch Crossover Markers
-plotshape(show_stoch_signals and stoch_buy_signal and tradeAllowed, "DStoch BUY Signal", shape.labelup, location.belowbar, color.new(color.aqua, 0), size=size.tiny, text="DS▲", textcolor=color.white)
-plotshape(show_stoch_signals and stoch_sell_signal and tradeAllowed, "DStoch SELL Signal", shape.labeldown, location.abovebar, color.new(color.fuchsia, 0), size=size.tiny, text="DS▼", textcolor=color.white)
+// DStoch Crossover Markers (using label.new — saves plot outputs)
+if show_stoch_signals and stoch_buy_signal and tradeAllowed
+    label.new(bar_index, low, "DS▲", style=label.style_label_up, color=ds_buy_color, textcolor=ds_buy_text_color, size=ds_msize, yloc=yloc.belowbar)
+if show_stoch_signals and stoch_sell_signal and tradeAllowed
+    label.new(bar_index, high, "DS▼", style=label.style_label_down, color=ds_sell_color, textcolor=ds_sell_text_color, size=ds_msize, yloc=yloc.abovebar)
 
 // Heikin Ashi Calculation
 haClose = (open + high + low + close) / 4
@@ -566,7 +760,7 @@ ha_against_count := grade == "NONE" ? 0 : ha_against ? ha_against_count + 1 : 0
 ha_exit_signal = ha_exit_warn and ha_against_count == ha_exit_bars and ha_against_count[1] < ha_exit_bars
 
 // Candle Coloring
-candle_color = not colorCandles or not tradeAllowed ? na : is_a_plus_long ? color.new(#00FF00, 0) : is_a_plus_short ? color.new(#FF00FF, 0) : is_a_long ? color.new(#00CC00, 0) : is_a_short ? color.new(#FF0000, 0) : is_a_minus_long ? color.new(#90EE90, 0) : is_a_minus_short ? color.new(#FF6347, 0) : is_b_plus_long ? color.new(#FFFF00, 0) : is_b_plus_short ? color.new(#4169E1, 0) : is_b_long ? color.new(#FFA500, 0) : is_b_short ? color.new(#9370DB, 0) : color.new(#080808, 0)
+candle_color = not colorCandles or not tradeAllowed ? na : is_a_plus_long ? sig_long_color_aplus : is_a_plus_short ? sig_short_color_aplus : is_a_long ? sig_long_color_a : is_a_short ? sig_short_color_a : is_a_minus_long ? sig_long_color_aminus : is_a_minus_short ? sig_short_color_aminus : is_b_plus_long ? sig_long_color_bplus : is_b_plus_short ? sig_short_color_bplus : is_b_long ? sig_long_color_b : is_b_short ? sig_short_color_b : color.new(#080808, 0)
 
 plotcandle(useHAOutline ? open : na, useHAOutline ? high : na, useHAOutline ? low : na, useHAOutline ? close : na, title="Grade + HA Candles", color=colorCandles ? candle_color : (ha_bull ? color.new(ha_bull_color_in, 0) : color.new(ha_bear_color_in, 0)), wickcolor=ha_color, bordercolor=ha_color)
 barcolor(not useHAOutline ? candle_color : na)
@@ -584,14 +778,26 @@ plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, sig_long
 plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, sig_short_color_b, size=size.tiny, text="B", textcolor=sig_short_text_color)
 
 // HA Exit Warning
-plotshape(ha_exit_signal and is_long_setup and tradeAllowed, "HA Exit Long", shape.xcross, location.abovebar, color.new(#FF6B00, 0), size=size.small, text="HA\u2717")
-plotshape(ha_exit_signal and is_short_setup and tradeAllowed, "HA Exit Short", shape.xcross, location.belowbar, color.new(#FF6B00, 0), size=size.small, text="HA\u2717")
+// HA Exit Warning (using label.new — saves plot outputs)
+if ha_exit_signal and is_long_setup and tradeAllowed
+    label.new(bar_index, high, "HA✗", style=label.style_xcross, color=ha_exit_color, textcolor=ha_exit_text_color, size=ha_exit_msize, yloc=yloc.abovebar)
+if ha_exit_signal and is_short_setup and tradeAllowed
+    label.new(bar_index, low, "HA✗", style=label.style_xcross, color=ha_exit_color, textcolor=ha_exit_text_color, size=ha_exit_msize, yloc=yloc.belowbar)
+
+// RSI Divergence Markers (using label.new — does not count toward 64 plot limit)
+div_bear_cond = show_div_markers and enable_divergence and raw_bear_div and not raw_bear_div[1] and tradeAllowed
+div_bull_cond = show_div_markers and enable_divergence and raw_bull_div and not raw_bull_div[1] and tradeAllowed
+
+if div_bear_cond
+    label.new(bar_index, high, "DIV▼", style=label.style_triangledown, color=div_bear_color, textcolor=div_bear_color, size=div_msize, yloc=yloc.abovebar)
+if div_bull_cond
+    label.new(bar_index, low, "DIV▲", style=label.style_triangleup, color=div_bull_color, textcolor=div_bull_color, size=div_msize, yloc=yloc.belowbar)
 
 // Stop Loss Levels
 stop_level_long = is_a_plus_long ? close - sl_aplus : is_a_long ? close - sl_a : is_a_minus_long ? close - sl_aminus : is_b_plus_long ? close - sl_bplus : is_b_long ? close - sl_b : na
 stop_level_short = is_a_plus_short ? close + sl_aplus : is_a_short ? close + sl_a : is_a_minus_short ? close + sl_aminus : is_b_plus_short ? close + sl_bplus : is_b_short ? close + sl_b : na
-plot(showStopLevels and tradeAllowed and is_long_setup ? stop_level_long : na, "Long Stop", color=color.new(color.red, 30), linewidth=2, style=plot.style_cross)
-plot(showStopLevels and tradeAllowed and is_short_setup ? stop_level_short : na, "Short Stop", color=color.new(color.green, 30), linewidth=2, style=plot.style_cross)
+plot(showStopLevels and tradeAllowed and is_long_setup ? stop_level_long : na, "Long Stop", color=color.new(stop_long_color, 30), linewidth=stop_line_width, style=plot.style_cross)
+plot(showStopLevels and tradeAllowed and is_short_setup ? stop_level_short : na, "Short Stop", color=color.new(stop_short_color, 30), linewidth=stop_line_width, style=plot.style_cross)
 
 // ==========================================
 // --- MAIN DASHBOARD ---
@@ -603,7 +809,7 @@ t_pos = switch dashPos
     "Bottom Left"  => position.bottom_left
     => position.top_right
 
-var table dash_table = table.new(t_pos, 2, 13, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
+var table dash_table = table.new(t_pos, 2, 15, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
 
 if showDash and barstate.islast
     // Preset
@@ -663,41 +869,47 @@ if showDash and barstate.islast
     table.cell(dash_table, 0, 9, "HMA TREND", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(dash_table, 1, 9, hma_trend, bgcolor=ema_trend_col, text_color=color.white, text_size=size.small)
 
+    // MTF Timeframes
+    mtf_display = mtf_fast + " / " + mtf_mid + " / " + mtf_slow
+    mtf_speed_col = mtf_speed == "Aggressive" ? color.new(#FF6B00, 60) : mtf_speed == "Moderate" ? color.new(#00BFFF, 60) : mtf_speed == "Custom" ? color.new(#E040FB, 60) : color.new(color.gray, 80)
+    table.cell(dash_table, 0, 10, "MTF (" + mtf_speed + ")", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 10, mtf_display, bgcolor=mtf_speed_col, text_color=color.white, text_size=size.small)
+
     // Consolidation Regime
     if enable_consol_regime
         regime_col = is_tight_consol ? color.new(#4488FF, 40) : is_mild_consol ? color.new(#FFD700, 50) : is_expansion_day ? color.new(#FF4444, 40) : color.new(color.gray, 80)
         range_pct_display = str.tostring(math.round(consol_range_ratio * 100)) + "% ATR"
-        table.cell(dash_table, 0, 10, "REGIME", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-        table.cell(dash_table, 1, 10, consol_regime + " (" + range_pct_display + ")", bgcolor=regime_col, text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 0, 11, "REGIME", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 11, consol_regime + " (" + range_pct_display + ")", bgcolor=regime_col, text_color=color.white, text_size=size.small)
 
         // Checkpoint score
         score_col = consol_score >= 2 ? color.new(#4488FF, 50) : consol_score == 1 ? color.new(#FFD700, 60) : color.new(color.green, 65)
-        table.cell(dash_table, 0, 11, "CP SCORE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-        table.cell(dash_table, 1, 11, str.tostring(consol_score) + "/3", bgcolor=score_col, text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 0, 12, "CP SCORE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 12, str.tostring(consol_score) + "/3", bgcolor=score_col, text_color=color.white, text_size=size.small)
 
         // Compression alert
         compress_text = consol_compression_alert ? "LOADED" : prev_day_was_tight ? "1-DAY TIGHT" : "—"
         compress_col = consol_compression_alert ? color.new(#FFD700, 40) : prev_day_was_tight ? color.new(#FF9F43, 55) : color.new(color.gray, 85)
-        table.cell(dash_table, 0, 12, "COMPRESS", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-        table.cell(dash_table, 1, 12, compress_text, bgcolor=compress_col, text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 0, 13, "COMPRESS", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 13, compress_text, bgcolor=compress_col, text_color=color.white, text_size=size.small)
+
+    // RSI Divergence
+    if enable_divergence
+        div_text = div_bear_active ? "⚠ BEAR DIV" : div_bull_active ? "⚠ BULL DIV" : "—"
+        div_col = div_bear_active ? color.new(#FF4444, 45) : div_bull_active ? color.new(#44BBFF, 45) : color.new(color.gray, 85)
+        div_warn = div_against_position ? " ✗ COUNTER" : ""
+        table.cell(dash_table, 0, 14, "RSI DIV", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+        table.cell(dash_table, 1, 14, div_text + div_warn, bgcolor=div_col, text_color=color.white, text_size=size.small)
 
 // ==========================================
-// --- ALERTS ---
+// --- ALERTS (consolidated to save plot outputs) ---
 // ==========================================
-alertcondition(sig_a_plus_long, title="🔥 A+ LONG SETUP", message="A+ LONG: All systems aligned!")
-alertcondition(sig_a_plus_short, title="🔥 A+ SHORT SETUP", message="A+ SHORT: All systems aligned!")
-alertcondition(sig_a_long, title="⚡ A LONG SETUP", message="A LONG: Strong confluence!")
-alertcondition(sig_a_short, title="⚡ A SHORT SETUP", message="A SHORT: Strong confluence!")
-alertcondition(sig_a_minus_long, title="✓ A- LONG SETUP", message="A- LONG: Good setup")
-alertcondition(sig_a_minus_short, title="✓ A- SHORT SETUP", message="A- SHORT: Good setup")
-alertcondition(sig_b_plus_long, title="💨 B+ LONG SCALP", message="B+ LONG: Trend scalp!")
-alertcondition(sig_b_plus_short, title="💨 B+ SHORT SCALP", message="B+ SHORT: Trend scalp!")
-alertcondition(sig_b_long, title="⚡ B LONG SCALP", message="B LONG: Quick scalp!")
-alertcondition(sig_b_short, title="⚡ B SHORT SCALP", message="B SHORT: Quick scalp!")
+alertcondition(sig_a_plus_long or sig_a_plus_short, title="🔥 A+ SETUP", message="A+ SETUP: All systems aligned! Check dashboard for direction.")
+alertcondition(sig_a_long or sig_a_short, title="⚡ A SETUP", message="A SETUP: Strong confluence! Check dashboard for direction.")
+alertcondition(sig_a_minus_long or sig_a_minus_short, title="✓ A- SETUP", message="A- SETUP: Good setup. Check dashboard for direction.")
+alertcondition(sig_b_plus_long or sig_b_plus_short, title="💨 B+ SCALP", message="B+ SCALP: Trend scalp! Check dashboard for direction.")
+alertcondition(sig_b_long or sig_b_short, title="⚡ B SCALP", message="B SCALP: Quick scalp! Check dashboard for direction.")
 alertcondition(ha_exit_signal and tradeAllowed, title="⚠ HA MOMENTUM FLIP", message="HA flipped against your position!")
-
-// Consolidation Filter Alerts
 isNewDay_consol = ta.change(time("D")) != 0
-alertcondition(is_tight_consol and not is_tight_consol[1], title="📊 TIGHT CONSOLIDATION", message="Session entered tight consolidation — range below 50% of ATR. Fade or sit out.")
-alertcondition(is_expansion_day and not is_expansion_day[1], title="📊 EXPANSION DAY", message="Range exceeded ATR — expansion/trend day in progress. Lean into continuation.")
-alertcondition(isNewDay_consol and consol_compression_alert, title="📊 COMPRESSION SETUP", message="Prior day(s) compressed — watch for expansion breakout today.")
+alertcondition((is_tight_consol and not is_tight_consol[1]) or (is_expansion_day and not is_expansion_day[1]) or (isNewDay_consol and consol_compression_alert), title="📊 REGIME CHANGE", message="Consolidation regime changed — check dashboard for tight/expansion/compression status.")
+alertcondition(enable_divergence and ((raw_bear_div and not raw_bear_div[1]) or (raw_bull_div and not raw_bull_div[1]) or (div_against_position and not div_against_position[1])), title="🔀 RSI DIVERGENCE", message="RSI divergence detected — check dashboard for bear/bull status and counter-position warning.")

@@ -1,0 +1,172 @@
+//@version=5
+// @description Core shared functions for MTF RSI Signal Suite.
+//   Contains all pure-math calculations used by both Signals and Management indicators.
+//   NOTE: request.security() calls CANNOT be exported in v5 — MTF data fetches
+//   remain in each indicator until v6 migration.
+//   Publish this privately, then import in both indicators:
+//     import yourUsername/MTF_RSI_Core_Lib/1
+library("MTF_RSI_Core_Lib", overlay=true)
+
+// ==========================================
+// --- DOUBLE RSI ---
+// ==========================================
+// @function Calculates the Double RSI (short vs long, EMA-smoothed) and their difference.
+// @param src Source series (typically close or hlc3)
+// @param short_len Short RSI lookback period
+// @param long_len Long RSI lookback period
+// @param short_smooth EMA smoothing applied to short RSI
+// @param long_smooth EMA smoothing applied to long RSI
+// @returns [rsiShort, rsiLong, diff] — smoothed short RSI, smoothed long RSI, and their difference
+export calc_double_rsi(series float src, simple int short_len, simple int long_len, simple int short_smooth, simple int long_smooth) =>
+    rsiS = ta.ema(ta.rsi(src, short_len), short_smooth)
+    rsiL = ta.ema(ta.rsi(src, long_len), long_smooth)
+    diff = rsiS - rsiL
+    [rsiS, rsiL, diff]
+
+// ==========================================
+// --- DOUBLE STOCHASTIC ---
+// ==========================================
+// @function Calculates a Double-EMA-smoothed stochastic oscillator.
+// @param len Stochastic lookback period
+// @param smooth EMA smoothing factor (applied twice)
+// @returns Double-smoothed stochastic value (0-100 range)
+export calc_double_stoch(simple int len, simple int smooth) =>
+    raw_stoch = ta.stoch(close, high, low, len)
+    db_stoch = ta.ema(ta.ema(raw_stoch, smooth), smooth)
+    db_stoch
+
+// ==========================================
+// --- RSI DIRECTION ---
+// ==========================================
+// @function Classifies RSI diff into directional signal: 1 (bull), -1 (bear), 0 (neutral).
+// @param diff Difference between short and long RSI
+// @param thresh Neutral zone threshold — diff must exceed this to register direction
+// @returns 1 for bullish, -1 for bearish, 0 for neutral
+export get_rsi_direction(series float diff, simple float thresh) =>
+    diff > thresh ? 1 : diff < -thresh ? -1 : 0
+
+// ==========================================
+// --- VOLATILITY CLASSIFICATION ---
+// ==========================================
+// @function Classifies current volatility regime from ATR ratio.
+// @param atr_val Current ATR value
+// @param atr_sma 50-period SMA of ATR (baseline)
+// @returns String: "EXTREME", "HIGH", "NORMAL", or "LOW"
+export get_vol_class(series float atr_val, series float atr_sma) =>
+    ratio = atr_val / (atr_sma > 0 ? atr_sma : atr_val)
+    ratio >= 2.0 ? "EXTREME" : ratio >= 1.4 ? "HIGH" : ratio >= 0.8 ? "NORMAL" : "LOW"
+
+// ==========================================
+// --- ATR RATIO ---
+// ==========================================
+// @function Calculates ATR ratio (current ATR vs its 50-period average).
+// @param atr_val Current ATR value
+// @param atr_sma 50-period SMA of ATR
+// @returns Ratio value (1.0 = normal, >1.4 = high, <0.8 = low)
+export get_atr_ratio(series float atr_val, series float atr_sma) =>
+    atr_val / (atr_sma > 0 ? atr_sma : atr_val)
+
+// ==========================================
+// --- HMA TREND CLASSIFICATION ---
+// ==========================================
+// @function Classifies the HMA-based macro trend.
+// @param price Current close price
+// @param hma21 Hull Moving Average (21)
+// @param hma34 Hull Moving Average (34)
+// @param hma50 Hull Moving Average (50)
+// @returns String: "STRONG LONG", "LONG", "STRONG SHORT", "SHORT", or "NEUTRAL"
+export get_hma_trend(series float price, series float hma21, series float hma34, series float hma50) =>
+    primary_bull = (price > hma21) and (hma21 > hma34)
+    primary_bear = (price < hma21) and (hma21 < hma34)
+    strong_bull = hma34 > hma50
+    strong_bear = hma34 < hma50
+    primary_bull and strong_bull ? "STRONG LONG" : primary_bull ? "LONG" : primary_bear and strong_bear ? "STRONG SHORT" : primary_bear ? "SHORT" : "NEUTRAL"
+
+// ==========================================
+// --- MTF TIMEFRAME SELECTION ---
+// ==========================================
+// @function Returns the fast/mid/slow MTF timeframes based on chart resolution.
+// @param chart_minutes Chart timeframe in minutes
+// @returns [fast_tf, mid_tf, slow_tf] — timeframe strings for request.security()
+export get_mtf_timeframes(simple float chart_minutes) =>
+    fast = chart_minutes <= 3 ? "5"  : chart_minutes <= 5 ? "15" : chart_minutes <= 15 ? "60"  : "240"
+    mid  = chart_minutes <= 3 ? "15" : chart_minutes <= 5 ? "60" : chart_minutes <= 15 ? "240" : "D"
+    slow = chart_minutes <= 3 ? "60" : chart_minutes <= 5 ? "240": chart_minutes <= 15 ? "D"   : "W"
+    [fast, mid, slow]
+
+// ==========================================
+// --- GRADE ASSEMBLY ---
+// ==========================================
+// @function Assembles the setup grade from pre-computed confluence booleans.
+//   Call this AFTER computing all MTF, EMA, VWAP, stoch, ADX, volume, and macro filters.
+//   Each boolean pair (long/short) must be pre-computed by the calling indicator.
+// @param a_plus_long A+ long conditions met
+// @param a_plus_short A+ short conditions met
+// @param a_long A long conditions met
+// @param a_short A short conditions met
+// @param a_minus_long A- long conditions met
+// @param a_minus_short A- short conditions met
+// @param b_plus_long B+ long conditions met
+// @param b_plus_short B+ short conditions met
+// @param b_long B long conditions met
+// @param b_short B short conditions met
+// @returns [grade, direction] — grade string ("A+".."NONE") and direction string ("LONG"/"SHORT"/"NEUTRAL")
+export get_grade(series bool a_plus_long, series bool a_plus_short, series bool a_long, series bool a_short, series bool a_minus_long, series bool a_minus_short, series bool b_plus_long, series bool b_plus_short, series bool b_long, series bool b_short) =>
+    grade = a_plus_long or a_plus_short ? "A+" : a_long or a_short ? "A" : a_minus_long or a_minus_short ? "A-" : b_plus_long or b_plus_short ? "B+" : b_long or b_short ? "B" : "NONE"
+    is_long = a_plus_long or a_long or a_minus_long or b_plus_long or b_long
+    is_short = a_plus_short or a_short or a_minus_short or b_plus_short or b_short
+    direction = is_long ? "LONG" : is_short ? "SHORT" : "NEUTRAL"
+    [grade, direction]
+
+// ==========================================
+// --- PRESET OVERRIDES ---
+// ==========================================
+// @function Returns instrument-specific parameter overrides.
+//   Centralizes all preset tuning so both indicators stay in sync.
+// @param preset Instrument preset string from input
+// @param ema_in User EMA length input
+// @param stoch_ob_in User stoch overbought input
+// @param stoch_os_in User stoch oversold input
+// @param stoch_sell_in User stoch sell level input
+// @param vol_mult_in User volume multiplier input
+// @param adx_ap_in User ADX threshold for A+
+// @param adx_a_in User ADX threshold for A
+// @param suppress_low_vol_in User low-vol suppress setting
+// @returns [ema_len, stoch_ob, stoch_os, stoch_sell, vol_mult, adx_ap, adx_a, low_vol_suppress]
+export get_preset_overrides(simple string preset, simple int ema_in, simple float stoch_ob_in, simple float stoch_os_in, simple float stoch_sell_in, simple float vol_mult_in, simple float adx_ap_in, simple float adx_a_in, simple bool suppress_low_vol_in) =>
+    is_cl = preset == "CL"
+    is_nq = preset == "NQ"
+    is_ym = preset == "YM"
+    ema_len    = is_cl ? 21 : is_ym ? 34 : is_nq ? 34 : ema_in
+    stoch_ob   = is_cl ? 72.0 : is_ym ? 62.0 : is_nq ? 65.0 : stoch_ob_in
+    stoch_os   = is_cl ? 30.0 : is_ym ? 38.0 : is_nq ? 35.0 : stoch_os_in
+    stoch_sell = is_cl ? 80.0 : is_ym ? 82.0 : stoch_sell_in
+    vol_mult   = is_cl ? 1.4  : is_ym ? 1.2  : is_nq ? 1.2  : vol_mult_in
+    adx_ap     = is_cl ? 28.0 : is_ym ? 23.0 : is_nq ? 23.0 : adx_ap_in
+    adx_a      = is_cl ? 22.0 : is_ym ? 18.0 : is_nq ? 18.0 : adx_a_in
+    low_vol_suppress = is_cl ? true : suppress_low_vol_in
+    [ema_len, stoch_ob, stoch_os, stoch_sell, vol_mult, adx_ap, adx_a, low_vol_suppress]
+
+// ==========================================
+// --- STOP LOSS VALUES ---
+// ==========================================
+// @function Returns per-grade stop loss distances based on instrument preset.
+// @param preset Short preset key: "CL", "NQ", "YM", or ""
+// @returns [sl_aplus, sl_a, sl_aminus, sl_bplus, sl_b]
+export get_stop_distances(simple string preset) =>
+    is_cl = preset == "CL"
+    is_nq = preset == "NQ"
+    is_ym = preset == "YM"
+    sl_aplus  = is_cl ? 0.40 : is_nq ? 20.0 : is_ym ? 20.0 : 15.0
+    sl_a      = is_cl ? 0.40 : is_nq ? 20.0 : is_ym ? 20.0 : 15.0
+    sl_aminus = is_cl ? 0.30 : is_nq ? 20.0 : is_ym ? 20.0 : 15.0
+    sl_bplus  = is_cl ? 0.30 : is_nq ? 25.0 : is_ym ? 15.0 : 15.0
+    sl_b      = is_cl ? 0.30 : is_nq ? 25.0 : is_ym ? 15.0 : 15.0
+    [sl_aplus, sl_a, sl_aminus, sl_bplus, sl_b]
+
+// ==========================================
+// --- LIBRARY DEMO (required for publishing) ---
+// ==========================================
+// Minimal visual output so the library can be published with a chart
+[demoS, demoL, demoDiff] = calc_double_rsi(close, 5, 13, 2, 3)
+plot(demoDiff, "RSI Diff (demo)", color=color.new(color.gray, 80))
