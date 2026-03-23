@@ -419,11 +419,12 @@ direction = is_long_setup ? "LONG" : is_short_setup ? "SHORT" : "NEUTRAL"
 late_trend_flag = (grade == "A+" or grade == "A") and (adx_falling or adr_pct_used > 70)
 
 // SL values
-sl_aplus = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
-sl_a     = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
-sl_aminus = use_cl_preset ? 0.30 : use_nq_preset ? 20.0 : use_ym_preset ? 20.0 : 15.0
-sl_bplus  = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 15.0 : 15.0
-sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 15.0 : 15.0
+// SL values (YM: 1pt = 1tick = $5 full / $0.50 MYM)
+sl_aplus = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 15.0 : 15.0
+sl_a     = use_cl_preset ? 0.40 : use_nq_preset ? 20.0 : use_ym_preset ? 15.0 : 15.0
+sl_aminus = use_cl_preset ? 0.30 : use_nq_preset ? 20.0 : use_ym_preset ? 12.0 : 15.0
+sl_bplus  = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 10.0 : 15.0
+sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 25.0 : use_ym_preset ? 8.0 : 15.0
 
 // ==========================================
 // --- TIME & SESSION FILTER ---
