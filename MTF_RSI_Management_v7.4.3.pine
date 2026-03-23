@@ -523,7 +523,7 @@ s_pos = switch sizing_dash_pos
     "Bottom Left"  => position.bottom_left
     => position.bottom_right
 
-var table size_table = table.new(s_pos, 3, 10, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
+var table size_table = table.new(s_pos, 3, 12, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
 
 if showSizingDash and tradeAllowed and barstate.islast
     table.cell(size_table, 0, 0, "📐 VOLATILITY & SIZING", bgcolor=color.new(#1a1a2e, 60), text_color=color.white, text_size=size.small, text_halign=text.align_left)
@@ -556,31 +556,52 @@ if showSizingDash and tradeAllowed and barstate.islast
     table.cell(size_table, 1, 4, adx_mult_text, bgcolor=adx_mult_col, text_color=color.white, text_size=size.small)
     table.cell(size_table, 2, 4, runner_status, bgcolor=runner_ok_col, text_color=color.white, text_size=size.small)
 
-    table.cell(size_table, 0, 5, "MAX CTS (cap: " + str.tostring(max_contracts) + ")", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.yellow, 0), text_size=size.small, text_halign=text.align_left)
-    table.cell(size_table, 1, 5, "Grade SL", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
-    table.cell(size_table, 2, 5, "ATR Stop", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
+    // TP MODE — ADX-driven recommendation
+    is_a_grade = grade == "A+" or grade == "A"
+    is_b_grade = grade == "B+" or grade == "B"
+    adr_exhausting = adr_pct_used > 70
+    tp_use_atr = is_a_grade and adx_value >= adx_threshold_a_plus and adx_rising and not adr_exhausting
+    tp_use_fixed_reason = grade == "NONE" ? "—" : is_b_grade ? "FIXED TP (scalp)" : adr_exhausting ? "FIXED TP (ADR 70%+)" : adx_falling ? "FIXED TP (ADX ▼)" : adx_value < adx_threshold_a ? "FIXED TP (ADX weak)" : ""
+    tp_mode_text = grade == "NONE" ? "—" : tp_use_atr ? "🔥 ATR TP (ADX " + str.tostring(adx_value, "0") + " ▲)" : tp_use_fixed_reason != "" ? tp_use_fixed_reason : grade == "A-" ? "FIXED TP" : "ATR TP"
+    tp_mode_col = grade == "NONE" ? color.new(color.gray, 90) : tp_use_atr ? color.new(color.green, 55) : is_b_grade ? color.new(color.gray, 80) : color.new(color.orange, 65)
+    table.cell(size_table, 0, 5, "TP MODE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(size_table, 1, 5, tp_mode_text, bgcolor=tp_mode_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 5, "", bgcolor=tp_mode_col)
+
+    // SL MODE — which stop approach to use
+    runner_eligible = showRunnerTrail and runner_adx_ok and is_a_grade and adx_rising
+    sl_mode_text = grade == "NONE" ? "—" : runner_eligible ? "🏃 TRAIL (" + runner_ema_source + ")" : is_a_grade and adx_value >= adx_threshold_a_plus ? "ATR SL (strong trend)" : "FIXED SL"
+    sl_mode_col = grade == "NONE" ? color.new(color.gray, 90) : runner_eligible ? color.new(#00E5FF, 55) : is_a_grade and adx_value >= adx_threshold_a_plus ? color.new(color.green, 65) : color.new(color.gray, 75)
+    sl_detail = grade == "NONE" ? "" : runner_eligible ? "Move SL → trail" : is_a_grade ? str.tostring(atr_val * 1.5, use_cl_preset ? "0.02" : "0.1") + " ATR" : str.tostring(stop_dist, use_cl_preset ? "0.02" : "0") + " pts"
+    table.cell(size_table, 0, 6, "SL MODE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(size_table, 1, 6, sl_mode_text, bgcolor=sl_mode_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 6, sl_detail, bgcolor=sl_mode_col, text_color=color.white, text_size=size.small)
+
+    table.cell(size_table, 0, 7, "MAX CTS (cap: " + str.tostring(max_contracts) + ")", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.yellow, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(size_table, 1, 7, "Grade SL", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
+    table.cell(size_table, 2, 7, "ATR Stop", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
 
     // Each row uses THAT GRADE's own SL for sizing — no percentage scaling
     sl_fmt = use_cl_preset ? "0.00" : "0"
     aplus_col = cts_a_plus >= 1 ? color.new(color.green, 70) : color.new(color.red, 70)
-    table.cell(size_table, 0, 6, "A+ / A (" + str.tostring(sl_aplus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#00ff00, 0), text_size=size.small)
-    table.cell(size_table, 1, 6, str.tostring(cts_a_plus) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 6, str.tostring(cts_atr) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 8, "A+ / A (" + str.tostring(sl_aplus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#00ff00, 0), text_size=size.small)
+    table.cell(size_table, 1, 8, str.tostring(cts_a_plus) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 8, str.tostring(cts_atr) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
 
     am_col = cts_a_minus >= 1 ? color.new(#4488FF, 70) : color.new(color.red, 70)
-    table.cell(size_table, 0, 7, "A- (" + str.tostring(sl_aminus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#66ff66, 0), text_size=size.small)
-    table.cell(size_table, 1, 7, str.tostring(cts_a_minus) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 7, str.tostring(cts_atr) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 9, "A- (" + str.tostring(sl_aminus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#66ff66, 0), text_size=size.small)
+    table.cell(size_table, 1, 9, str.tostring(cts_a_minus) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 9, str.tostring(cts_atr) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
 
     bp_col = cts_b_plus >= 1 ? color.new(#FF9900, 70) : color.new(color.red, 70)
-    table.cell(size_table, 0, 8, "B+ (" + str.tostring(sl_bplus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ffaa00, 0), text_size=size.small)
-    table.cell(size_table, 1, 8, str.tostring(cts_b_plus) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 8, str.tostring(cts_atr) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 10, "B+ (" + str.tostring(sl_bplus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ffaa00, 0), text_size=size.small)
+    table.cell(size_table, 1, 10, str.tostring(cts_b_plus) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 10, str.tostring(cts_atr) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
 
     b_col = cts_b >= 1 ? color.new(color.red, 75) : color.new(color.red, 65)
-    table.cell(size_table, 0, 9, "B (" + str.tostring(sl_b, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ff6600, 0), text_size=size.small)
-    table.cell(size_table, 1, 9, str.tostring(cts_b) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 9, str.tostring(cts_atr) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 11, "B (" + str.tostring(sl_b, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ff6600, 0), text_size=size.small)
+    table.cell(size_table, 1, 11, str.tostring(cts_b) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 11, str.tostring(cts_atr) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
 
 // ==========================================
 // --- GLOBEX LEVEL LINES ---
