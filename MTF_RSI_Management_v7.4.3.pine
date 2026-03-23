@@ -78,8 +78,8 @@ showATRTP = input.bool(false, "Show ATR Take Profit (A grades)", group=grp_mgmt,
 atr_tp_mult = input.float(2.0, "ATR TP Multiplier", group=grp_mgmt, minval=0.5, maxval=5.0, step=0.5, tooltip="TP distance = ATR × this multiplier. 1.5 = conservative, 2.0 = moderate, 2.5 = aggressive.")
 atr_period = input.int(14, "ATR Period", group=grp_mgmt, tooltip="Lookback for Average True Range. Used for stop distances, TP calculations, and position sizing. Standard: 14.")
 max_pain_dollars = input.float(400.0, "Max Pain ($)", group=grp_mgmt, tooltip="Maximum dollar amount you're willing to lose per trade. The sizing dashboard divides this by stop distance to suggest contract count.")
-max_contracts = input.int(10, "Max Contracts Cap", group=grp_mgmt, minval=1, maxval=50, tooltip="Hard cap on suggested contract count. Prevents unrealistic sizing on micro contracts. Set to your broker's max or your comfort level.")
-dollar_per_point_in = input.float(5.0, "$ Per Point Per Contract", group=grp_mgmt, tooltip="Dollar value of 1 point move per contract. ES/MES=5/0.50, NQ/MNQ=20/2, CL=10, YM/MYM=5/0.50. Preset auto-sets to MYM ($0.50) — change to $5.00 for full YM. Overridden by instrument preset.")
+max_contracts = input.int(10, "Max Contracts Cap", group=grp_mgmt, minval=1, maxval=50, tooltip="Hard cap on suggested contract count. Set to your broker's max or your comfort level. Prevents unrealistic sizing on micro contracts.")
+contract_size = input.string("Micro", "Contract Size", options=["Micro", "Mini/Standard"], group=grp_mgmt, tooltip="Which contract size you're trading.\n\nMicro: MES ($5/pt), MNQ ($2/pt), MYM ($0.50/pt), MCL ($100/pt)\nMini/Standard: ES ($50/pt), NQ ($20/pt), YM ($5/pt), CL ($1000/pt)\n\nDrives all sizing calculations. Must match your actual position.")
 sizing_dash_pos = input.string("Bottom Right", "Sizing Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_mgmt, tooltip="Corner of the chart where the volatility/sizing dashboard is placed.")
 
 grp_runner = "🏃 Runner Trail Stop"
@@ -103,7 +103,10 @@ stoch_os = use_cl_preset ? 30.0 : use_ym_preset ? 38.0 : use_nq_preset ? 35.0 : 
 vol_mult = use_cl_preset ? 1.4 : use_ym_preset ? 1.2 : use_nq_preset ? 1.2 : vol_mult_in
 adx_threshold_a_plus = use_cl_preset ? 28.0 : use_ym_preset ? 23.0 : use_nq_preset ? 23.0 : adx_threshold_a_plus_in
 adx_threshold_a = use_cl_preset ? 22.0 : use_ym_preset ? 18.0 : use_nq_preset ? 18.0 : adx_threshold_a_in
-dollar_per_point = use_cl_preset ? 10.0 : use_ym_preset ? 0.50 : use_nq_preset ? 2.0 : use_es_preset ? 5.0 : dollar_per_point_in
+// Dollar per point: derived from instrument preset × contract size
+is_micro = contract_size == "Micro"
+dollar_per_point = use_cl_preset ? (is_micro ? 100.0 : 1000.0) : use_ym_preset ? (is_micro ? 0.50 : 5.0) : use_nq_preset ? (is_micro ? 2.0 : 20.0) : use_es_preset ? (is_micro ? 5.0 : 50.0) : (is_micro ? 5.0 : 50.0)
+contract_label = use_cl_preset ? (is_micro ? "MCL" : "CL") : use_ym_preset ? (is_micro ? "MYM" : "YM") : use_nq_preset ? (is_micro ? "MNQ" : "NQ") : use_es_preset ? (is_micro ? "MES" : "ES") : (is_micro ? "MICRO" : "FULL")
 use_low_vol_suppress = use_cl_preset ? true : suppress_low_vol_bb
 
 // RSI Speed overrides
@@ -526,7 +529,7 @@ s_pos = switch sizing_dash_pos
 var table size_table = table.new(s_pos, 3, 12, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
 
 if showSizingDash and tradeAllowed and barstate.islast
-    table.cell(size_table, 0, 0, "📐 VOLATILITY & SIZING", bgcolor=color.new(#1a1a2e, 60), text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(size_table, 0, 0, "📐 " + contract_label + " $" + str.tostring(dollar_per_point, dollar_per_point >= 10 ? "0" : "0.00") + "/pt", bgcolor=color.new(#1a1a2e, 60), text_color=color.white, text_size=size.small, text_halign=text.align_left)
     table.cell(size_table, 1, 0, "", bgcolor=color.new(#1a1a2e, 60))
     table.cell(size_table, 2, 0, "$" + str.tostring(max_pain_dollars, "0") + " MAX PAIN", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.red, 0), text_size=size.small, text_halign=text.align_right)
 
