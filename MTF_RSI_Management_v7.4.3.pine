@@ -78,6 +78,7 @@ showATRTP = input.bool(false, "Show ATR Take Profit (A grades)", group=grp_mgmt,
 atr_tp_mult = input.float(2.0, "ATR TP Multiplier", group=grp_mgmt, minval=0.5, maxval=5.0, step=0.5, tooltip="TP distance = ATR × this multiplier. 1.5 = conservative, 2.0 = moderate, 2.5 = aggressive.")
 atr_period = input.int(14, "ATR Period", group=grp_mgmt, tooltip="Lookback for Average True Range. Used for stop distances, TP calculations, and position sizing. Standard: 14.")
 max_pain_dollars = input.float(400.0, "Max Pain ($)", group=grp_mgmt, tooltip="Maximum dollar amount you're willing to lose per trade. The sizing dashboard divides this by stop distance to suggest contract count.")
+max_contracts = input.int(10, "Max Contracts Cap", group=grp_mgmt, minval=1, maxval=50, tooltip="Hard cap on suggested contract count. Prevents unrealistic sizing on micro contracts. Set to your broker's max or your comfort level.")
 dollar_per_point_in = input.float(5.0, "$ Per Point Per Contract", group=grp_mgmt, tooltip="Dollar value of 1 point move per contract. ES/MES=5/0.50, NQ/MNQ=20/2, CL=10, YM/MYM=5/0.50. Preset auto-sets to MYM ($0.50) — change to $5.00 for full YM. Overridden by instrument preset.")
 sizing_dash_pos = input.string("Bottom Right", "Sizing Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_mgmt, tooltip="Corner of the chart where the volatility/sizing dashboard is placed.")
 
@@ -330,16 +331,25 @@ if globex_session
             array.set(vol_bins, bin_idx, array.get(vol_bins, bin_idx) + volume)
 
 // ==========================================
-// --- SIZING ---
+// --- SIZING (per-grade, capped) ---
 // ==========================================
 max_pain_pts = dollar_per_point > 0 ? max_pain_dollars / dollar_per_point : 0
-max_cts_at_atr = atr_val > 0 ? math.floor(max_pain_dollars / (atr_val * dollar_per_point)) : 0
-adx_adjusted_max = math.floor(max_cts_at_atr * adx_size_mult)
-cts_a_plus = adx_adjusted_max
-cts_a      = adx_adjusted_max
-cts_a_minus = math.floor(adx_adjusted_max * 0.75)
-cts_b_plus  = math.floor(adx_adjusted_max * 0.50)
-cts_b       = math.floor(adx_adjusted_max * 0.25)
+
+// Per-grade sizing: each grade uses its OWN SL for contract calculation
+// Formula: floor(max_pain / (grade_sl * dollar_per_point)), capped at max_contracts
+calc_cts(sl_val, dpp, mp, cap) =>
+    raw = sl_val > 0 and dpp > 0 ? math.floor(mp / (sl_val * dpp)) : 0
+    math.min(raw, cap)
+
+cts_a_plus = calc_cts(sl_aplus, dollar_per_point, max_pain_dollars, max_contracts)
+cts_a      = calc_cts(sl_a, dollar_per_point, max_pain_dollars, max_contracts)
+cts_a_minus = calc_cts(sl_aminus, dollar_per_point, max_pain_dollars, max_contracts)
+cts_b_plus  = calc_cts(sl_bplus, dollar_per_point, max_pain_dollars, max_contracts)
+cts_b       = calc_cts(sl_b, dollar_per_point, max_pain_dollars, max_contracts)
+
+// ATR-based alternative (for reference column)
+atr_stop_dist = atr_val * 1.5
+cts_atr = calc_cts(atr_stop_dist, dollar_per_point, max_pain_dollars, max_contracts)
 
 // ==========================================
 // --- PYRAMID LOGIC ---
@@ -546,32 +556,31 @@ if showSizingDash and tradeAllowed and barstate.islast
     table.cell(size_table, 1, 4, adx_mult_text, bgcolor=adx_mult_col, text_color=color.white, text_size=size.small)
     table.cell(size_table, 2, 4, runner_status, bgcolor=runner_ok_col, text_color=color.white, text_size=size.small)
 
-    table.cell(size_table, 0, 5, "MAX CONTRACTS BY GRADE", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.yellow, 0), text_size=size.small, text_halign=text.align_left)
-    table.cell(size_table, 1, 5, "VWAP/EMA", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
+    table.cell(size_table, 0, 5, "MAX CTS (cap: " + str.tostring(max_contracts) + ")", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.yellow, 0), text_size=size.small, text_halign=text.align_left)
+    table.cell(size_table, 1, 5, "Grade SL", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
     table.cell(size_table, 2, 5, "ATR Stop", bgcolor=color.new(#1a1a2e, 60), text_color=color.new(color.gray, 30), text_size=size.small)
 
-    max_cts_stop_raw = stop_dist > 0 ? math.floor(max_pain_dollars / (stop_dist * dollar_per_point)) : 0
-    max_cts_stop = math.floor(max_cts_stop_raw * adx_size_mult)
-
+    // Each row uses THAT GRADE's own SL for sizing — no percentage scaling
+    sl_fmt = use_cl_preset ? "0.00" : "0"
     aplus_col = cts_a_plus >= 1 ? color.new(color.green, 70) : color.new(color.red, 70)
-    table.cell(size_table, 0, 6, "A+ / A (100%)", bgcolor=color.new(color.gray, 85), text_color=color.new(#00ff00, 0), text_size=size.small)
-    table.cell(size_table, 1, 6, str.tostring(max_cts_stop) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 6, str.tostring(cts_a_plus) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 6, "A+ / A (" + str.tostring(sl_aplus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#00ff00, 0), text_size=size.small)
+    table.cell(size_table, 1, 6, str.tostring(cts_a_plus) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 6, str.tostring(cts_atr) + " cts", bgcolor=aplus_col, text_color=color.white, text_size=size.small)
 
     am_col = cts_a_minus >= 1 ? color.new(#4488FF, 70) : color.new(color.red, 70)
-    table.cell(size_table, 0, 7, "A- (75%)", bgcolor=color.new(color.gray, 85), text_color=color.new(#66ff66, 0), text_size=size.small)
-    table.cell(size_table, 1, 7, str.tostring(math.floor(max_cts_stop * 0.75)) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 7, str.tostring(cts_a_minus) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 7, "A- (" + str.tostring(sl_aminus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#66ff66, 0), text_size=size.small)
+    table.cell(size_table, 1, 7, str.tostring(cts_a_minus) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 7, str.tostring(cts_atr) + " cts", bgcolor=am_col, text_color=color.white, text_size=size.small)
 
     bp_col = cts_b_plus >= 1 ? color.new(#FF9900, 70) : color.new(color.red, 70)
-    table.cell(size_table, 0, 8, "B+ (50%)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ffaa00, 0), text_size=size.small)
-    table.cell(size_table, 1, 8, str.tostring(math.floor(max_cts_stop * 0.50)) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 8, str.tostring(cts_b_plus) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 8, "B+ (" + str.tostring(sl_bplus, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ffaa00, 0), text_size=size.small)
+    table.cell(size_table, 1, 8, str.tostring(cts_b_plus) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 8, str.tostring(cts_atr) + " cts", bgcolor=bp_col, text_color=color.white, text_size=size.small)
 
     b_col = cts_b >= 1 ? color.new(color.red, 75) : color.new(color.red, 65)
-    table.cell(size_table, 0, 9, "B (25%)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ff6600, 0), text_size=size.small)
-    table.cell(size_table, 1, 9, str.tostring(math.floor(max_cts_stop * 0.25)) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
-    table.cell(size_table, 2, 9, str.tostring(cts_b) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 0, 9, "B (" + str.tostring(sl_b, sl_fmt) + " SL)", bgcolor=color.new(color.gray, 85), text_color=color.new(#ff6600, 0), text_size=size.small)
+    table.cell(size_table, 1, 9, str.tostring(cts_b) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
+    table.cell(size_table, 2, 9, str.tostring(cts_atr) + " cts", bgcolor=b_col, text_color=color.white, text_size=size.small)
 
 // ==========================================
 // --- GLOBEX LEVEL LINES ---
