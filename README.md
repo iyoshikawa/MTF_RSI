@@ -14,17 +14,15 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 
 | File | Description |
 |------|-------------|
-| `MTF_RSI_Signals_v7.6.0.pine` | Latest Signals — RSI Speed, MTF Speed, Divergence detection |
-| `MTF_RSI_Signals_v7.12.0_Backtested.pine` | Backtested variant — presets optimized via coordinate descent |
-| `MTF_RSI_Management_v7.5.0.pine` | Trade management — sizing, TP/SL, runners, pyramids |
-| `MTF_RSI_Core_Library.pine` | Shared calculation functions (prep for Pine v6 migration) |
+| `MTF_RSI_Signals_v7.7.0.pine` | Signals — grades, TP/SL, volume analysis, divergence, Renko support |
+| `MTF_RSI_Management_v7.5.0.pine` | Management — trade lifecycle, sizing, runners, pyramids |
 | `EMA_HighLowMedian_Ribbon.pine` | Standalone EMA High/Low/Median ribbon overlay |
 | `Session_Range_vs_ATR_Filter.pine` | Standalone session range vs ATR filter |
-| `Backtest_Report_v7.12.0.md` | Optimization methodology and results for v7.12.0 presets |
+| `Indicator_Guide.md` | Complete reference — every signal, marker, dashboard element, and setting |
+| `Alert_Setup_Guide.md` | TradingView alert configuration + full trade examples |
+| `Backtest_Report_v7.12.0.md` | Optimization methodology and results for backtested presets |
 | `Backtest_Report_ES_NQ_TPSL.md` | ES & NQ TP/SL optimization — 4 param sets × 8 seeds |
 | `YM_1MIN_SETTINGS.md` | Detailed YM/MYM 1-minute chart configuration guide |
-| `MTF_RSI_Indicator_Guide.pdf` | User guide |
-| `MTF_RSI_Library_Setup.pdf` | Library setup documentation |
 
 ---
 
@@ -42,7 +40,7 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 
 ## TP/SL Reference — 1-Minute Chart
 
-All values in the code as of **v7.6.0 Signals / v7.5.0 Management**.
+All values in the code as of **v7.7.0 Signals / v7.5.0 Management**.
 
 ### At a Glance — All Instruments
 
@@ -282,7 +280,7 @@ When running on a 1-minute chart, the multi-timeframe RSI checks these higher ti
 | Moderate | 5m | 15m | 30m | Medium | Session-based NY trading |
 | Aggressive | 5m | 9m | 15m | Fastest | Strong trending sessions (use anti-chop filters) |
 
-MTF Speed settings available in v7.6.0. Conservative is recommended for most 1-min trading.
+MTF Speed settings available in v7.7.0. Conservative is recommended for most 1-min trading.
 
 ---
 
@@ -303,7 +301,7 @@ MTF Speed settings available in v7.6.0. Conservative is recommended for most 1-m
 
 | Version | Indicator | Changes |
 |---------|-----------|---------|
-| v7.6.0 | Signals | Volume analysis (expansion/spikes/divergence), TP levels, plot optimization (plotshape→label.new), ribbon volume response |
+| v7.7.0 | Signals | Volume analysis, TP/SL levels, split alerts (long/short + TP/SL hit), Renko support, plot optimization, all colors configurable |
 | v7.5.0 | Management | Trade lifecycle (TP1/TP2/breakeven/P&L), contract size selector (Micro/Mini), per-grade sizing, TP/SL MODE rows |
 | v7.5.3 | Signals | RSI Speed presets, MTF Speed presets, RSI Divergence detection, YM SL fix, NQ SL fix |
 | v7.12.0 | Signals | Backtested presets via coordinate descent (ES-specific SL, tuned NQ/CL/YM) |
