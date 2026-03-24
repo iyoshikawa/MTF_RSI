@@ -180,7 +180,7 @@ tp_line_width = input.int(2, "TP Width", group=grp_lines, tooltip="Thickness of 
 grp_chop = "🔇 Anti-Chop Filters"
 cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30, tooltip="After a signal fires, suppress new signals for this many bars. Prevents rapid-fire signals in choppy conditions. 5 = default, increase if seeing too many signals. On Renko/Range charts, the time-based cooldown below is used instead.")
 persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_chop, minval=1, maxval=5, tooltip="Once a grade appears, hold it for at least this many bars even if conditions briefly lapse. Prevents grade flickering. 1 = no persistence, 3+ = very sticky.")
-cooldown_minutes = input.int(5, "Renko/Range Cooldown (minutes)", group=grp_chop, minval=1, maxval=30, tooltip="Time-based cooldown for Renko, Range, and other non-time-based chart types. Since bars form irregularly, this uses elapsed wall-clock time instead of bar count. Only applies on non-standard charts — candle charts use bar-based cooldown above.")
+cooldown_seconds = input.int(60, "Renko/Range Cooldown (seconds)", group=grp_chop, minval=10, maxval=600, step=10, tooltip="Time-based cooldown for Renko, Range, and other non-time-based chart types. Since bars form irregularly, this uses elapsed wall-clock time instead of bar count. 10s minimum, 60s default. Only applies on non-standard charts — candle charts use bar-based cooldown above.")
 adx_floor_bb = input.float(15.0, "ADX Floor for B/B+", group=grp_chop, minval=0, tooltip="Minimum ADX required for B and B+ grades to fire. Filters out scalp signals in dead/ranging markets. 0 = disabled.")
 suppress_low_vol_bb = input.bool(false, "Suppress B/B+ During LOW Volatility", group=grp_chop, tooltip="Blocks B/B+ signals when volume is below average. Prevents weak scalp signals in thin markets. Auto-enabled for CL preset.")
 macro_trend_filter = input.bool(true, "Block Counter-Trend on B/B+/A-", group=grp_chop, tooltip="Prevents B, B+, and A- grades from firing against the slow timeframe (233 EMA) trend. Only allows these weaker grades in the macro direction.")
@@ -693,7 +693,7 @@ var int bars_since_signal = 999
 raw_new_signal = grade_persisted and grade != "NONE" and (grade_changed or not grade_persisted[1])
 
 // Cooldown: time-based for Renko/Range, bar-based for candles
-cooldown_ms = cooldown_minutes * 60 * 1000
+cooldown_ms = cooldown_seconds * 1000
 elapsed_since_signal_ms := filtered_new_signal[1] ? 0 : elapsed_since_signal_ms + nz(bar_time_seconds, 60000)
 cooldown_ok = is_nonstandard ? (elapsed_since_signal_ms >= cooldown_ms) : (bars_since_signal >= cooldown_bars)
 
