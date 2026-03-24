@@ -74,8 +74,7 @@ grp_mgmt = "Dashboard & Management"
 showContextPanel = input.bool(true, "Show Trade Context Panel", group=grp_mgmt, tooltip="Shows a panel with current grade, direction, MTF alignment, ADX, stochastic, and key context for trade decisions.")
 showSizingDash = input.bool(false, "Show Volatility/Sizing Dashboard", group=grp_mgmt, tooltip="Displays ATR, suggested position size based on max pain, stop distances, and TP levels. Essential for risk management.")
 showATRStops = input.bool(false, "Show ATR Stop Reference (A grades)", group=grp_mgmt, tooltip="Plots ATR-based stop-loss reference marks (orange crosses) below/above price for A-grade signals. Distance = ATR × 1.5.")
-showATRTP = input.bool(false, "Show ATR Take Profit (A grades)", group=grp_mgmt, tooltip="Plots ATR-based TP markers for A+, A, and A- grades. Adapts to daily volatility — wider targets on big days, tighter on slow days. B/B+ keep fixed-point TPs.")
-atr_tp_mult = input.float(2.0, "ATR TP Multiplier", group=grp_mgmt, minval=0.5, maxval=5.0, step=0.5, tooltip="TP distance = ATR × this multiplier. 1.5 = conservative, 2.0 = moderate, 2.5 = aggressive.")
+atr_tp_mult = input.float(2.0, "ATR TP Multiplier (TP2)", group=grp_mgmt, minval=0.5, maxval=5.0, step=0.5, tooltip="Runner target distance = ATR × this multiplier. TP2 appears automatically on A+, A, A- grades. B/B+ only get TP1 (fixed). 1.5 = conservative, 2.0 = moderate, 2.5 = aggressive.")
 atr_period = input.int(14, "ATR Period", group=grp_mgmt, tooltip="Lookback for Average True Range. Used for stop distances, TP calculations, and position sizing. Standard: 14.")
 max_pain_dollars = input.float(400.0, "Max Pain ($)", group=grp_mgmt, tooltip="Maximum dollar amount you're willing to lose per trade. The sizing dashboard divides this by stop distance to suggest contract count.")
 max_contracts = input.int(10, "Max Contracts Cap", group=grp_mgmt, minval=1, maxval=50, tooltip="Hard cap on suggested contract count. Set to your broker's max or your comfort level. Prevents unrealistic sizing on micro contracts.")
@@ -430,7 +429,61 @@ plot(show_ema_21 ? ema_21 : na, "21 EMA", color=close > ema_21 ? color.new(color
 plot(show_ema_50 ? ema_50 : na, "50 EMA", color=close > ema_50 ? color.new(color.green, 0) : color.new(color.red, 0), linewidth=2)
 plot(show_ema_233 ? ema_233 : na, "233 EMA", color=close > ema_233 ? color.new(color.green, 0) : color.new(color.red, 0), linewidth=3)
 
-// ATR Stop Reference (A grades only)
+// ==========================================
+// --- TRADE LIFECYCLE: ENTRY, TP1, BREAKEVEN, TP2 ---
+// ==========================================
+// Track entry price and trade state
+var float entry_price = na
+var string entry_grade = "NONE"
+var int entry_dir = 0  // 1=long, -1=short, 0=flat
+var float tp1_price = na
+var float tp2_price = na
+var bool tp1_hit = false
+var float be_price = na  // breakeven level
+
+// Fixed TP distances per grade
+tp_dist = grade == "A+" ? tp_aplus : grade == "A" ? tp_a : grade == "A-" ? tp_aminus : grade == "B+" ? tp_bplus : grade == "B" ? tp_b : 0.0
+
+// New signal → lock entry + levels
+if filtered_new_signal and grade != "NONE"
+    entry_price := close
+    entry_grade := grade
+    entry_dir := direction == "LONG" ? 1 : direction == "SHORT" ? -1 : 0
+    tp1_hit := false
+    be_price := na
+    // TP1 = fixed target
+    tp1_price := entry_dir == 1 ? close + tp_dist : entry_dir == -1 ? close - tp_dist : na
+    // TP2 = ATR target (A grades only, wider than TP1)
+    is_a_entry = grade == "A+" or grade == "A" or grade == "A-"
+    tp2_price := is_a_entry ? (entry_dir == 1 ? close + atr_val * atr_tp_mult : close - atr_val * atr_tp_mult) : na
+
+// Grade gone → reset
+if grade == "NONE" and grade[1] != "NONE"
+    entry_price := na
+    entry_grade := "NONE"
+    entry_dir := 0
+    tp1_price := na
+    tp2_price := na
+    tp1_hit := false
+    be_price := na
+
+// TP1 hit detection
+if not tp1_hit and not na(tp1_price) and entry_dir != 0
+    if entry_dir == 1 and high >= tp1_price
+        tp1_hit := true
+        be_price := entry_price  // Move stop to breakeven
+    if entry_dir == -1 and low <= tp1_price
+        tp1_hit := true
+        be_price := entry_price
+
+// Unrealized P&L
+trade_active = not na(entry_price) and entry_dir != 0
+pnl_points = trade_active ? (entry_dir == 1 ? close - entry_price : entry_price - close) : 0.0
+trade_cts = grade == "A+" ? cts_a_plus : grade == "A" ? cts_a : grade == "A-" ? cts_a_minus : grade == "B+" ? cts_b_plus : grade == "B" ? cts_b : 0
+pnl_dollars = pnl_points * dollar_per_point * trade_cts
+
+// --- PLOTS ---
+// ATR Stop Reference (A grades only) — keeps existing behavior
 is_a_grade_long = is_a_plus_long or is_a_long or is_a_minus_long
 is_a_grade_short = is_a_plus_short or is_a_short or is_a_minus_short
 atr_stop_long = close - atr_val * 1.5
@@ -438,16 +491,19 @@ atr_stop_short = close + atr_val * 1.5
 plot(showATRStops and tradeAllowed and is_a_grade_long ? atr_stop_long : na, "ATR Stop Long", color=color.new(#FF6B00, 20), linewidth=3, style=plot.style_cross)
 plot(showATRStops and tradeAllowed and is_a_grade_short ? atr_stop_short : na, "ATR Stop Short", color=color.new(#FF6B00, 20), linewidth=3, style=plot.style_cross)
 
-// ATR-based TP (A grades only when enabled)
-atr_tp_long = close + atr_val * atr_tp_mult
-atr_tp_short = close - atr_val * atr_tp_mult
+// TP1 — Fixed target (partial exit: take 50% here)
+tp1_show = trade_active and not tp1_hit and tradeAllowed
+plot(tp1_show and entry_dir == 1 ? tp1_price : na, "TP1 Long", color=color.new(#00BFFF, 15), linewidth=2, style=plot.style_line)
+plot(tp1_show and entry_dir == -1 ? tp1_price : na, "TP1 Short", color=color.new(#00BFFF, 15), linewidth=2, style=plot.style_line)
 
-// TP Levels: ATR-based for A grades (when toggled), fixed for B grades always
-tp_level_long = showATRTP and is_a_grade_long ? atr_tp_long : is_a_plus_long ? close + tp_aplus : is_a_long ? close + tp_a : is_a_minus_long ? close + tp_aminus : is_b_plus_long ? close + tp_bplus : is_b_long ? close + tp_b : na
-tp_level_short = showATRTP and is_a_grade_short ? atr_tp_short : is_a_plus_short ? close - tp_aplus : is_a_short ? close - tp_a : is_a_minus_short ? close - tp_aminus : is_b_plus_short ? close - tp_bplus : is_b_short ? close - tp_b : na
-show_any_tp = showSizingDash or showATRTP
-plot(show_any_tp and tradeAllowed and is_long_setup ? tp_level_long : na, "Long TP", color=color.new(#00BFFF, 20), linewidth=2, style=plot.style_cross)
-plot(show_any_tp and tradeAllowed and is_short_setup ? tp_level_short : na, "Short TP", color=color.new(#00BFFF, 20), linewidth=2, style=plot.style_cross)
+// TP2 — ATR target (runner exit: remaining position)
+tp2_show = trade_active and not na(tp2_price) and tradeAllowed
+plot(tp2_show and entry_dir == 1 ? tp2_price : na, "TP2 Runner Long", color=color.new(#7B68EE, 20), linewidth=2, style=plot.style_line)
+plot(tp2_show and entry_dir == -1 ? tp2_price : na, "TP2 Runner Short", color=color.new(#7B68EE, 20), linewidth=2, style=plot.style_line)
+
+// Breakeven stop — appears after TP1 is hit
+be_show = trade_active and tp1_hit and tradeAllowed
+plot(be_show ? be_price : na, "Breakeven Stop", color=color.new(#FFD700, 10), linewidth=2, style=plot.style_stepline)
 
 // Runner Trail
 runner_trail_val = runner_ema_source == "21 HMA" ? hma_21 : runner_ema_source == "21 EMA" ? ema_21 : ema_34
@@ -466,11 +522,30 @@ plotshape(adx_breakout_signal and tradeAllowed, "ADX Breakout", shape.square, lo
 // ==========================================
 // --- TRADE CONTEXT PANEL ---
 // ==========================================
-var table ctx_table = table.new(position.bottom_left, 2, 6, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
+var table ctx_table = table.new(position.bottom_left, 2, 9, border_width=1, frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 80))
 
 if showContextPanel and tradeAllowed and barstate.islast
     table.cell(ctx_table, 0, 0, "TRADE CONTEXT", bgcolor=color.new(#1a1a2e, 60), text_color=color.white, text_size=size.small)
     table.cell(ctx_table, 1, 0, "", bgcolor=color.new(#1a1a2e, 60))
+
+    // Entry + P&L
+    entry_text = trade_active ? str.tostring(entry_price, use_cl_preset ? "0.00" : "0.2") + " " + entry_grade : "—"
+    entry_col = trade_active ? (entry_dir == 1 ? color.new(color.green, 70) : color.new(color.red, 70)) : color.new(color.gray, 90)
+    table.cell(ctx_table, 0, 1, "ENTRY", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 1, entry_text, bgcolor=entry_col, text_color=color.white, text_size=size.small)
+
+    // Unrealized P&L
+    pnl_fmt = use_cl_preset ? "0.02" : "0.1"
+    pnl_text = not trade_active ? "—" : (pnl_points >= 0 ? "+" : "") + str.tostring(pnl_points, pnl_fmt) + "pts  $" + (pnl_dollars >= 0 ? "+" : "") + str.tostring(pnl_dollars, "0")
+    pnl_col = not trade_active ? color.new(color.gray, 90) : pnl_points > 0 ? color.new(color.green, 55) : pnl_points < 0 ? color.new(color.red, 55) : color.new(color.gray, 80)
+    table.cell(ctx_table, 0, 2, "P&L", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 2, pnl_text, bgcolor=pnl_col, text_color=color.white, text_size=size.small)
+
+    // TP Status
+    tp_status_text = not trade_active ? "—" : tp1_hit ? "✓ TP1 HIT → BE stop" : "TP1: " + str.tostring(tp1_price, use_cl_preset ? "0.00" : "0.1")
+    tp_status_col = not trade_active ? color.new(color.gray, 90) : tp1_hit ? color.new(#FFD700, 55) : color.new(#00BFFF, 70)
+    table.cell(ctx_table, 0, 3, "TP STATUS", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 3, tp_status_text, bgcolor=tp_status_col, text_color=color.white, text_size=size.small)
 
     // HA Momentum
     ha_consec = 0
@@ -481,30 +556,30 @@ if showContextPanel and tradeAllowed and barstate.islast
             break
     ha_mom_text = (ha_bull ? "BULL " : "BEAR ") + str.tostring(ha_consec) + " bars"
     ha_mom_col = ha_bull ? color.new(color.green, 65) : color.new(color.red, 65)
-    table.cell(ctx_table, 0, 1, "HA MOMENTUM", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-    table.cell(ctx_table, 1, 1, ha_mom_text, bgcolor=ha_mom_col, text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 0, 4, "HA MOMENTUM", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 4, ha_mom_text, bgcolor=ha_mom_col, text_color=color.white, text_size=size.small)
 
     // Macro Alignment
     macro_aligned = (is_long_setup and hma_macro_long) or (is_short_setup and hma_macro_short)
     macro_against = (is_long_setup and hma_macro_short) or (is_short_setup and hma_macro_long)
     macro_text = grade == "NONE" ? "—" : macro_aligned ? "✓ WITH TREND" : macro_against ? "✗ COUNTER" : "— NEUTRAL"
     macro_col = grade == "NONE" ? color.new(color.gray, 85) : macro_aligned ? color.new(color.green, 65) : macro_against ? color.new(color.red, 55) : color.new(color.gray, 80)
-    table.cell(ctx_table, 0, 2, "MACRO ALIGN", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-    table.cell(ctx_table, 1, 2, macro_text, bgcolor=macro_col, text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 0, 5, "MACRO ALIGN", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 5, macro_text, bgcolor=macro_col, text_color=color.white, text_size=size.small)
 
     // ADR Remaining
     adr_remaining = adr_val > 0 ? math.max(0, adr_val - today_range) : 0
     adr_remain_pct = adr_val > 0 ? 100 - adr_pct_used : 0
     adr_remain_text = not show_adr_dash ? "—" : (use_cl_preset ? "$" + str.tostring(adr_remaining, "0.00") : str.tostring(adr_remaining, "0.1") + " pts") + " (" + str.tostring(adr_remain_pct, "0") + "%)"
     adr_remain_col = not show_adr_dash ? color.new(color.gray, 90) : adr_remain_pct > 50 ? color.new(color.green, 65) : adr_remain_pct > 20 ? color.new(color.yellow, 65) : color.new(color.red, 55)
-    table.cell(ctx_table, 0, 3, "ADR LEFT", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-    table.cell(ctx_table, 1, 3, adr_remain_text, bgcolor=adr_remain_col, text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 0, 6, "ADR LEFT", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 6, adr_remain_text, bgcolor=adr_remain_col, text_color=color.white, text_size=size.small)
 
     // Runner Status
     runner_text = grade == "NONE" ? "—" : not showRunnerTrail ? "OFF" : not runner_adx_ok ? "✗ NO RUN (ADX)" : runner_active ? "✓ TRAILING" : "✓ ELIGIBLE"
     runner_col = grade == "NONE" or not showRunnerTrail ? color.new(color.gray, 90) : not runner_adx_ok ? color.new(color.red, 65) : color.new(color.green, 65)
-    table.cell(ctx_table, 0, 4, "RUNNER", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-    table.cell(ctx_table, 1, 4, runner_text, bgcolor=runner_col, text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 0, 7, "RUNNER", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 7, runner_text, bgcolor=runner_col, text_color=color.white, text_size=size.small)
 
     // MTF RSI compact
     mtf_all_bull = rsi_dir_fast == 1 and rsi_dir_mid == 1 and rsi_dir_slow == 1
@@ -513,8 +588,8 @@ if showContextPanel and tradeAllowed and barstate.islast
     mtf_bear_count = (rsi_dir_fast == -1 ? 1 : 0) + (rsi_dir_mid == -1 ? 1 : 0) + (rsi_dir_slow == -1 ? 1 : 0)
     mtf_text = mtf_all_bull ? "3/3 BULL ▲" : mtf_all_bear ? "3/3 BEAR ▼" : str.tostring(mtf_bull_count) + "▲ " + str.tostring(mtf_bear_count) + "▼ MIXED"
     mtf_col = mtf_all_bull ? color.new(color.green, 60) : mtf_all_bear ? color.new(color.red, 60) : color.new(color.yellow, 65)
-    table.cell(ctx_table, 0, 5, "MTF RSI", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-    table.cell(ctx_table, 1, 5, mtf_text, bgcolor=mtf_col, text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 0, 8, "MTF RSI", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(ctx_table, 1, 8, mtf_text, bgcolor=mtf_col, text_color=color.white, text_size=size.small)
 
 // ==========================================
 // --- VOLATILITY & SIZING DASHBOARD ---
