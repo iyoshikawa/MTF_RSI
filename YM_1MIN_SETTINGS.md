@@ -1,5 +1,5 @@
 # YM/MYM 1-Minute Chart Settings Guide
-### MTF RSI v7.5.0 (Signals) / v7.4.2 (Management)
+### MTF RSI v7.6.0 (Signals) / v7.5.0 (Management)
 
 ---
 
@@ -110,7 +110,7 @@ risk. At $400 max pain, you're looking at 5 contracts max on A+.
 
 ---
 
-## What Changed in v7.4.2 (Management)
+## What Changed in v7.5.0 (Management)
 
 1. **YM SL tightened**: A+/A from 20→15, A- from 20→12, B+ from 15→10, B from 15→8
 2. **YM TP widened for A grades**: A+ from 20→35, A from 20→25, A- from 15→18, B+ from 10→15

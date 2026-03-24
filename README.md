@@ -14,9 +14,9 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 
 | File | Description |
 |------|-------------|
-| `MTF_RSI_Signals_v7.5.3.pine` | Latest Signals — RSI Speed, MTF Speed, Divergence detection |
+| `MTF_RSI_Signals_v7.6.0.pine` | Latest Signals — RSI Speed, MTF Speed, Divergence detection |
 | `MTF_RSI_Signals_v7.12.0_Backtested.pine` | Backtested variant — presets optimized via coordinate descent |
-| `MTF_RSI_Management_v7.4.3.pine` | Trade management — sizing, TP/SL, runners, pyramids |
+| `MTF_RSI_Management_v7.5.0.pine` | Trade management — sizing, TP/SL, runners, pyramids |
 | `MTF_RSI_Core_Library.pine` | Shared calculation functions (prep for Pine v6 migration) |
 | `EMA_HighLowMedian_Ribbon.pine` | Standalone EMA High/Low/Median ribbon overlay |
 | `Session_Range_vs_ATR_Filter.pine` | Standalone session range vs ATR filter |
@@ -42,7 +42,7 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 
 ## TP/SL Reference — 1-Minute Chart
 
-All values in the code as of **v7.5.3 Signals / v7.4.3 Management**.
+All values in the code as of **v7.6.0 Signals / v7.5.0 Management**.
 
 ### At a Glance — All Instruments
 
@@ -282,7 +282,7 @@ When running on a 1-minute chart, the multi-timeframe RSI checks these higher ti
 | Moderate | 5m | 15m | 30m | Medium | Session-based NY trading |
 | Aggressive | 5m | 9m | 15m | Fastest | Strong trending sessions (use anti-chop filters) |
 
-MTF Speed settings available in v7.5.3. Conservative is recommended for most 1-min trading.
+MTF Speed settings available in v7.6.0. Conservative is recommended for most 1-min trading.
 
 ---
 
@@ -295,7 +295,7 @@ MTF Speed settings available in v7.5.3. Conservative is recommended for most 1-m
 | ES/MES | ⚠️ Backtested, defaults kept | Synthetic 1-min, 7 param sets × 8 seeds — tighter SL all failed | v7.4.3 |
 | CL | ❌ Not yet optimized | Original preset values, needs backtesting | — |
 
-**Next up:** CL backtesting, ES ATR-based stop testing, Management indicator sync with v7.5.3 features (RSI Speed, Divergence).
+**Next up:** CL backtesting, ES ATR-based stop testing.
 
 ---
 
@@ -303,6 +303,8 @@ MTF Speed settings available in v7.5.3. Conservative is recommended for most 1-m
 
 | Version | Indicator | Changes |
 |---------|-----------|---------|
+| v7.6.0 | Signals | Volume analysis (expansion/spikes/divergence), TP levels, plot optimization (plotshape→label.new), ribbon volume response |
+| v7.5.0 | Management | Trade lifecycle (TP1/TP2/breakeven/P&L), contract size selector (Micro/Mini), per-grade sizing, TP/SL MODE rows |
 | v7.5.3 | Signals | RSI Speed presets, MTF Speed presets, RSI Divergence detection, YM SL fix, NQ SL fix |
 | v7.12.0 | Signals | Backtested presets via coordinate descent (ES-specific SL, tuned NQ/CL/YM) |
 | v7.4.3 | Management | NQ SL/TP backtested optimization (CONS-TIGHT), NQ TP updated, version bump |
