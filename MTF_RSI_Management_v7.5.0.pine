@@ -387,6 +387,7 @@ if filtered_new_signal and grade_num > 0
 grade_upgraded = grade_num > prev_grade_num and grade_num > 0 and prev_grade_num > 0 and ((direction == "LONG" and pyramid_dir == 1) or (direction == "SHORT" and pyramid_dir == -1))
 
 // Pyramid pullback — uses runner trail EMA, 34 EMA, or runner trail + HMA dual confirm
+runner_trail_val = runner_ema_source == "21 HMA" ? hma_21 : runner_ema_source == "21 EMA" ? ema_21 : ema_34
 pyramid_ema = pyramid_trail_source == "34 EMA" ? ema_34 : runner_trail_val
 pyr_dist_pct = math.abs(close - pyramid_ema) / pyramid_ema * 100
 near_trail = pyr_dist_pct <= ema_pullback_pct
@@ -505,8 +506,7 @@ plot(tp2_show and entry_dir == -1 ? tp2_price : na, "TP2 Runner Short", color=co
 be_show = trade_active and tp1_hit and tradeAllowed
 plot(be_show ? be_price : na, "Breakeven Stop", color=color.new(#FFD700, 10), linewidth=2, style=plot.style_stepline)
 
-// Runner Trail
-runner_trail_val = runner_ema_source == "21 HMA" ? hma_21 : runner_ema_source == "21 EMA" ? ema_21 : ema_34
+// Runner Trail (runner_trail_val declared above in pyramid section)
 runner_active = grade != "NONE" and showRunnerTrail and runner_adx_ok
 plot(runner_active and tradeAllowed and is_long_setup ? runner_trail_val : na, "Runner Trail (Long)", color=color.new(#00E5FF, 20), linewidth=2, style=plot.style_stepline)
 plot(runner_active and tradeAllowed and is_short_setup ? runner_trail_val : na, "Runner Trail (Short)", color=color.new(#00E5FF, 20), linewidth=2, style=plot.style_stepline)

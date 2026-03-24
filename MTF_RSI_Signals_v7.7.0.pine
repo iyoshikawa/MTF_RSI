@@ -690,17 +690,19 @@ persist_count := grade_changed ? 1 : (grade != "NONE" ? persist_count + 1 : 0)
 grade_persisted = persist_count >= persist_bars
 
 var int bars_since_signal = 999
+var bool prev_filtered_signal = false  // stores prior bar's signal state
 raw_new_signal = grade_persisted and grade != "NONE" and (grade_changed or not grade_persisted[1])
 
 // Cooldown: time-based for Renko/Range, bar-based for candles
 cooldown_ms = cooldown_seconds * 1000
-elapsed_since_signal_ms := filtered_new_signal[1] ? 0 : elapsed_since_signal_ms + nz(bar_time_seconds, 60000)
+elapsed_since_signal_ms := prev_filtered_signal ? 0 : elapsed_since_signal_ms + nz(bar_time_seconds, 60000)
 cooldown_ok = is_nonstandard ? (elapsed_since_signal_ms >= cooldown_ms) : (bars_since_signal >= cooldown_bars)
 
 filtered_new_signal = raw_new_signal and cooldown_ok
 bars_since_signal := filtered_new_signal ? 0 : bars_since_signal + 1
 if filtered_new_signal
     elapsed_since_signal_ms := 0
+prev_filtered_signal := filtered_new_signal  // store for next bar
 
 var int signal_duration = 0
 signal_duration := grade == "NONE" ? 0 : (filtered_new_signal ? 1 : signal_duration + 1)
