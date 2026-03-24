@@ -868,19 +868,22 @@ tp_level_short = is_a_plus_short ? close - tp_aplus : is_a_short ? close - tp_a 
 plot(showTPLevels and tradeAllowed and is_long_setup ? tp_level_long : na, "Long TP", color=color.new(tp_long_color, 20), linewidth=tp_line_width, style=plot.style_cross)
 plot(showTPLevels and tradeAllowed and is_short_setup ? tp_level_short : na, "Short TP", color=color.new(tp_short_color, 20), linewidth=tp_line_width, style=plot.style_cross)
 
-// Volume Spike Markers
+// Volume Spike Markers (using label.new — doesn't count toward 64 plot limit)
 vol_spike_confirm_color = color.new(#00FF88, 0)
 vol_spike_exhaust_color = color.new(#FF6B00, 0)
 vol_spike_neutral_color = color.new(#FFFFFF, 30)
-vol_spike_show = show_vol_spikes and vol_is_spike and tradeAllowed
-vol_spike_chart_color = vol_spike_early ? vol_spike_confirm_color : vol_spike_late ? vol_spike_exhaust_color : vol_spike_neutral_color
-plotshape(vol_spike_show and vol_spike_early, "Vol Spike Confirm", shape.diamond, location.belowbar, vol_spike_confirm_color, size=size.tiny, text="V+", textcolor=vol_spike_confirm_color)
-plotshape(vol_spike_show and vol_spike_late, "Vol Spike Exhaust", shape.diamond, location.abovebar, vol_spike_exhaust_color, size=size.tiny, text="V!", textcolor=vol_spike_exhaust_color)
-plotshape(vol_spike_show and not vol_spike_early and not vol_spike_late, "Vol Spike", shape.diamond, location.belowbar, vol_spike_neutral_color, size=size.tiny, text="V", textcolor=vol_spike_neutral_color)
+if show_vol_spikes and vol_is_spike and tradeAllowed and vol_spike_early
+    label.new(bar_index, low, "V+", style=label.style_diamond, color=vol_spike_confirm_color, textcolor=vol_spike_confirm_color, size=size.tiny, yloc=yloc.belowbar)
+if show_vol_spikes and vol_is_spike and tradeAllowed and vol_spike_late
+    label.new(bar_index, high, "V!", style=label.style_diamond, color=vol_spike_exhaust_color, textcolor=vol_spike_exhaust_color, size=size.tiny, yloc=yloc.abovebar)
+if show_vol_spikes and vol_is_spike and tradeAllowed and not vol_spike_early and not vol_spike_late
+    label.new(bar_index, low, "V", style=label.style_diamond, color=vol_spike_neutral_color, textcolor=vol_spike_neutral_color, size=size.tiny, yloc=yloc.belowbar)
 
-// Volume-Price Divergence Markers
-plotshape(vol_div_bearish and tradeAllowed and enable_vol_analysis, "Vol Div Bearish", shape.flag, location.abovebar, color.new(#FF4444, 20), size=size.tiny, text="VD▼", textcolor=color.new(#FF4444, 0))
-plotshape(vol_div_bullish and tradeAllowed and enable_vol_analysis, "Vol Div Bullish", shape.flag, location.belowbar, color.new(#4488FF, 20), size=size.tiny, text="VD▲", textcolor=color.new(#4488FF, 0))
+// Volume-Price Divergence Markers (using label.new)
+if vol_div_bearish and tradeAllowed and enable_vol_analysis
+    label.new(bar_index, high, "VD▼", style=label.style_flag, color=color.new(#FF4444, 20), textcolor=color.new(#FF4444, 0), size=size.tiny, yloc=yloc.abovebar)
+if vol_div_bullish and tradeAllowed and enable_vol_analysis
+    label.new(bar_index, low, "VD▲", style=label.style_flag, color=color.new(#4488FF, 20), textcolor=color.new(#4488FF, 0), size=size.tiny, yloc=yloc.belowbar)
 
 // ==========================================
 // --- MAIN DASHBOARD ---
