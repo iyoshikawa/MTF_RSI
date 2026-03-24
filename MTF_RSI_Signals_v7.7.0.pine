@@ -85,6 +85,12 @@ vol_slow_len = input.int(20, "Slow Vol MA", group=grp_vol_adv, minval=10, maxval
 vol_spike_mult = input.float(2.0, "Spike Threshold (std dev)", group=grp_vol_adv, minval=1.0, maxval=5.0, step=0.5, tooltip="Volume spike = current bar > mean + this × standard deviation. 2.0 = catches major spikes, 1.5 = more sensitive. Default 2.0.")
 vol_spike_lookback = input.int(50, "Spike Lookback", group=grp_vol_adv, minval=20, maxval=200, tooltip="Bars to calculate volume mean and std dev over. 50 = ~50 min on 1-min chart.")
 show_vol_spikes = input.bool(true, "Show Spike Markers on Chart", group=grp_vol_adv, tooltip="Plots markers on bars with volume spikes. Color indicates context: green = confirming trend, orange = potential exhaustion.")
+vol_spike_confirm_col = input.color(#00FF88, "Spike Confirm Color", group=grp_vol_adv, inline="vsc1", tooltip="Color for volume spikes that confirm the current move (early in signal).")
+vol_spike_exhaust_col = input.color(#FF6B00, "Spike Exhaust Color", group=grp_vol_adv, inline="vsc1", tooltip="Color for volume spikes that suggest exhaustion (late in signal).")
+vol_spike_neutral_col = input.color(#FFFFFF, "Spike Neutral Color", group=grp_vol_adv, inline="vsc2", tooltip="Color for volume spikes with no directional context.")
+show_vol_div = input.bool(true, "Show Vol-Price Divergence Markers", group=grp_vol_adv, tooltip="Plots flag markers when price trend and volume trend diverge. Bearish = price rising but volume fading. Bullish = price falling but volume fading.")
+vol_div_bear_col = input.color(#FF4444, "Vol Div Bearish", group=grp_vol_adv, inline="vdc1", tooltip="Color for bearish volume-price divergence markers (price up, volume down).")
+vol_div_bull_col = input.color(#4488FF, "Vol Div Bullish", group=grp_vol_adv, inline="vdc1", tooltip="Color for bullish volume-price divergence markers (price down, volume down).")
 vol_div_lookback = input.int(10, "Divergence Lookback (bars)", group=grp_vol_adv, minval=3, maxval=30, tooltip="Number of bars to compare price trend vs volume trend for divergence detection. Default 10.")
 vol_ribbon_dim = input.bool(true, "Dim Ribbon on Volume Contraction", group=grp_vol_adv, tooltip="Makes the RSI ribbon more transparent when volume is contracting. Visual cue that momentum may lack conviction.")
 
@@ -964,9 +970,9 @@ tp_color = is_long_setup ? color.new(tp_long_color, 20) : color.new(tp_short_col
 plot(tp_level, "TP Level", color=tp_color, linewidth=tp_line_width, style=plot.style_cross)
 
 // Volume Spike Markers (using label.new — doesn't count toward 64 plot limit)
-vol_spike_confirm_color = color.new(#00FF88, 0)
-vol_spike_exhaust_color = color.new(#FF6B00, 0)
-vol_spike_neutral_color = color.new(#FFFFFF, 30)
+vol_spike_confirm_color = color.new(vol_spike_confirm_col, 0)
+vol_spike_exhaust_color = color.new(vol_spike_exhaust_col, 0)
+vol_spike_neutral_color = color.new(vol_spike_neutral_col, 30)
 if show_vol_spikes and vol_is_spike and tradeAllowed and vol_spike_early
     label.new(bar_index, low, "V+", style=label.style_diamond, color=vol_spike_confirm_color, textcolor=vol_spike_confirm_color, size=size.tiny, yloc=yloc.belowbar)
 if show_vol_spikes and vol_is_spike and tradeAllowed and vol_spike_late
@@ -975,10 +981,10 @@ if show_vol_spikes and vol_is_spike and tradeAllowed and not vol_spike_early and
     label.new(bar_index, low, "V", style=label.style_diamond, color=vol_spike_neutral_color, textcolor=vol_spike_neutral_color, size=size.tiny, yloc=yloc.belowbar)
 
 // Volume-Price Divergence Markers (using label.new)
-if vol_div_bearish and tradeAllowed and enable_vol_analysis
-    label.new(bar_index, high, "VD▼", style=label.style_flag, color=color.new(#FF4444, 20), textcolor=color.new(#FF4444, 0), size=size.tiny, yloc=yloc.abovebar)
-if vol_div_bullish and tradeAllowed and enable_vol_analysis
-    label.new(bar_index, low, "VD▲", style=label.style_flag, color=color.new(#4488FF, 20), textcolor=color.new(#4488FF, 0), size=size.tiny, yloc=yloc.belowbar)
+if show_vol_div and vol_div_bearish and tradeAllowed and enable_vol_analysis
+    label.new(bar_index, high, "VD▼", style=label.style_flag, color=color.new(vol_div_bear_col, 20), textcolor=color.new(vol_div_bear_col, 0), size=size.tiny, yloc=yloc.abovebar)
+if show_vol_div and vol_div_bullish and tradeAllowed and enable_vol_analysis
+    label.new(bar_index, low, "VD▲", style=label.style_flag, color=color.new(vol_div_bull_col, 20), textcolor=color.new(vol_div_bull_col, 0), size=size.tiny, yloc=yloc.belowbar)
 
 // ==========================================
 // --- MAIN DASHBOARD ---
