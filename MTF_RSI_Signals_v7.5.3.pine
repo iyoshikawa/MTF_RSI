@@ -791,16 +791,9 @@ bg_transparency = math.max(0, math.min(95, bg_transparency_base + vol_ribbon_adj
 bg_color = not ribbonVisible ? na : is_consolidating ? color.new(ribbon_consol_color, 90) : diff_curr > rsi_thresh ? color.new(ribbon_bull_color, bg_transparency) : diff_curr < -rsi_thresh ? color.new(ribbon_bear_color, bg_transparency) : color.new(color.gray, 90)
 bgcolor(bg_color, title="RSI Momentum Ribbon")
 
-// Algo Window Background
-algo_bg_active = show_algo_bg and algo_mode != "OFF" and in_any_algo
-algo_bg_color = algo_mode == "TRADE WITH" ? color.new(#00E5FF, 92) : algo_mode == "AVOID" ? color.new(#FF6B00, 92) : na
-bgcolor(algo_bg_active ? algo_bg_color : na, title="Algo Window Highlight")
+// Algo Window Background (info on dashboard only — removed bgcolor to save plot output)
 
-// Consolidation Regime Background
-consol_bg_color = show_consol_bg and enable_consol_regime ? (is_tight_consol ? color.new(#4488FF, 92) : is_mild_consol ? color.new(#FFD700, 93) : is_expansion_day ? color.new(#FF4444, 93) : na) : na
-// Consolidation Regime + Compression Background (combined to save plot output)
-consol_combined_bg = show_consol_bg and consol_compression_alert ? color.new(#FF9F43, 88) : consol_bg_color
-bgcolor(consol_combined_bg, title="Consolidation Regime BG")
+// Consolidation Regime (info on dashboard only — removed bgcolor to save plot output)
 
 // DStoch Crossover Markers
 // DStoch Crossover Markers (using label.new — saves plot outputs)
@@ -828,17 +821,29 @@ candle_color = not colorCandles or not tradeAllowed ? na : is_a_plus_long ? sig_
 plotcandle(useHAOutline ? open : na, useHAOutline ? high : na, useHAOutline ? low : na, useHAOutline ? close : na, title="Grade + HA Candles", color=colorCandles ? candle_color : (ha_bull ? color.new(ha_bull_color_in, 0) : color.new(ha_bear_color_in, 0)), wickcolor=ha_color, bordercolor=ha_color)
 barcolor(not useHAOutline ? candle_color : na)
 
-// Signal Shapes
-plotshape(sig_a_plus_long, "A+ Long", shape.labelup, location.belowbar, sig_long_color_aplus, size=size.large, text="A+", textcolor=sig_long_text_color)
-plotshape(sig_a_plus_short, "A+ Short", shape.labeldown, location.abovebar, sig_short_color_aplus, size=size.large, text="A+", textcolor=sig_short_text_color)
-plotshape(sig_a_long, "A Long", shape.labelup, location.belowbar, sig_long_color_a, size=size.normal, text="A", textcolor=sig_long_text_color)
-plotshape(sig_a_short, "A Short", shape.labeldown, location.abovebar, sig_short_color_a, size=size.normal, text="A", textcolor=sig_short_text_color)
-plotshape(sig_a_minus_long, "A- Long", shape.labelup, location.belowbar, sig_long_color_aminus, size=size.small, text="A-", textcolor=sig_long_text_color)
-plotshape(sig_a_minus_short, "A- Short", shape.labeldown, location.abovebar, sig_short_color_aminus, size=size.small, text="A-", textcolor=sig_short_text_color)
-plotshape(sig_b_plus_long, "B+ Long Scalp", shape.labelup, location.belowbar, sig_long_color_bplus, size=size.small, text="B+", textcolor=sig_long_text_color)
-plotshape(sig_b_plus_short, "B+ Short Scalp", shape.labeldown, location.abovebar, sig_short_color_bplus, size=size.small, text="B+", textcolor=sig_short_text_color)
-plotshape(sig_b_long, "B Long Scalp", shape.labelup, location.belowbar, sig_long_color_b, size=size.tiny, text="B", textcolor=sig_long_text_color)
-plotshape(sig_b_short, "B Short Scalp", shape.labeldown, location.abovebar, sig_short_color_b, size=size.tiny, text="B", textcolor=sig_short_text_color)
+// Signal Labels (using label.new — doesn't count toward 64 plot limit)
+// Grade sizes: A+=large, A=normal, A-=small, B+=small, B=tiny
+// Mapped to label sizes: A+=size.large, A=size.normal, A-=size.small, B+=size.small, B=size.tiny
+if sig_a_plus_long
+    label.new(bar_index, low, "A+", style=label.style_label_up, color=sig_long_color_aplus, textcolor=sig_long_text_color, size=size.large, yloc=yloc.belowbar)
+if sig_a_plus_short
+    label.new(bar_index, high, "A+", style=label.style_label_down, color=sig_short_color_aplus, textcolor=sig_short_text_color, size=size.large, yloc=yloc.abovebar)
+if sig_a_long
+    label.new(bar_index, low, "A", style=label.style_label_up, color=sig_long_color_a, textcolor=sig_long_text_color, size=size.normal, yloc=yloc.belowbar)
+if sig_a_short
+    label.new(bar_index, high, "A", style=label.style_label_down, color=sig_short_color_a, textcolor=sig_short_text_color, size=size.normal, yloc=yloc.abovebar)
+if sig_a_minus_long
+    label.new(bar_index, low, "A-", style=label.style_label_up, color=sig_long_color_aminus, textcolor=sig_long_text_color, size=size.small, yloc=yloc.belowbar)
+if sig_a_minus_short
+    label.new(bar_index, high, "A-", style=label.style_label_down, color=sig_short_color_aminus, textcolor=sig_short_text_color, size=size.small, yloc=yloc.abovebar)
+if sig_b_plus_long
+    label.new(bar_index, low, "B+", style=label.style_label_up, color=sig_long_color_bplus, textcolor=sig_long_text_color, size=size.small, yloc=yloc.belowbar)
+if sig_b_plus_short
+    label.new(bar_index, high, "B+", style=label.style_label_down, color=sig_short_color_bplus, textcolor=sig_short_text_color, size=size.small, yloc=yloc.abovebar)
+if sig_b_long
+    label.new(bar_index, low, "B", style=label.style_label_up, color=sig_long_color_b, textcolor=sig_long_text_color, size=size.tiny, yloc=yloc.belowbar)
+if sig_b_short
+    label.new(bar_index, high, "B", style=label.style_label_down, color=sig_short_color_b, textcolor=sig_short_text_color, size=size.tiny, yloc=yloc.abovebar)
 
 // HA Exit Warning
 // HA Exit Warning (using label.new — saves plot outputs)
@@ -856,17 +861,19 @@ if div_bear_cond
 if div_bull_cond
     label.new(bar_index, low, "DIV▲", style=label.style_triangleup, color=div_bull_color, textcolor=div_bull_color, size=div_msize, yloc=yloc.belowbar)
 
-// Stop Loss Levels
+// Stop Loss Levels (merged long/short into single plot)
 stop_level_long = is_a_plus_long ? close - sl_aplus : is_a_long ? close - sl_a : is_a_minus_long ? close - sl_aminus : is_b_plus_long ? close - sl_bplus : is_b_long ? close - sl_b : na
 stop_level_short = is_a_plus_short ? close + sl_aplus : is_a_short ? close + sl_a : is_a_minus_short ? close + sl_aminus : is_b_plus_short ? close + sl_bplus : is_b_short ? close + sl_b : na
-plot(showStopLevels and tradeAllowed and is_long_setup ? stop_level_long : na, "Long Stop", color=color.new(stop_long_color, 30), linewidth=stop_line_width, style=plot.style_cross)
-plot(showStopLevels and tradeAllowed and is_short_setup ? stop_level_short : na, "Short Stop", color=color.new(stop_short_color, 30), linewidth=stop_line_width, style=plot.style_cross)
+stop_level = showStopLevels and tradeAllowed ? (is_long_setup ? stop_level_long : is_short_setup ? stop_level_short : na) : na
+stop_color = is_long_setup ? color.new(stop_long_color, 30) : color.new(stop_short_color, 30)
+plot(stop_level, "Stop Level", color=stop_color, linewidth=stop_line_width, style=plot.style_cross)
 
-// Take Profit Levels
+// Take Profit Levels (merged long/short into single plot)
 tp_level_long = is_a_plus_long ? close + tp_aplus : is_a_long ? close + tp_a : is_a_minus_long ? close + tp_aminus : is_b_plus_long ? close + tp_bplus : is_b_long ? close + tp_b : na
 tp_level_short = is_a_plus_short ? close - tp_aplus : is_a_short ? close - tp_a : is_a_minus_short ? close - tp_aminus : is_b_plus_short ? close - tp_bplus : is_b_short ? close - tp_b : na
-plot(showTPLevels and tradeAllowed and is_long_setup ? tp_level_long : na, "Long TP", color=color.new(tp_long_color, 20), linewidth=tp_line_width, style=plot.style_cross)
-plot(showTPLevels and tradeAllowed and is_short_setup ? tp_level_short : na, "Short TP", color=color.new(tp_short_color, 20), linewidth=tp_line_width, style=plot.style_cross)
+tp_level = showTPLevels and tradeAllowed ? (is_long_setup ? tp_level_long : is_short_setup ? tp_level_short : na) : na
+tp_color = is_long_setup ? color.new(tp_long_color, 20) : color.new(tp_short_color, 20)
+plot(tp_level, "TP Level", color=tp_color, linewidth=tp_line_width, style=plot.style_cross)
 
 // Volume Spike Markers (using label.new — doesn't count toward 64 plot limit)
 vol_spike_confirm_color = color.new(#00FF88, 0)
