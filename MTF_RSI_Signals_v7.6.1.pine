@@ -1,5 +1,5 @@
 //@version=5
-indicator("MTF RSI Signals [v7.6.0]", overlay=true, max_labels_count=500)
+indicator("MTF RSI Signals [v7.6.1]", overlay=true, max_labels_count=500)
 
 // Clean ticker for request.security (avoids session/extended hours issues)
 cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
@@ -719,6 +719,59 @@ vol_div_bearish = enable_vol_analysis and price_rising and vol_declining and is_
 vol_div_bullish = enable_vol_analysis and price_falling and vol_declining and is_short_setup
 vol_div_active = vol_div_bearish or vol_div_bullish
 
+// ==========================================
+// --- ENTRY TRACKING & TP/SL HIT DETECTION ---
+// ==========================================
+// Lock entry price and levels on new signal for alert purposes
+var float sig_entry_price = na
+var int sig_entry_dir = 0  // 1=long, -1=short
+var float sig_sl_level = na
+var float sig_tp_level = na
+var bool sig_tp_hit = false
+var bool sig_sl_hit = false
+
+// Calculate current grade's SL/TP distance
+current_sl_dist = grade == "A+" ? sl_aplus : grade == "A" ? sl_a : grade == "A-" ? sl_aminus : grade == "B+" ? sl_bplus : grade == "B" ? sl_b : 0.0
+current_tp_dist = grade == "A+" ? tp_aplus : grade == "A" ? tp_a : grade == "A-" ? tp_aminus : grade == "B+" ? tp_bplus : grade == "B" ? tp_b : 0.0
+
+// New signal → lock entry + levels
+if filtered_new_signal and grade != "NONE"
+    sig_entry_price := close
+    sig_entry_dir := direction == "LONG" ? 1 : -1
+    sig_tp_hit := false
+    sig_sl_hit := false
+    sig_sl_level := direction == "LONG" ? close - current_sl_dist : close + current_sl_dist
+    sig_tp_level := direction == "LONG" ? close + current_tp_dist : close - current_tp_dist
+
+// Grade gone → reset
+if grade == "NONE" and grade[1] != "NONE"
+    sig_entry_price := na
+    sig_entry_dir := 0
+    sig_sl_level := na
+    sig_tp_level := na
+    sig_tp_hit := false
+    sig_sl_hit := false
+
+// TP hit detection (fire once per trade)
+sig_tp_just_hit = false
+if not sig_tp_hit and not na(sig_tp_level) and sig_entry_dir != 0
+    if sig_entry_dir == 1 and high >= sig_tp_level
+        sig_tp_hit := true
+        sig_tp_just_hit := true
+    if sig_entry_dir == -1 and low <= sig_tp_level
+        sig_tp_hit := true
+        sig_tp_just_hit := true
+
+// SL hit detection (fire once per trade)
+sig_sl_just_hit = false
+if not sig_sl_hit and not na(sig_sl_level) and sig_entry_dir != 0
+    if sig_entry_dir == 1 and low <= sig_sl_level
+        sig_sl_hit := true
+        sig_sl_just_hit := true
+    if sig_entry_dir == -1 and high >= sig_sl_level
+        sig_sl_hit := true
+        sig_sl_just_hit := true
+
 
 
 // ==========================================
@@ -1007,14 +1060,27 @@ if showDash and barstate.islast
         table.cell(dash_table, 1, 16, div_text + div_warn, bgcolor=div_col, text_color=color.white, text_size=size.small)
 
 // ==========================================
-// --- ALERTS (consolidated to save plot outputs) ---
+// --- ALERTS (split long/short + TP/SL) ---
 // ==========================================
-alertcondition(sig_a_plus_long or sig_a_plus_short, title="🔥 A+ SETUP", message="A+ SETUP: All systems aligned! Check dashboard for direction.")
-alertcondition(sig_a_long or sig_a_short, title="⚡ A SETUP", message="A SETUP: Strong confluence! Check dashboard for direction.")
-alertcondition(sig_a_minus_long or sig_a_minus_short, title="✓ A- SETUP", message="A- SETUP: Good setup. Check dashboard for direction.")
-alertcondition(sig_b_plus_long or sig_b_plus_short, title="💨 B+ SCALP", message="B+ SCALP: Trend scalp! Check dashboard for direction.")
-alertcondition(sig_b_long or sig_b_short, title="⚡ B SCALP", message="B SCALP: Quick scalp! Check dashboard for direction.")
+// Grade signals — separate LONG and SHORT
+alertcondition(sig_a_plus_long, title="🔥 A+ LONG", message="A+ LONG: All systems aligned — full size runner!")
+alertcondition(sig_a_plus_short, title="🔥 A+ SHORT", message="A+ SHORT: All systems aligned — full size runner!")
+alertcondition(sig_a_long, title="⚡ A LONG", message="A LONG: Strong confluence — runner candidate!")
+alertcondition(sig_a_short, title="⚡ A SHORT", message="A SHORT: Strong confluence — runner candidate!")
+alertcondition(sig_a_minus_long, title="✓ A- LONG", message="A- LONG: Good setup — standard exit at TP")
+alertcondition(sig_a_minus_short, title="✓ A- SHORT", message="A- SHORT: Good setup — standard exit at TP")
+alertcondition(sig_b_plus_long, title="💨 B+ LONG SCALP", message="B+ LONG: Trend scalp — in and out!")
+alertcondition(sig_b_plus_short, title="💨 B+ SHORT SCALP", message="B+ SHORT: Trend scalp — in and out!")
+alertcondition(sig_b_long, title="⚡ B LONG SCALP", message="B LONG: Quick scalp — tight leash!")
+alertcondition(sig_b_short, title="⚡ B SHORT SCALP", message="B SHORT: Quick scalp — tight leash!")
+
+// TP and SL hit alerts
+alertcondition(sig_tp_just_hit, title="🎯 TP HIT", message="TP HIT: Take profit level reached — take partials or exit!")
+alertcondition(sig_sl_just_hit, title="🛑 SL HIT", message="SL HIT: Stop loss level reached — exit position!")
+
+// Warning alerts
 alertcondition(ha_exit_signal and tradeAllowed, title="⚠ HA MOMENTUM FLIP", message="HA flipped against your position!")
 isNewDay_consol = ta.change(time("D")) != 0
 alertcondition((is_tight_consol and not is_tight_consol[1]) or (is_expansion_day and not is_expansion_day[1]) or (isNewDay_consol and consol_compression_alert), title="📊 REGIME CHANGE", message="Consolidation regime changed — check dashboard for tight/expansion/compression status.")
 alertcondition(enable_divergence and ((raw_bear_div and not raw_bear_div[1]) or (raw_bull_div and not raw_bull_div[1]) or (div_against_position and not div_against_position[1])), title="🔀 RSI DIVERGENCE", message="RSI divergence detected — check dashboard for bear/bull status and counter-position warning.")
+alertcondition(vol_is_spike and tradeAllowed, title="📊 VOLUME SPIKE", message="Volume spike detected — check dashboard for confirm/exhaust context.")
