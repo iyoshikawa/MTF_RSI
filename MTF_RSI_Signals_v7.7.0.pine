@@ -1,8 +1,26 @@
 //@version=5
-indicator("MTF RSI Signals [v7.6.1]", overlay=true, max_labels_count=500)
+indicator("MTF RSI Signals [v7.7.0]", overlay=true, max_labels_count=500)
 
 // Clean ticker for request.security (avoids session/extended hours issues)
 cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
+
+// ==========================================
+// --- CHART TYPE DETECTION ---
+// ==========================================
+is_renko = chart.is_renko
+is_range_chart = chart.is_range
+is_standard = chart.is_standard
+is_ha_chart = chart.is_heikinashi
+is_nonstandard = is_renko or is_range_chart or chart.is_linebreak or chart.is_kagi or chart.is_pnf
+chart_type_label = is_renko ? "RENKO" : is_range_chart ? "RANGE" : is_ha_chart ? "HA CHART" : chart.is_linebreak ? "LINEBRK" : chart.is_kagi ? "KAGI" : chart.is_pnf ? "P&F" : "CANDLE"
+
+// Renko brick size (high - low = 1 brick on Renko)
+brick_size = is_renko ? (high - low) : 0.0
+
+// Time-based cooldown for non-standard charts (bricks/bars are irregular)
+// timeframe.in_seconds() returns 0 for Renko/Range, so we track elapsed time directly
+bar_time_seconds = time - time[1]  // actual time between this bar and last
+var int elapsed_since_signal_ms = 999999999
 
 // ==========================================
 // --- ⚡ QUICK INSTRUMENT PRESETS ---
@@ -160,8 +178,9 @@ tp_line_width = input.int(2, "TP Width", group=grp_lines, tooltip="Thickness of 
 
 // Anti-Chop Filters
 grp_chop = "🔇 Anti-Chop Filters"
-cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30, tooltip="After a signal fires, suppress new signals for this many bars. Prevents rapid-fire signals in choppy conditions. 5 = default, increase if seeing too many signals.")
+cooldown_bars = input.int(5, "Signal Cooldown (bars)", group=grp_chop, minval=1, maxval=30, tooltip="After a signal fires, suppress new signals for this many bars. Prevents rapid-fire signals in choppy conditions. 5 = default, increase if seeing too many signals. On Renko/Range charts, the time-based cooldown below is used instead.")
 persist_bars = input.int(2, "Grade Persistence (bars)", group=grp_chop, minval=1, maxval=5, tooltip="Once a grade appears, hold it for at least this many bars even if conditions briefly lapse. Prevents grade flickering. 1 = no persistence, 3+ = very sticky.")
+cooldown_minutes = input.int(5, "Renko/Range Cooldown (minutes)", group=grp_chop, minval=1, maxval=30, tooltip="Time-based cooldown for Renko, Range, and other non-time-based chart types. Since bars form irregularly, this uses elapsed wall-clock time instead of bar count. Only applies on non-standard charts — candle charts use bar-based cooldown above.")
 adx_floor_bb = input.float(15.0, "ADX Floor for B/B+", group=grp_chop, minval=0, tooltip="Minimum ADX required for B and B+ grades to fire. Filters out scalp signals in dead/ranging markets. 0 = disabled.")
 suppress_low_vol_bb = input.bool(false, "Suppress B/B+ During LOW Volatility", group=grp_chop, tooltip="Blocks B/B+ signals when volume is below average. Prevents weak scalp signals in thin markets. Auto-enabled for CL preset.")
 macro_trend_filter = input.bool(true, "Block Counter-Trend on B/B+/A-", group=grp_chop, tooltip="Prevents B, B+, and A- grades from firing against the slow timeframe (233 EMA) trend. Only allows these weaker grades in the macro direction.")
@@ -672,25 +691,39 @@ grade_persisted = persist_count >= persist_bars
 
 var int bars_since_signal = 999
 raw_new_signal = grade_persisted and grade != "NONE" and (grade_changed or not grade_persisted[1])
-cooldown_ok = bars_since_signal >= cooldown_bars
+
+// Cooldown: time-based for Renko/Range, bar-based for candles
+cooldown_ms = cooldown_minutes * 60 * 1000
+elapsed_since_signal_ms := filtered_new_signal[1] ? 0 : elapsed_since_signal_ms + nz(bar_time_seconds, 60000)
+cooldown_ok = is_nonstandard ? (elapsed_since_signal_ms >= cooldown_ms) : (bars_since_signal >= cooldown_bars)
+
 filtered_new_signal = raw_new_signal and cooldown_ok
 bars_since_signal := filtered_new_signal ? 0 : bars_since_signal + 1
+if filtered_new_signal
+    elapsed_since_signal_ms := 0
 
 var int signal_duration = 0
 signal_duration := grade == "NONE" ? 0 : (filtered_new_signal ? 1 : signal_duration + 1)
 
-// Reminder repeat: re-show grade label every N bars while grade is active
-reminder_bars = math.max(1, math.round(10 / (timeframe.in_seconds() / 60)))  // ~10 min between reminders
+// Reminder repeat: ~10 min between reminders (time-aware for Renko)
+tf_seconds = timeframe.in_seconds()
+bars_per_minute = tf_seconds > 0 ? 60.0 / tf_seconds : 1.0  // fallback 1 bar/min for Renko
+reminder_bars = math.max(1, math.round(10 * bars_per_minute))
 is_reminder = grade != "NONE" and signal_duration > 1 and signal_duration % reminder_bars == 0
 show_signal = (filtered_new_signal or is_reminder) and tradeAllowed
+
+// Signal duration in minutes (handles Renko where timeframe.in_seconds() = 0)
+var int signal_start_time = 0
+if filtered_new_signal
+    signal_start_time := time
+signal_dur_minutes = is_nonstandard ? math.max(0, (time - signal_start_time) / 60000.0) : signal_duration * (tf_seconds / 60.0)
 
 // Reset age counter when reminder confirms same grade is still active
 // Dashboard now shows "time since last confirmation" instead of total signal age
 if is_reminder
     signal_duration := 1
 
-signal_dur_minutes = signal_duration * (timeframe.in_seconds() / 60)
-signal_dur_text = signal_dur_minutes >= 60 ? str.tostring(math.floor(signal_dur_minutes / 60)) + "h " + str.tostring(signal_dur_minutes % 60) + "m" : str.tostring(signal_dur_minutes, "0") + "m"
+signal_dur_text = signal_dur_minutes >= 60 ? str.tostring(math.floor(signal_dur_minutes / 60)) + "h " + str.tostring(math.round(signal_dur_minutes % 60)) + "m" : str.tostring(signal_dur_minutes, "0") + "m"
 
 // Filtered signal flags (fire on initial signal + repeat reminders)
 sig_a_plus_long  = is_a_plus_long and show_signal and direction == "LONG"
@@ -959,9 +992,12 @@ var table dash_table = table.new(t_pos, 2, 17, border_width=1, frame_color=color
 
 if showDash and barstate.islast
     // Preset
+    // Preset + Chart Type
     preset_bg = use_cl_preset ? color.new(#FF6B00, 70) : use_nq_preset ? color.new(#818cf8, 70) : use_es_preset ? color.new(#f59e0b, 70) : color.new(color.gray, 85)
+    chart_info = is_renko ? chart_type_label + " " + str.tostring(brick_size, use_cl_preset ? "0.02" : "0") + (use_cl_preset ? "" : "pt") : chart_type_label
+    renko_warn = is_nonstandard ? " ⚡" : ""
     table.cell(dash_table, 0, 0, "PRESET", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
-    table.cell(dash_table, 1, 0, preset_label, bgcolor=preset_bg, text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 1, 0, preset_label + " | " + chart_info + renko_warn, bgcolor=preset_bg, text_color=color.white, text_size=size.small)
 
     // Grade
     grade_display = late_trend_flag ? grade + " ⚠ LATE" : grade
@@ -973,7 +1009,8 @@ if showDash and barstate.islast
     table.cell(dash_table, 1, 2, direction, bgcolor=dir_color, text_color=color.white, text_size=size.normal)
 
     // Signal Age
-    dur_text = grade != "NONE" ? signal_dur_text + " (" + str.tostring(signal_duration) + " bars)" : "—"
+    bar_unit = is_renko ? " bricks" : " bars"
+    dur_text = grade != "NONE" ? signal_dur_text + " (" + str.tostring(signal_duration) + bar_unit + ")" : "—"
     dur_col = signal_duration <= 3 ? color.new(color.green, 65) : signal_duration <= 10 ? color.new(color.yellow, 65) : color.new(color.orange, 65)
     table.cell(dash_table, 0, 3, "SIGNAL AGE", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(dash_table, 1, 3, dur_text, bgcolor=grade != "NONE" ? dur_col : color.new(color.gray, 85), text_color=color.white, text_size=size.small)
@@ -996,10 +1033,11 @@ if showDash and barstate.islast
     table.cell(dash_table, 0, 6, "VOL DIVG", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(dash_table, 1, 6, vol_div_text, bgcolor=vol_div_col, text_color=color.white, text_size=size.small)
 
-    // Session
-    session_status = use_cl_preset and inSession_cl ? "✓ CL PIT" : tradeAllowed ? "✓ " + active_win_label : "✗ OUTSIDE"
+    // Session (approximate on Renko — brick timestamps may span session boundaries)
+    session_prefix = is_nonstandard ? "~" : ""
+    session_status = use_cl_preset and inSession_cl ? "✓ CL PIT" : tradeAllowed ? "✓ " + session_prefix + active_win_label : "✗ OUTSIDE"
     session_col = tradeAllowed ? color.new(color.green, 65) : color.new(color.orange, 65)
-    table.cell(dash_table, 0, 7, "SESSION", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(dash_table, 0, 7, is_nonstandard ? "SESSION ~" : "SESSION", bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
     table.cell(dash_table, 1, 7, session_status, bgcolor=session_col, text_color=color.white, text_size=size.small)
 
     // Algo
