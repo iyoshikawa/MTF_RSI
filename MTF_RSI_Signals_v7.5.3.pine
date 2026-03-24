@@ -102,7 +102,8 @@ colorCandles = input.bool(true, "Color Candles by Grade", group=grp_dash, toolti
 useHAOutline = input.bool(true, "Heikin Ashi Outline Color", group=grp_dash, tooltip="Body = grade color, border/wicks = HA direction. Hide default candles.")
 ha_bull_color_in = input.color(#26A69A, "HA Bullish Outline", group=grp_dash, inline="ha1", tooltip="Wick/border color when Heikin Ashi candle direction is bullish.")
 ha_bear_color_in = input.color(#EF5350, "HA Bearish Outline", group=grp_dash, inline="ha1", tooltip="Wick/border color when Heikin Ashi candle direction is bearish.")
-showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash, tooltip="Plots horizontal stop-loss reference levels based on ATR distance from entry price for the current grade.")
+showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash, tooltip="Plots horizontal stop-loss reference levels based on fixed distance from entry price for the current grade.")
+showTPLevels = input.bool(true, "Show Suggested Take Profit Levels", group=grp_dash, tooltip="Plots horizontal take-profit reference levels. Fixed-point targets per grade — use ATR TP in Management indicator for adaptive targets.")
 ha_exit_warn = input.bool(true, "HA Momentum Exit Warning", group=grp_dash, tooltip="Shows an HA X marker when Heikin Ashi candles flip direction against your trade for N consecutive bars. Early exit warning.")
 ha_exit_bars = input.int(2, "HA Bars to Confirm Flip", group=grp_dash, minval=1, maxval=5, tooltip="Number of consecutive HA candles in the opposite direction before the exit warning triggers. 1 = very sensitive, 3+ = more patient.")
 ha_exit_color = input.color(#FF6B00, "HA Exit Marker Color", group=grp_dash, inline="hae1", tooltip="Color of the HA exit warning marker and its text on the chart.")
@@ -142,6 +143,9 @@ prev_ny_vwap_width = input.int(1, "Prev VWAP Width", group=grp_lines, inline="vw
 stop_long_color = input.color(color.red, "Stop Long", group=grp_lines, inline="sl1", tooltip="Color of the suggested stop-loss level for long positions.")
 stop_short_color = input.color(color.green, "Stop Short", group=grp_lines, inline="sl1", tooltip="Color of the suggested stop-loss level for short positions.")
 stop_line_width = input.int(2, "Stop Width", group=grp_lines, tooltip="Thickness of the stop-loss level crosses.\n\nSuggested range: 1-3.")
+tp_long_color = input.color(#00BFFF, "TP Long", group=grp_lines, inline="tp1", tooltip="Color of the suggested take-profit level for long positions.")
+tp_short_color = input.color(#00BFFF, "TP Short", group=grp_lines, inline="tp1", tooltip="Color of the suggested take-profit level for short positions.")
+tp_line_width = input.int(2, "TP Width", group=grp_lines, tooltip="Thickness of the take-profit level crosses.\n\nSuggested range: 1-3.")
 
 // Anti-Chop Filters
 grp_chop = "🔇 Anti-Chop Filters"
@@ -609,6 +613,13 @@ sl_aminus = use_cl_preset ? 0.30 : use_nq_preset ? 10.0 : use_ym_preset ? 12.0 :
 sl_bplus  = use_cl_preset ? 0.30 : use_nq_preset ? 10.0 : use_ym_preset ? 10.0 : 15.0
 sl_b      = use_cl_preset ? 0.30 : use_nq_preset ? 8.0 : use_ym_preset ? 8.0 : 15.0
 
+// TP values (NQ: backtested CONS-TIGHT | YM: wider targets for runners)
+tp_aplus = use_cl_preset ? 0.20 : use_nq_preset ? 25.0 : use_ym_preset ? 35.0 : 6.0
+tp_a     = use_cl_preset ? 0.20 : use_nq_preset ? 20.0 : use_ym_preset ? 25.0 : 6.0
+tp_aminus = use_cl_preset ? 0.15 : use_nq_preset ? 15.0 : use_ym_preset ? 18.0 : 4.0
+tp_bplus  = use_cl_preset ? 0.10 : use_nq_preset ? 15.0 : use_ym_preset ? 15.0 : 3.0
+tp_b      = use_cl_preset ? 0.08 : use_nq_preset ? 12.0 : use_ym_preset ? 10.0 : 2.0
+
 // ==========================================
 // --- TIME & SESSION FILTER ---
 // ==========================================
@@ -797,6 +808,12 @@ stop_level_long = is_a_plus_long ? close - sl_aplus : is_a_long ? close - sl_a :
 stop_level_short = is_a_plus_short ? close + sl_aplus : is_a_short ? close + sl_a : is_a_minus_short ? close + sl_aminus : is_b_plus_short ? close + sl_bplus : is_b_short ? close + sl_b : na
 plot(showStopLevels and tradeAllowed and is_long_setup ? stop_level_long : na, "Long Stop", color=color.new(stop_long_color, 30), linewidth=stop_line_width, style=plot.style_cross)
 plot(showStopLevels and tradeAllowed and is_short_setup ? stop_level_short : na, "Short Stop", color=color.new(stop_short_color, 30), linewidth=stop_line_width, style=plot.style_cross)
+
+// Take Profit Levels
+tp_level_long = is_a_plus_long ? close + tp_aplus : is_a_long ? close + tp_a : is_a_minus_long ? close + tp_aminus : is_b_plus_long ? close + tp_bplus : is_b_long ? close + tp_b : na
+tp_level_short = is_a_plus_short ? close - tp_aplus : is_a_short ? close - tp_a : is_a_minus_short ? close - tp_aminus : is_b_plus_short ? close - tp_bplus : is_b_short ? close - tp_b : na
+plot(showTPLevels and tradeAllowed and is_long_setup ? tp_level_long : na, "Long TP", color=color.new(tp_long_color, 20), linewidth=tp_line_width, style=plot.style_cross)
+plot(showTPLevels and tradeAllowed and is_short_setup ? tp_level_short : na, "Short TP", color=color.new(tp_short_color, 20), linewidth=tp_line_width, style=plot.style_cross)
 
 // ==========================================
 // --- MAIN DASHBOARD ---
