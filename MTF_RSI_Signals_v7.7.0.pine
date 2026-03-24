@@ -691,8 +691,19 @@ tradeAllowed = inSession and algo_filter and adr_ok and consol_all_ok
 // --- PERSISTENCE & COOLDOWN ---
 // ==========================================
 var int persist_count = 0
+
+// Grade numeric ranking for upgrade detection
+grade_num_persist = grade == "A+" ? 5 : grade == "A" ? 4 : grade == "A-" ? 3 : grade == "B+" ? 2 : grade == "B" ? 1 : 0
+prev_grade_num_persist = nz(grade_num_persist[1], 0)
+
+// Detect upgrade vs downgrade vs direction flip
+direction_flipped = direction != direction[1] and direction != "NEUTRAL" and direction[1] != "NEUTRAL"
+is_upgrade = grade_num_persist > prev_grade_num_persist and not direction_flipped and grade != "NONE" and grade[1] != "NONE"
 grade_changed = grade != grade[1] or direction != direction[1]
-persist_count := grade_changed ? 1 : (grade != "NONE" ? persist_count + 1 : 0)
+
+// Upgrades skip persistence — conditions got STRONGER, that's confirmation
+// Downgrades and direction flips reset persistence — need to re-confirm
+persist_count := is_upgrade ? persist_bars : (grade_changed ? 1 : (grade != "NONE" ? persist_count + 1 : 0))
 grade_persisted = persist_count >= persist_bars
 
 var int bars_since_signal = 999
