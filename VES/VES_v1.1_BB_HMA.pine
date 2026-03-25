@@ -1,0 +1,582 @@
+// ============================================================================
+// Volume Exhaustion Strategy [VES v1.0] — Phase 1
+// Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
+// Optimized for Renko charts, works on any chart type
+// ============================================================================
+//@version=5
+strategy("Volume Exhaustion Strategy [VES v1.0]",
+     overlay          = true,
+     pyramiding       = 2,
+     default_qty_type = strategy.fixed,
+     default_qty_value= 1,
+     initial_capital  = 25000,
+     commission_type  = strategy.commission.cash_per_contract,
+     commission_value = 2.25,
+     slippage         = 1,
+     calc_on_every_tick = true,
+     max_labels_count = 500,
+     max_bars_back    = 5000)
+
+// ============================================================================
+// INSTRUMENT PRESETS
+// ============================================================================
+grp_preset = "⚡ Instrument Preset"
+preset = input.string("🔷 YM (Dow)", "Instrument",
+     options=["🔷 YM (Dow)", "📈 NQ (NASDAQ)", "📊 ES (S&P)", "🛢️ CL (Crude)", "🟤 HG (Copper)", "⚙️ CUSTOM"],
+     group=grp_preset,
+     tooltip="Auto-configures TP, Trail, and default Z-threshold for the selected instrument.")
+
+is_ym = preset == "🔷 YM (Dow)"
+is_nq = preset == "📈 NQ (NASDAQ)"
+is_es = preset == "📊 ES (S&P)"
+is_cl = preset == "🛢️ CL (Crude)"
+is_hg = preset == "🟤 HG (Copper)"
+
+// ============================================================================
+// CORE CONFIGURATION
+// ============================================================================
+grp_tp = "💰 TP & Trail"
+tp_pts_in    = input.float(40.0, "Take Profit (points)", group=grp_tp, tooltip="Distance in price points from entry to TP. Each position exits independently when its TP is hit.")
+trail_pts_in = input.float(40.0, "Trailing Stop (points)", group=grp_tp, tooltip="Trail distance in points from the best price reached. Activates after 1 tick in favor.")
+
+// Preset overrides for TP/Trail
+tp_pts    = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : tp_pts_in
+trail_pts = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : trail_pts_in
+
+grp_vol = "📊 Volume Exhaustion Detection"
+z_threshold = input.float(1.5, "Z-Score Threshold", group=grp_vol, minval=0.3, maxval=4.0, step=0.1,
+     tooltip="Minimum volume Z-score to qualify as a volume exhaustion event. Lower = more signals, higher = more selective.\n1.0 = ~16% of bars exceed\n1.5 = ~7% of bars exceed (default)\n2.0 = ~2.5% of bars exceed")
+vol_lookback = input.int(20, "Volume Lookback (bars)", group=grp_vol, minval=5, maxval=200,
+     tooltip="Rolling window for volume mean and standard deviation. 20 = default. Shorter = more responsive to recent volume shifts.")
+cvd_roc_len = input.int(10, "CVD ROC Lookback", group=grp_vol, minval=2, maxval=50,
+     tooltip="Bars to measure CVD rate-of-change over. Used to detect momentum slowing (divergence). 10 = default.")
+cvd_weight = input.float(0.7, "CVD Divergence Z-Discount", group=grp_vol, minval=0.3, maxval=1.0, step=0.05,
+     tooltip="When CVD divergence is detected, the Z-threshold is multiplied by this value, allowing weaker volume spikes to qualify. 0.7 = 30% discount.")
+wave_enable = input.bool(true, "Enable Wave Volume Comparison", group=grp_vol,
+     tooltip="Also checks if the ending wave's cumulative volume exceeded the previous same-direction wave. Additional confirmation layer.")
+
+grp_ema = "📈 Moving Averages (OHLC4)"
+ema_fast_len  = input.int(9,   "EMA Fast",  group=grp_ema)
+ema_mid_len   = input.int(15,  "EMA Mid",   group=grp_ema)
+ema_slow_len  = input.int(34,  "EMA Slow",  group=grp_ema)
+ema_macro_len = input.int(233, "EMA Macro",  group=grp_ema, tooltip="Fibonacci 233. Long-term trend anchor.")
+
+grp_bb = "📉 Bollinger Bands (3-Min MTF)"
+bb_length   = input.int(10, "BB Length", group=grp_bb, tooltip="Lookback period for the Bollinger Band basis. Calculated on 3-minute timeframe.")
+bb_mult     = input.float(1.2, "BB Std Dev Multiplier", group=grp_bb, step=0.1, tooltip="Standard deviation multiplier for band width. 1.2 = tighter than default 2.0 — catches mean-reversion entries closer to the midline.")
+bb_tf       = input.timeframe("3", "BB Calculation Timeframe", group=grp_bb, tooltip="Timeframe for BB calculation. Default 3-min. The BB is computed on this timeframe and projected onto your chart.")
+bb_color_up = input.color(#2962FF, "Upper Band", group=grp_bb, inline="bbc1")
+bb_color_lo = input.color(#2962FF, "Lower Band", group=grp_bb, inline="bbc1")
+bb_color_mid = input.color(color.gray, "Midline", group=grp_bb, inline="bbc2")
+
+grp_hma = "〰️ HMA 20 (Chart TF)"
+hma_length = input.int(20, "HMA Length", group=grp_hma, tooltip="Hull Moving Average length. Calculated on chart timeframe (Renko bricks). Used as a confluence gate — price must be below HMA for longs, above for shorts.")
+hma_src    = input.source(close, "HMA Source", group=grp_hma)
+
+grp_trend = "🛡️ Soft Trend Filter"
+use_trend_filter = input.bool(true, "Enable Soft Trend Filter", group=grp_trend,
+     tooltip="When enabled, suppresses signals that go directly into a strong stacked trend. Does NOT hard-block — just filters the most dangerous counter-trend entries.")
+
+grp_session = "⏰ Session Filter"
+use_session = input.bool(true, "Enable Session Filter", group=grp_session)
+session_str = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_session,
+     tooltip="Format: TIME1,TIME2:DAYS\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri 7=Sat\nExample: 0930-1145,1330-1600:23456")
+flatten_outside = input.bool(false, "Flatten Positions Outside Session", group=grp_session,
+     tooltip="If enabled, all open positions are closed when the session window ends. If disabled, positions ride until TP/Trail/Opposite signal.")
+
+grp_vis = "🎨 Visuals"
+color_candles   = input.bool(true, "Color Candles by Direction", group=grp_vis)
+show_labels     = input.bool(true, "Show VOL PEAK / VOL BOTTOM Labels", group=grp_vis)
+show_wick_dots  = input.bool(true, "Show Yellow Dots on EMA Wick Touches", group=grp_vis)
+wick_dot_ema    = input.string("EMA 34", "Wick Touch EMA", options=["EMA 9", "EMA 15", "EMA 34", "EMA 233"], group=grp_vis)
+bull_candle_col = input.color(#00BFFF, "Bullish Candle", group=grp_vis, inline="cc1")
+bear_candle_col = input.color(#FF4081, "Bearish Candle", group=grp_vis, inline="cc1")
+ema9_color      = input.color(#FFFFFF, "EMA 9",   group=grp_vis, inline="ec1")
+ema15_color     = input.color(#FFD700, "EMA 15",  group=grp_vis, inline="ec1")
+ema34_color     = input.color(#00BFFF, "EMA 34",  group=grp_vis, inline="ec2")
+ema233_color    = input.color(#FF6B00, "EMA 233", group=grp_vis, inline="ec2")
+
+grp_dash = "📋 Dashboard"
+show_dash = input.bool(true, "Show Dashboard", group=grp_dash)
+dash_pos  = input.string("Top Right", "Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash)
+
+// ============================================================================
+// CHART TYPE DETECTION
+// ============================================================================
+is_renko      = chart.is_renko
+is_nonstandard = chart.is_renko or chart.is_range or chart.is_linebreak or chart.is_kagi or chart.is_pnf
+chart_label    = is_renko ? "RENKO" : chart.is_range ? "RANGE" : chart.is_heikinashi ? "HA" : "STD"
+brick_size     = is_renko ? (high - low) : 0.0
+
+// ============================================================================
+// SESSION PARSING
+// ============================================================================
+config_parts  = str.split(session_str, ":")
+times_str     = array.get(config_parts, 0)
+days_str      = array.size(config_parts) > 1 ? array.get(config_parts, 1) : "23456"
+time_windows  = str.split(times_str, ",")
+num_windows   = array.size(time_windows)
+day_suffix    = ":" + days_str
+
+in_w1 = num_windows >= 1 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 0)) + day_suffix, "America/New_York")) : false
+in_w2 = num_windows >= 2 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 1)) + day_suffix, "America/New_York")) : false
+in_w3 = num_windows >= 3 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 2)) + day_suffix, "America/New_York")) : false
+in_w4 = num_windows >= 4 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 3)) + day_suffix, "America/New_York")) : false
+
+in_session_raw = in_w1 or in_w2 or in_w3 or in_w4
+in_session     = not use_session or in_session_raw
+session_just_closed = use_session and not in_session_raw and in_session_raw[1]
+
+// ============================================================================
+// MOVING AVERAGES (OHLC4 source)
+// ============================================================================
+ema_src  = ohlc4
+ema_9    = ta.ema(ema_src, ema_fast_len)
+ema_15   = ta.ema(ema_src, ema_mid_len)
+ema_34   = ta.ema(ema_src, ema_slow_len)
+ema_233  = ta.ema(ema_src, ema_macro_len)
+
+// EMA trend stacking
+ema_stacked_bull = ema_9 > ema_15 and ema_15 > ema_34
+ema_stacked_bear = ema_9 < ema_15 and ema_15 < ema_34
+above_macro      = close > ema_233
+below_macro      = close < ema_233
+strong_uptrend   = ema_stacked_bull and above_macro
+strong_downtrend = ema_stacked_bear and below_macro
+
+// ============================================================================
+// BOLLINGER BANDS (3-Min MTF via request.security)
+// ============================================================================
+// Source: weighted close (H+L+C+C)/4
+// Basis: EMA (not SMA)
+// Calculated on the specified timeframe, projected onto chart
+
+// Clean ticker for MTF requests
+cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
+
+// BB calculation function for request.security
+bb_src_calc(len, mult) =>
+    wc = (high + low + close + close) / 4.0
+    basis = ta.ema(wc, len)
+    dev   = mult * ta.stdev(wc, len)
+    [basis, basis + dev, basis - dev]
+
+[bb_basis, bb_upper, bb_lower] = request.security(cleanTicker, bb_tf, bb_src_calc(bb_length, bb_mult), lookahead=barmerge.lookahead_on)
+
+// Price position relative to bands
+price_at_lower_bb = close <= bb_lower
+price_at_upper_bb = close >= bb_upper
+price_below_mid   = close < bb_basis
+price_above_mid   = close > bb_basis
+
+// ============================================================================
+// HMA 20 (Chart Timeframe)
+// ============================================================================
+hma_val  = ta.hma(hma_src, hma_length)
+hma_bull = close > hma_val
+hma_bear = close < hma_val
+hma_rising  = hma_val > hma_val[1]
+hma_falling = hma_val < hma_val[1]
+
+// ============================================================================
+// VOLUME EXHAUSTION DETECTION — Hybrid CVD + Z-Score
+// ============================================================================
+
+// --- Brick Direction ---
+bull_brick    = close >= open
+bear_brick    = close < open
+flip_to_bull  = bull_brick and not bull_brick[1]
+flip_to_bear  = bear_brick and not bear_brick[1]
+
+// --- Volume Z-Score ---
+has_vol   = not na(volume) and volume > 0
+vol_safe  = has_vol ? volume : 0.0
+vol_sma   = ta.sma(vol_safe, vol_lookback)
+vol_std   = ta.stdev(vol_safe, vol_lookback)
+vol_z     = vol_std > 0 ? (vol_safe - vol_sma) / vol_std : 0.0
+
+// --- CVD (Cumulative Volume Delta) ---
+// On Renko: bullish brick = buy pressure, bearish brick = sell pressure
+bar_delta = bull_brick ? vol_safe : -vol_safe
+cvd       = ta.cum(bar_delta)
+
+// CVD Rate of Change — detects momentum slowing
+cvd_roc      = cvd - nz(cvd[cvd_roc_len])
+cvd_roc_prev = nz(cvd[1]) - nz(cvd[1 + cvd_roc_len])
+
+// CVD Divergence: momentum in the dominant direction is slowing
+// Sellers exhausting: CVD was falling but rate of decline is lessening
+cvd_bear_exhausting = cvd_roc > cvd_roc_prev and cvd_roc <= 0
+// Buyers exhausting: CVD was rising but rate of increase is lessening
+cvd_bull_exhausting = cvd_roc < cvd_roc_prev and cvd_roc >= 0
+
+// --- Wave Volume Tracking ---
+// Cumulates volume per directional wave (consecutive same-color bricks)
+var float wave_cum_vol      = 0.0
+var float prev_bull_wave    = 0.0
+var float prev_bear_wave    = 0.0
+var float prev2_bull_wave   = 0.0
+var float prev2_bear_wave   = 0.0
+
+if flip_to_bull
+    // Bearish wave just ended
+    prev2_bear_wave := prev_bear_wave
+    prev_bear_wave  := wave_cum_vol
+    wave_cum_vol    := vol_safe
+else if flip_to_bear
+    // Bullish wave just ended
+    prev2_bull_wave := prev_bull_wave
+    prev_bull_wave  := wave_cum_vol
+    wave_cum_vol    := vol_safe
+else
+    wave_cum_vol += vol_safe
+
+// Wave exhaustion: the ending wave had MORE volume than the prior same-direction wave
+// (climactic effort — "they pushed hard but couldn't continue")
+wave_bear_climax = wave_enable and prev_bear_wave > prev2_bear_wave and prev2_bear_wave > 0
+wave_bull_climax = wave_enable and prev_bull_wave > prev2_bull_wave and prev2_bull_wave > 0
+
+// --- Signal Generation ---
+// Effective Z-threshold: reduced when CVD divergence confirms exhaustion
+z_eff_long  = cvd_bear_exhausting ? z_threshold * cvd_weight : z_threshold
+z_eff_short = cvd_bull_exhausting ? z_threshold * cvd_weight : z_threshold
+
+// VOL BOTTOM (Long): Renko flips bullish + volume exhaustion at the low
+// Requires: flip + (Z-score meets threshold OR wave climax with moderate Z)
+vol_bottom_raw = flip_to_bull and has_vol and (vol_z >= z_eff_long or (wave_bear_climax and vol_z >= z_eff_long * 0.6))
+
+// VOL PEAK (Short): Renko flips bearish + volume exhaustion at the high
+vol_peak_raw = flip_to_bear and has_vol and (vol_z >= z_eff_short or (wave_bull_climax and vol_z >= z_eff_short * 0.6))
+
+// --- Confluence Gates (REQUIRED) ---
+// BB: price must be at band extreme for mean-reversion entry
+// HMA: price must be on the stretched side (below HMA for longs, above for shorts)
+bb_ok_long  = price_at_lower_bb   // price at or below lower BB → stretched low, buy the bounce
+bb_ok_short = price_at_upper_bb   // price at or above upper BB → stretched high, sell the drop
+hma_ok_long  = hma_bear            // price below HMA 20 → oversold relative to hull
+hma_ok_short = hma_bull            // price above HMA 20 → overbought relative to hull
+
+confluence_long  = bb_ok_long and hma_ok_long
+confluence_short = bb_ok_short and hma_ok_short
+
+// --- Soft Trend Filter ---
+// Block: don't buy into a strong waterfall, don't short into a strong ramp
+trend_ok_long  = not use_trend_filter or not strong_downtrend
+trend_ok_short = not use_trend_filter or not strong_uptrend
+
+// --- Final Signals ---
+vol_bottom = vol_bottom_raw and confluence_long  and trend_ok_long  and in_session
+vol_peak   = vol_peak_raw   and confluence_short and trend_ok_short and in_session
+
+// Display Z-score for the signal (used in labels)
+signal_z = vol_bottom ? vol_z : vol_peak ? vol_z : 0.0
+
+// ============================================================================
+// POSITION MANAGEMENT
+// ============================================================================
+net_pos   = strategy.position_size
+is_flat   = net_pos == 0
+is_long   = net_pos > 0
+is_short  = net_pos < 0
+num_units = math.round(math.abs(net_pos))
+
+// Convert points to ticks for strategy.exit()
+tp_ticks    = math.round(tp_pts / syminfo.mintick)
+trail_ticks = math.round(trail_pts / syminfo.mintick)
+
+// --- Track entry prices for dashboard display ---
+var float entry1_price = na
+var float entry2_price = na
+var int   pos_dir      = 0      // 1=long, -1=short, 0=flat
+var float highest_since = na
+var float lowest_since  = na
+
+// Reset on flat
+if is_flat and not is_flat[1]
+    entry1_price := na
+    entry2_price := na
+    pos_dir      := 0
+    highest_since := na
+    lowest_since  := na
+
+// Track high/low water marks for trail display
+if not is_flat
+    highest_since := na(highest_since) ? high : math.max(highest_since, high)
+    lowest_since  := na(lowest_since)  ? low  : math.min(lowest_since, low)
+
+// ============================================================================
+// ENTRIES
+// ============================================================================
+
+// --- VOL BOTTOM → LONG ---
+if vol_bottom
+    if is_short
+        // Flatten shorts, then enter long
+        strategy.close_all(comment="FLATTEN→L")
+        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2")
+        entry1_price := close
+        entry2_price := na
+        pos_dir      := 1
+        highest_since := high
+        lowest_since  := low
+    else if is_flat
+        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2")
+        entry1_price := close
+        pos_dir      := 1
+        highest_since := high
+        lowest_since  := low
+    else if is_long and num_units < 2
+        strategy.entry("L2", strategy.long, qty=1, comment="VEB D:2/2")
+        entry2_price := close
+
+// --- VOL PEAK → SHORT ---
+if vol_peak
+    if is_long
+        // Flatten longs, then enter short
+        strategy.close_all(comment="FLATTEN→S")
+        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2")
+        entry1_price := close
+        entry2_price := na
+        pos_dir      := -1
+        highest_since := high
+        lowest_since  := low
+    else if is_flat
+        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2")
+        entry1_price := close
+        pos_dir      := -1
+        highest_since := high
+        lowest_since  := low
+    else if is_short and num_units < 2
+        strategy.entry("S2", strategy.short, qty=1, comment="VEP D:2/2")
+        entry2_price := close
+
+// ============================================================================
+// EXITS — TP + Trailing Stop per position
+// ============================================================================
+// Each position independently: first of TP or Trail closes that position.
+// trail_points=1 → trailing stop activates after just 1 tick in favor (essentially immediate)
+
+if is_long
+    strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+    strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+
+if is_short
+    strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+    strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+
+// --- Flatten outside session (optional) ---
+if flatten_outside and session_just_closed and not is_flat
+    strategy.close_all(comment="SESSION END")
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// --- EMA Plots ---
+plot(ema_9,   "EMA 9",   color=color.new(ema9_color, 20),   linewidth=1)
+plot(ema_15,  "EMA 15",  color=color.new(ema15_color, 20),  linewidth=1)
+plot(ema_34,  "EMA 34",  color=color.new(ema34_color, 10),  linewidth=2)
+plot(ema_233, "EMA 233", color=color.new(ema233_color, 30), linewidth=2, style=plot.style_circles)
+
+// --- Bollinger Bands (from 3-min MTF) ---
+p_bb_upper = plot(bb_upper, "BB Upper", color=color.new(bb_color_up, 40), linewidth=1)
+p_bb_lower = plot(bb_lower, "BB Lower", color=color.new(bb_color_lo, 40), linewidth=1)
+plot(bb_basis, "BB Mid", color=color.new(bb_color_mid, 60), linewidth=1, style=plot.style_cross)
+fill(p_bb_upper, p_bb_lower, color=color.new(bb_color_up, 92), title="BB Fill")
+
+// --- Candle Coloring ---
+candle_col = not color_candles ? na :
+     bull_brick ? color.new(bull_candle_col, 0) :
+     color.new(bear_candle_col, 0)
+barcolor(candle_col)
+
+// --- VOL PEAK / VOL BOTTOM Labels ---
+if show_labels and vol_bottom
+    units = is_short ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
+    lbl_text = "▲ VOL\nBOTTOM"
+    label.new(bar_index, low, lbl_text,
+         style=label.style_label_up, color=#00E676, textcolor=color.white,
+         size=size.normal, yloc=yloc.belowbar,
+         tooltip="VEB Z:" + str.tostring(vol_z, "0.0") + " D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##"))
+
+if show_labels and vol_peak
+    units = is_long ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
+    lbl_text = "▼ VOL\nPEAK"
+    label.new(bar_index, high, lbl_text,
+         style=label.style_label_down, color=#FF6D00, textcolor=color.white,
+         size=size.normal, yloc=yloc.abovebar,
+         tooltip="VEP Z:" + str.tostring(vol_z, "0.0") + " D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##"))
+
+// --- Yellow Dots on EMA Wick Touches ---
+wick_ema = wick_dot_ema == "EMA 9" ? ema_9 : wick_dot_ema == "EMA 15" ? ema_15 : wick_dot_ema == "EMA 233" ? ema_233 : ema_34
+
+// Wick touched the EMA but price closed on the other side (bounce)
+wick_touch_bull = low <= wick_ema and close > wick_ema   // dipped to EMA, closed above
+wick_touch_bear = high >= wick_ema and close < wick_ema  // reached EMA, closed below
+
+if show_wick_dots and wick_touch_bull and in_session
+    label.new(bar_index, low, "•", style=label.style_none, textcolor=color.yellow, size=size.small, yloc=yloc.belowbar)
+if show_wick_dots and wick_touch_bear and in_session
+    label.new(bar_index, high, "•", style=label.style_none, textcolor=color.yellow, size=size.small, yloc=yloc.abovebar)
+
+// --- Trail Level Display ---
+trail_level_long  = is_long  and not na(highest_since) ? highest_since - trail_pts : na
+trail_level_short = is_short and not na(lowest_since)  ? lowest_since  + trail_pts : na
+plot(trail_level_long,  "Trail (Long)",  color=color.new(color.red, 50),   linewidth=1, style=plot.style_linebr)
+plot(trail_level_short, "Trail (Short)", color=color.new(color.green, 50), linewidth=1, style=plot.style_linebr)
+
+// --- TP Level Display ---
+tp_level_long  = is_long  and not na(entry1_price) ? entry1_price + tp_pts : na
+tp_level_short = is_short and not na(entry1_price) ? entry1_price - tp_pts : na
+plot(tp_level_long,  "TP (Long)",  color=color.new(#00BFFF, 40), linewidth=1, style=plot.style_linebr)
+plot(tp_level_short, "TP (Short)", color=color.new(#00BFFF, 40), linewidth=1, style=plot.style_linebr)
+
+// ============================================================================
+// PERFORMANCE DASHBOARD
+// ============================================================================
+dash_position = switch dash_pos
+    "Top Right"    => position.top_right
+    "Bottom Right" => position.bottom_right
+    "Top Left"     => position.top_left
+    "Bottom Left"  => position.bottom_left
+    => position.top_right
+
+var table dash = table.new(dash_position, 3, 14, border_width=1,
+     frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 85))
+
+if show_dash and barstate.islast
+    // Colors
+    bg_header = color.new(#1a1a2e, 0)
+    bg_row    = color.new(#16213e, 0)
+    txt       = color.white
+
+    // Stats
+    closed     = strategy.closedtrades
+    wins       = strategy.wintrades
+    losses     = strategy.losstrades
+    win_rate   = closed > 0 ? (wins / closed) * 100 : 0.0
+    net_pnl    = strategy.netprofit
+    gross_win  = strategy.grossprofit
+    gross_loss = math.abs(strategy.grossloss)
+    pf         = gross_loss > 0 ? gross_win / gross_loss : 0.0
+    expectancy = closed > 0 ? net_pnl / closed : 0.0
+    avg_win    = wins > 0 ? gross_win / wins : 0.0
+    avg_loss   = losses > 0 ? gross_loss / losses : 0.0
+    max_dd     = math.abs(strategy.max_drawdown)
+
+    // Position info
+    pos_text = is_flat ? "FLAT" : is_long ? "LONG D:" + str.tostring(num_units) + "/2" : "SHORT D:" + str.tostring(num_units) + "/2"
+    pos_col  = is_flat ? color.new(color.gray, 60) : is_long ? color.new(color.green, 50) : color.new(color.red, 50)
+
+    // Signal state
+    sig_text = vol_bottom ? "VEB" : vol_peak ? "VEP" : "scanning"
+    sig_col  = vol_bottom ? color.new(#00E676, 50) : vol_peak ? color.new(#FF6D00, 50) : color.new(color.gray, 70)
+
+    // Trail level
+    trl_val  = is_long ? highest_since - trail_pts : is_short ? lowest_since + trail_pts : na
+    trl_text = not na(trl_val) ? str.tostring(trl_val, "#.##") : "—"
+
+    // Chart info
+    renko_info = is_renko ? chart_label + " " + str.tostring(brick_size, "#.##") : chart_label
+
+    // Preset label
+    preset_lbl = is_ym ? "🔷 YM" : is_nq ? "📈 NQ" : is_es ? "📊 ES" : is_cl ? "🛢️ CL" : is_hg ? "🟤 HG" : "⚙️ CUSTOM"
+
+    // Row 0: Header
+    table.cell(dash, 0, 0, "VES v1.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 1, 0, preset_lbl + " | " + renko_info, bgcolor=bg_header, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 0, "", bgcolor=bg_header)
+
+    // Row 1: TP/TRAIL
+    table.cell(dash, 0, 1, "TP/TRAIL", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(tp_pts, "#.##") + "pt TP", bgcolor=bg_row, text_color=#00BFFF, text_size=size.normal)
+    table.cell(dash, 2, 1, str.tostring(trail_pts, "#.##") + "pt TRAIL", bgcolor=bg_row, text_color=#00BFFF, text_size=size.normal)
+
+    // Row 2: Signal
+    table.cell(dash, 0, 2, "SIGNAL", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, sig_text, bgcolor=sig_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 2, "Z:" + str.tostring(vol_z, "0.0"), bgcolor=bg_row, text_color=color.yellow, text_size=size.small)
+
+    // Row 3: Position
+    table.cell(dash, 0, 3, "Position", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 3, pos_text, bgcolor=pos_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 3, "Trl:" + trl_text, bgcolor=bg_row, text_color=color.orange, text_size=size.small)
+
+    // Row 4: Session
+    sess_text = use_session ? (in_session_raw ? "✓ ACTIVE" : "✗ OUTSIDE") : "OFF"
+    sess_col  = not use_session ? color.new(color.gray, 80) : in_session_raw ? color.new(color.green, 60) : color.new(color.orange, 60)
+    table.cell(dash, 0, 4, "Session", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 4, sess_text, bgcolor=sess_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 4, "", bgcolor=bg_row)
+
+    // Row 5: Bollinger Bands Confluence
+    bb_long_text  = price_at_lower_bb ? "✓ AT LOWER" : price_below_mid ? "~ LOWER HALF" : "✗ ABOVE MID"
+    bb_short_text = price_at_upper_bb ? "✓ AT UPPER" : price_above_mid ? "~ UPPER HALF" : "✗ BELOW MID"
+    bb_text = bb_long_text + " | " + bb_short_text
+    bb_conf_col = (price_at_lower_bb or price_at_upper_bb) ? color.new(color.green, 50) : color.new(color.gray, 70)
+    table.cell(dash, 0, 5, "BB (" + bb_tf + "m)", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, price_at_lower_bb ? "✓ LOWER BAND" : price_at_upper_bb ? "✓ UPPER BAND" : "— MID ZONE", bgcolor=bb_conf_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 5, str.tostring(bb_lower, "#.#") + " | " + str.tostring(bb_upper, "#.#"), bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+
+    // Row 6: HMA 20 Confluence
+    hma_text = hma_bear ? "PRICE < HMA ✓L" : hma_bull ? "PRICE > HMA ✓S" : "AT HMA"
+    hma_slope_text = hma_rising ? "▲ RISING" : hma_falling ? "▼ FALLING" : "— FLAT"
+    hma_conf_col = hma_bear ? color.new(#00E676, 60) : hma_bull ? color.new(#FF6D00, 60) : color.new(color.gray, 70)
+    table.cell(dash, 0, 6, "HMA 20", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, hma_text, bgcolor=hma_conf_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 6, hma_slope_text, bgcolor=bg_row, text_color=hma_rising ? color.green : hma_falling ? color.red : color.gray, text_size=size.small)
+
+    // Row 7: Win Rate
+    wr_col = win_rate >= 60 ? color.new(color.green, 50) : win_rate >= 50 ? color.new(color.yellow, 50) : color.new(color.red, 50)
+    table.cell(dash, 0, 7, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 7, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+
+    // Row 8: Net P&L
+    pnl_col = net_pnl >= 0 ? color.new(color.green, 50) : color.new(color.red, 50)
+    table.cell(dash, 0, 8, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 8, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 8, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
+
+    // Row 9: Profit Factor
+    pf_col = pf >= 2.0 ? color.new(color.green, 50) : pf >= 1.5 ? color.new(color.yellow, 50) : color.new(color.red, 50)
+    table.cell(dash, 0, 9, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 9, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 9, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+
+    // Row 10: Expectancy
+    exp_col = expectancy > 0 ? color.new(color.green, 60) : color.new(color.red, 60)
+    table.cell(dash, 0, 10, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 10, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 10, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+
+    // Row 11: Avg W/L
+    table.cell(dash, 0, 11, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 11, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 11, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
+
+    // Row 12: Trend
+    trend_text = strong_uptrend ? "STRONG ▲" : strong_downtrend ? "STRONG ▼" : ema_stacked_bull ? "BULL" : ema_stacked_bear ? "BEAR" : "MIXED"
+    trend_col  = strong_uptrend ? color.new(color.green, 50) : strong_downtrend ? color.new(color.red, 50) : ema_stacked_bull ? color.new(color.green, 70) : ema_stacked_bear ? color.new(color.red, 70) : color.new(color.gray, 70)
+    table.cell(dash, 0, 12, "Trend", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 12, trend_text, bgcolor=trend_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 12, "CVD: " + (cvd_roc > 0 ? "▲" : cvd_roc < 0 ? "▼" : "—"), bgcolor=bg_row, text_color=cvd_roc > 0 ? color.green : cvd_roc < 0 ? color.red : color.gray, text_size=size.small)
+
+    // Row 13: Volume
+    vol_text = has_vol ? "Z:" + str.tostring(vol_z, "0.0") + " | " + str.tostring(vol_safe, "#,##0") : "NO DATA"
+    vol_col  = vol_z >= z_threshold ? color.new(color.yellow, 40) : vol_z >= 1.0 ? color.new(color.yellow, 70) : color.new(color.gray, 80)
+    table.cell(dash, 0, 13, "Volume", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 13, vol_text, bgcolor=vol_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 13, wave_enable ? "Wave:" + str.tostring(wave_cum_vol, "#,##0") : "", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+
+// ============================================================================
+// ALERT CONDITIONS
+// ============================================================================
+alertcondition(vol_bottom, title="🟢 VOL BOTTOM (Long)", message="VEB — Volume Exhaustion Bottom detected. Long entry signal.")
+alertcondition(vol_peak,   title="🔴 VOL PEAK (Short)",  message="VEP — Volume Exhaustion Peak detected. Short entry signal.")
+alertcondition(vol_bottom and is_short, title="🔄 FLATTEN→LONG", message="Flattening shorts, entering long on VOL BOTTOM.")
+alertcondition(vol_peak and is_long,    title="🔄 FLATTEN→SHORT", message="Flattening longs, entering short on VOL PEAK.")
