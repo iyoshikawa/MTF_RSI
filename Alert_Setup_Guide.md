@@ -6,7 +6,7 @@ The MTF RSI suite has **19 alert conditions** across two indicators. This guide 
 
 | Indicator | Alert Count | Purpose |
 |-----------|-------------|---------|
-| Signals v7.6.1 | 16 | Entry signals, TP/SL hits, warnings |
+| Signals v7.7.0 | 16 | Entry signals, TP/SL hits, warnings |
 | Management v7.5.0 | 3 | Pyramid adds, ADX breakout |
 
 ---
@@ -16,7 +16,7 @@ The MTF RSI suite has **19 alert conditions** across two indicators. This guide 
 1. Open your chart with the indicator applied
 2. Click the **Alert** button (clock icon in the right toolbar, or press `Alt+A`)
 3. In the **Condition** dropdown, select your indicator name:
-   - `MTF RSI Signals [v7.6.1]` for entry/exit alerts
+   - `MTF RSI Signals [v7.7.0]` for entry/exit alerts
    - `MTF RSI Management [v7.5.0]` for pyramid/breakout alerts
 4. A second dropdown appears — select the specific alert condition
 5. Set **Options**:
@@ -87,7 +87,7 @@ Enable all long alerts OR all short alerts (not both — pick your session bias)
 ### Example 1: A+ Long Entry Alert
 
 ```
-Condition:    MTF RSI Signals [v7.6.1] → 🔥 A+ LONG
+Condition:    MTF RSI Signals [v7.7.0] → 🔥 A+ LONG
 Trigger:      Once Per Bar Close
 Expiration:   Open-ended
 Message:      A+ LONG: All systems aligned — full size runner!
@@ -98,7 +98,7 @@ Message:      A+ LONG: All systems aligned — full size runner!
 ### Example 2: TP Hit Alert
 
 ```
-Condition:    MTF RSI Signals [v7.6.1] → 🎯 TP HIT
+Condition:    MTF RSI Signals [v7.7.0] → 🎯 TP HIT
 Trigger:      Once Per Bar Close
 Expiration:   Open-ended
 Message:      TP HIT: Take profit reached — take partials or exit!
@@ -109,7 +109,7 @@ Message:      TP HIT: Take profit reached — take partials or exit!
 ### Example 3: SL Hit Alert
 
 ```
-Condition:    MTF RSI Signals [v7.6.1] → 🛑 SL HIT
+Condition:    MTF RSI Signals [v7.7.0] → 🛑 SL HIT
 Trigger:      Once Per Bar Close
 Expiration:   Open-ended
 Message:      SL HIT: Stop loss reached — exit position!
@@ -202,7 +202,7 @@ Message:      ADD LONG: Grade upgraded or EMA pullback — add to position!
 
 ### Example E: Signals-Only (No Management Indicator)
 
-You can run Signals v7.6.1 standalone without Management. Here's what that looks like:
+You can run Signals v7.7.0 standalone without Management. Here's what that looks like:
 
 | Time | Event | Alert | Action |
 |------|-------|-------|--------|
@@ -232,7 +232,7 @@ If you entered a trade from a different system or discretionary read, you can us
 
 ## Alert Cheat Sheet
 
-### Signals v7.6.1 (16 alerts)
+### Signals v7.7.0 (16 alerts)
 
 | Alert | Direction | Fires When | Frequency |
 |-------|-----------|------------|-----------|

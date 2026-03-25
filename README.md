@@ -301,8 +301,8 @@ MTF Speed settings available in v7.7.0. Conservative is recommended for most 1-m
 
 | Version | Indicator | Changes |
 |---------|-----------|---------|
-| v7.7.0 | Signals | Volume analysis, TP/SL levels, split alerts (long/short + TP/SL hit), Renko support, plot optimization, all colors configurable |
-| v7.5.0 | Management | Trade lifecycle (TP1/TP2/breakeven/P&L), contract size selector (Micro/Mini), per-grade sizing, TP/SL MODE rows |
+| v7.7.0 | Signals | Volume analysis (expansion/spikes/divergence), TP/SL levels, split alerts (long/short + TP/SL hit), Renko/Range chart support, grade upgrade instant-fire, plot optimization (plotshape→label.new), all colors configurable |
+| v7.5.0 | Management | Trade lifecycle (TP1/TP2/breakeven/P&L), contract size selector (Micro/Mini), per-grade SL sizing with cap, TP/SL MODE dashboard rows, grade upgrade instant-fire, CL dollar_per_point fix |
 | v7.5.3 | Signals | RSI Speed presets, MTF Speed presets, RSI Divergence detection, YM SL fix, NQ SL fix |
 | v7.12.0 | Signals | Backtested presets via coordinate descent (ES-specific SL, tuned NQ/CL/YM) |
 | v7.4.3 | Management | NQ SL/TP backtested optimization (CONS-TIGHT), NQ TP updated, version bump |

@@ -233,6 +233,19 @@ Same as A+ except VWAP and volume are not required. ADX must still be above the 
 
 The system evaluates from highest to lowest: A+ → A → A- → B+ → B → NONE. A bar can only have one grade. Higher grades take priority — if conditions for both A+ and A are met, it's an A+.
 
+### Grade Upgrade Behavior
+
+When a grade upgrades (e.g. A- → A, A → A+, B → B+) in the same direction, the new grade fires immediately — it does not wait for the persistence countdown. The logic: if the system already confirmed A- for 2 bars and conditions improved to A, that improvement IS confirmation. Waiting 2 more bars for the A to "persist" often means missing it entirely as conditions revert.
+
+| Scenario | Behavior |
+|----------|----------|
+| A- → A (same direction) | Fires immediately |
+| A → A+ (same direction) | Fires immediately |
+| B → B+ → A- (chain upgrade) | Each fires immediately |
+| A+ → A (downgrade) | Resets persistence, must wait |
+| A- → A (direction flipped) | Resets persistence — direction change, not an upgrade |
+| NONE → B (new entry) | Must wait persist_bars |
+
 ### Late Trend Warning
 
 When an A+ or A grade is active but ADX is falling or ADR usage exceeds 70%, the dashboard appends "⚠ LATE" to the grade. This means the trend may be mature — the signal is valid but the easy money may already be made.
@@ -346,7 +359,7 @@ These filters reduce false signals in ranging/choppy markets. All are configurab
 | Filter | What It Does | Default |
 |--------|-------------|---------|
 | **Signal Cooldown** | Minimum bars/seconds between signals. Prevents rapid-fire in chop. | 5 bars / 60s Renko |
-| **Grade Persistence** | Grade must hold for N bars before it fires. Prevents flickering. | 2 bars |
+| **Grade Persistence** | Grade must hold for N bars before it fires. Prevents flickering. **Exception:** grade upgrades (e.g. A- → A, A → A+) fire immediately — improving conditions ARE confirmation. Downgrades and direction flips still reset and wait. | 2 bars |
 | **ADX Floor for B/B+** | B grades require minimum ADX. Blocks signals in dead markets. | 15 |
 | **Suppress B/B+ LOW Vol** | Blocks B grades when ATR ratio classifies volatility as LOW. | OFF (auto ON for CL) |
 | **Block Counter-Trend** | Prevents B/B+/A- signals against the HMA macro trend. | ON |
@@ -524,7 +537,7 @@ Session boundaries are approximate. A brick may have started before the session 
 ### Anti-Chop Filters
 - **Signal Cooldown**: Bars between signals (default 5)
 - **Renko Cooldown**: Seconds between signals on Renko (default 60, min 10)
-- **Grade Persistence**: Min bars to hold grade (default 2)
+- **Grade Persistence**: Min bars to hold grade (default 2). Upgrades bypass this — see Grade Upgrade Behavior.
 - **ADX Floor for B/B+**: Min ADX for B grades (default 15)
 - **Block Counter-Trend**: Prevent B/B+/A- against macro trend
 - **Consolidation filters**: Range, lookback, suppression toggles

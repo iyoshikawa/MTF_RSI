@@ -1,5 +1,5 @@
 # YM/MYM 1-Minute Chart Settings Guide
-### MTF RSI v7.6.0 (Signals) / v7.5.0 (Management)
+### MTF RSI v7.7.0 (Signals) / v7.5.0 (Management)
 
 ---
 
@@ -110,12 +110,27 @@ risk. At $400 max pain, you're looking at 5 contracts max on A+.
 
 ---
 
-## What Changed in v7.5.0 (Management)
+## What Changed (YM-Specific History)
 
+### v7.4.2 (Management)
 1. **YM SL tightened**: A+/A from 20→15, A- from 20→12, B+ from 15→10, B from 15→8
 2. **YM TP widened for A grades**: A+ from 20→35, A from 20→25, A- from 15→18, B+ from 10→15
 3. **Dollar per point tooltip** clarified for MYM vs full YM
-4. **Tick multiplier** already correct on this branch (× 1 for YM vs × 4 for ES/NQ)
+4. **Tick multiplier** fixed (× 1 for YM vs × 4 for ES/NQ)
+
+### v7.5.0 (Management)
+1. **Contract size selector**: Micro (MYM $0.50/pt) vs Mini/Standard (YM $5/pt)
+2. **Trade lifecycle**: TP1 partial exit, TP2 ATR runner target, breakeven stop, live P&L
+3. **Per-grade sizing**: Each grade uses its own SL for contract calculation, with cap
+4. **TP/SL MODE dashboard**: Real-time recommendation for ATR vs fixed targets
+5. **Grade upgrades fire immediately**: A- → A no longer waits for persistence
+
+### v7.7.0 (Signals)
+1. **TP levels on chart**: Fixed TP crosses plotted alongside SL
+2. **Volume analysis**: Expansion/contraction, spike detection, price divergence
+3. **Split alerts**: Separate LONG/SHORT + TP HIT/SL HIT alerts
+4. **Renko support**: Auto-detection, time-based cooldown (10s-600s)
+5. **All colors configurable**: Every chart marker has a color input
 
 ---
 
