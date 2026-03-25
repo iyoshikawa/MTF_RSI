@@ -358,15 +358,15 @@ if vol_peak
 
 if is_long
     strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
     strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
 
 if is_short
     strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
     strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_trail="TRL")
+         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
 
 // --- Flatten outside session (optional) ---
 if flatten_outside and session_just_closed and not is_flat
