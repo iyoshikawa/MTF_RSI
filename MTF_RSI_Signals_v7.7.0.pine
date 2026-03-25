@@ -137,8 +137,10 @@ colorCandles = input.bool(true, "Color Candles by Grade", group=grp_dash, toolti
 useHAOutline = input.bool(true, "Heikin Ashi Outline Color", group=grp_dash, tooltip="Body = grade color, border/wicks = HA direction. Hide default candles.")
 ha_bull_color_in = input.color(#26A69A, "HA Bullish Outline", group=grp_dash, inline="ha1", tooltip="Wick/border color when Heikin Ashi candle direction is bullish.")
 ha_bear_color_in = input.color(#EF5350, "HA Bearish Outline", group=grp_dash, inline="ha1", tooltip="Wick/border color when Heikin Ashi candle direction is bearish.")
-showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash, tooltip="Plots horizontal stop-loss reference levels based on fixed distance from entry price for the current grade.")
-showTPLevels = input.bool(true, "Show Suggested Take Profit Levels", group=grp_dash, tooltip="Plots horizontal take-profit reference levels. Fixed-point targets per grade — use ATR TP in Management indicator for adaptive targets.")
+showStopLevels = input.bool(true, "Show Suggested Stop Levels", group=grp_dash, tooltip="Plots horizontal stop-loss level locked at entry price.")
+showTPLevels = input.bool(true, "Show Suggested Take Profit Levels", group=grp_dash, tooltip="Plots horizontal take-profit level locked at entry price. On grade upgrades, TP adjusts to the median between old and new grade targets.")
+sl_mode = input.string("Wider of Both", "SL Mode", options=["Fixed", "ATR", "Wider of Both"], group=grp_dash, tooltip="How the stop loss distance is calculated.\n\nFixed: Uses the preset per-grade point values. Consistent but can be tight in high volatility.\n\nATR: Uses ATR × multiplier. Adapts to current volatility — wider in fast markets, tighter in slow ones.\n\nWider of Both (recommended): Uses whichever is larger — the fixed value or the ATR value. Gives you the fixed floor in normal vol, and ATR room when vol expands.")
+atr_sl_mult = input.float(1.5, "ATR SL Multiplier", group=grp_dash, minval=0.5, maxval=5.0, step=0.25, tooltip="SL distance = ATR × this multiplier. Only used when SL Mode is ATR or Wider of Both. 1.0 = tight, 1.5 = standard, 2.0 = wide. Default 1.5.")
 ha_exit_warn = input.bool(true, "HA Momentum Exit Warning", group=grp_dash, tooltip="Shows an HA X marker when Heikin Ashi candles flip direction against your trade for N consecutive bars. Early exit warning.")
 ha_exit_bars = input.int(2, "HA Bars to Confirm Flip", group=grp_dash, minval=1, maxval=5, tooltip="Number of consecutive HA candles in the opposite direction before the exit warning triggers. 1 = very sensitive, 3+ = more patient.")
 ha_exit_color = input.color(#FF6B00, "HA Exit Marker Color", group=grp_dash, inline="hae1", tooltip="Color of the HA exit warning marker and its text on the chart.")
@@ -774,26 +776,46 @@ vol_div_active = vol_div_bearish or vol_div_bullish
 // ==========================================
 // --- ENTRY TRACKING & TP/SL HIT DETECTION ---
 // ==========================================
-// Lock entry price and levels on new signal for alert purposes
 var float sig_entry_price = na
 var int sig_entry_dir = 0  // 1=long, -1=short
 var float sig_sl_level = na
 var float sig_tp_level = na
 var bool sig_tp_hit = false
 var bool sig_sl_hit = false
+var float prev_tp_dist = 0.0  // tracks previous grade's TP for median on upgrade
 
-// Calculate current grade's SL/TP distance
-current_sl_dist = grade == "A+" ? sl_aplus : grade == "A" ? sl_a : grade == "A-" ? sl_aminus : grade == "B+" ? sl_bplus : grade == "B" ? sl_b : 0.0
+// Current grade's fixed SL/TP distances
+current_sl_fixed = grade == "A+" ? sl_aplus : grade == "A" ? sl_a : grade == "A-" ? sl_aminus : grade == "B+" ? sl_bplus : grade == "B" ? sl_b : 0.0
 current_tp_dist = grade == "A+" ? tp_aplus : grade == "A" ? tp_a : grade == "A-" ? tp_aminus : grade == "B+" ? tp_bplus : grade == "B" ? tp_b : 0.0
 
-// New signal → lock entry + levels
+// SL distance based on mode
+atr_sl_dist = atr_val * atr_sl_mult
+current_sl_dist = sl_mode == "ATR" ? atr_sl_dist : sl_mode == "Wider of Both" ? math.max(current_sl_fixed, atr_sl_dist) : current_sl_fixed
+
+// Detect upgrade for median TP logic
+is_tp_upgrade = is_upgrade and not na(sig_entry_price) and sig_entry_dir != 0
+
+// TP distance: on upgrade, use median of old and new grade's TP
+// Full jump from A- TP (18) to A TP (25) might overshoot — median (21.5) is more realistic
+effective_tp_dist = is_tp_upgrade ? (prev_tp_dist + current_tp_dist) / 2.0 : current_tp_dist
+
+// New signal or upgrade → lock/update entry + levels
 if filtered_new_signal and grade != "NONE"
-    sig_entry_price := close
-    sig_entry_dir := direction == "LONG" ? 1 : -1
-    sig_tp_hit := false
-    sig_sl_hit := false
-    sig_sl_level := direction == "LONG" ? close - current_sl_dist : close + current_sl_dist
-    sig_tp_level := direction == "LONG" ? close + current_tp_dist : close - current_tp_dist
+    if is_tp_upgrade
+        // Upgrade: keep original entry, update SL and TP from current price
+        sig_tp_hit := false
+        sig_sl_hit := false
+        sig_sl_level := sig_entry_dir == 1 ? close - current_sl_dist : close + current_sl_dist
+        sig_tp_level := sig_entry_dir == 1 ? close + effective_tp_dist : close - effective_tp_dist
+    else
+        // New trade: lock everything fresh
+        sig_entry_price := close
+        sig_entry_dir := direction == "LONG" ? 1 : -1
+        sig_tp_hit := false
+        sig_sl_hit := false
+        sig_sl_level := direction == "LONG" ? close - current_sl_dist : close + current_sl_dist
+        sig_tp_level := direction == "LONG" ? close + effective_tp_dist : close - effective_tp_dist
+    prev_tp_dist := current_tp_dist  // store for next potential upgrade
 
 // Grade gone → reset
 if grade == "NONE" and grade[1] != "NONE"
@@ -803,6 +825,7 @@ if grade == "NONE" and grade[1] != "NONE"
     sig_tp_level := na
     sig_tp_hit := false
     sig_sl_hit := false
+    prev_tp_dist := 0.0
 
 // TP hit detection (fire once per trade)
 sig_tp_just_hit = false
