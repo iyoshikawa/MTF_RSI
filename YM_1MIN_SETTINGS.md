@@ -1,5 +1,5 @@
 # YM/MYM 1-Minute Chart Settings Guide
-### MTF RSI v7.7.0 (Signals) / v7.5.0 (Management)
+### MTF RSI v7.8.0 (Signals) / v7.5.0 (Management)
 
 ---
 
@@ -125,7 +125,7 @@ risk. At $400 max pain, you're looking at 5 contracts max on A+.
 4. **TP/SL MODE dashboard**: Real-time recommendation for ATR vs fixed targets
 5. **Grade upgrades fire immediately**: A- → A no longer waits for persistence
 
-### v7.7.0 (Signals)
+### v7.8.0 (Signals)
 1. **TP levels on chart**: Fixed TP crosses plotted alongside SL
 2. **Volume analysis**: Expansion/contraction, spike detection, price divergence
 3. **Split alerts**: Separate LONG/SHORT + TP HIT/SL HIT alerts

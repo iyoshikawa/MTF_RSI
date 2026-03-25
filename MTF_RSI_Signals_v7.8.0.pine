@@ -1,5 +1,5 @@
 //@version=5
-indicator("MTF RSI Signals [v7.7.0]", overlay=true, max_labels_count=500)
+indicator("MTF RSI Signals [v7.8.0]", overlay=true, max_labels_count=500)
 
 // Clean ticker for request.security (avoids session/extended hours issues)
 cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)

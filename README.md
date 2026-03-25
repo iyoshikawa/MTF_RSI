@@ -14,7 +14,7 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 
 | File | Description |
 |------|-------------|
-| `MTF_RSI_Signals_v7.7.0.pine` | Signals — grades, TP/SL, volume analysis, divergence, Renko support |
+| `MTF_RSI_Signals_v7.8.0.pine` | Signals — grades, TP/SL, volume analysis, divergence, Renko support |
 | `MTF_RSI_Management_v7.5.0.pine` | Management — trade lifecycle, sizing, runners, pyramids |
 | `EMA_HighLowMedian_Ribbon.pine` | Standalone EMA High/Low/Median ribbon overlay |
 | `Session_Range_vs_ATR_Filter.pine` | Standalone session range vs ATR filter |
@@ -54,7 +54,7 @@ See `Indicator_Guide.md` for the full grading system with exact requirements per
 
 ## TP/SL Reference — 1-Minute Chart
 
-All values in the code as of **v7.7.0 Signals / v7.5.0 Management**.
+All values in the code as of **v7.8.0 Signals / v7.5.0 Management**.
 
 ### At a Glance — All Instruments
 
@@ -294,7 +294,7 @@ When running on a 1-minute chart, the multi-timeframe RSI checks these higher ti
 | Moderate | 5m | 15m | 30m | Medium | Session-based NY trading |
 | Aggressive | 5m | 9m | 15m | Fastest | Strong trending sessions (use anti-chop filters) |
 
-MTF Speed settings available in v7.7.0. Conservative is recommended for most 1-min trading.
+MTF Speed settings available in v7.8.0. Conservative is recommended for most 1-min trading.
 
 ---
 
@@ -315,7 +315,7 @@ MTF Speed settings available in v7.7.0. Conservative is recommended for most 1-m
 
 | Version | Indicator | Changes |
 |---------|-----------|---------|
-| v7.7.0 | Signals | Volume analysis (expansion/spikes/divergence), TP/SL levels, split alerts (long/short + TP/SL hit), Renko/Range chart support, grade upgrade instant-fire, plot optimization (plotshape→label.new), all colors configurable |
+| v7.8.0 | Signals | ATR SL mode (Fixed/ATR/Wider of Both), median TP on grade upgrades, locked SL/TP plots (no more per-bar recalculation), volume analysis, split alerts, Renko support, grade upgrade instant-fire, all colors configurable |
 | v7.5.0 | Management | Trade lifecycle (TP1/TP2/breakeven/P&L), contract size selector (Micro/Mini), per-grade SL sizing with cap, TP/SL MODE dashboard rows, grade upgrade instant-fire, CL dollar_per_point fix |
 | v7.5.3 | Signals | RSI Speed presets, MTF Speed presets, RSI Divergence detection, YM SL fix, NQ SL fix |
 | v7.12.0 | Signals | Backtested presets via coordinate descent (ES-specific SL, tuned NQ/CL/YM) |

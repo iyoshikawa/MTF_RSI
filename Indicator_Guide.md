@@ -1,6 +1,6 @@
 # MTF RSI Indicator Guide
 
-**Signals v7.7.0 · Management v7.5.0**
+**Signals v7.8.0 · Management v7.5.0**
 
 Complete reference for every signal, marker, dashboard element, and setting in the MTF RSI Signal Suite.
 
@@ -108,7 +108,7 @@ A volume spike is defined as the current bar's volume exceeding the mean + N sta
 | **Cross below price** (long) or **above** (short) | Red | Fixed stop loss level for the current grade. Distance varies by grade and instrument. |
 | **Cross above price** (long) or **below** (short) | Cyan | Fixed take profit level for the current grade. First target for partials. |
 
-These levels are plotted continuously while a grade is active. They recalculate each bar relative to the current close (chart reference), while the alert system locks them at entry price (trade tracking).
+These levels lock at entry price when a signal fires and remain as flat horizontal lines until hit or the grade resets. SL distance depends on the SL Mode setting (Fixed, ATR, or Wider of Both). On grade upgrades, TP adjusts to the median of the old and new grade's target.
 
 ### Management Indicator — Chart Lines
 
@@ -283,7 +283,7 @@ The RSI direction on each timeframe is determined by the double RSI system: if t
 ### Entry (Signals Indicator)
 
 1. Grade signal fires (label appears on chart)
-2. SL and TP crosses plotted at fixed distances from current price
+2. SL and TP lines lock at entry price (SL uses Fixed, ATR, or Wider of Both mode)
 3. Entry price and levels locked internally for alert tracking
 4. Dashboard shows grade, direction, signal age
 
@@ -427,7 +427,7 @@ A dropdown in Management settings: "Micro" or "Mini/Standard". Combined with the
 
 ## Renko & Non-Standard Chart Support
 
-As of v7.7.0, the Signals indicator auto-detects chart type and adapts behavior.
+As of v7.8.0, the Signals indicator auto-detects chart type and adapts behavior.
 
 ### Auto-Detection
 
@@ -451,7 +451,7 @@ Session boundaries are approximate. A brick may have started before the session 
 
 ---
 
-## Settings Reference — Signals v7.7.0
+## Settings Reference — Signals v7.8.0
 
 ### Quick Instrument Presets
 - **Instrument**: DEFAULT, CL, NQ/MNQ, ES/MES, YM/MYM
@@ -523,7 +523,10 @@ Session boundaries are approximate. A brick may have started before the session 
 - **Color Candles by Grade**: Toggle candle coloring
 - **Heikin Ashi Outline**: Grade body + HA direction wicks
 - **HA Colors**: Bull/bear outline colors
-- **Show Stop/TP Levels**: Toggle SL and TP crosses
+- **Show Stop/TP Levels**: Toggle SL and TP lines on chart
+- **SL Mode**: Fixed / ATR / Wider of Both. Fixed = preset point values. ATR = ATR × multiplier. Wider of Both (default) = uses whichever is larger, giving a fixed floor in normal vol and ATR room in high vol.
+- **ATR SL Multiplier**: Multiplier for ATR SL (default 1.5). Only used in ATR and Wider of Both modes.
+- **Note**: On grade upgrades, TP adjusts to the median of old and new grade's target distance. This avoids stretching for a target you're already partway to.
 - **HA Exit Warning**: Toggle + bars to confirm flip
 - **Ribbon Colors**: Bull/bear/consolidation + transparency
 - **Ribbon Visible Hours**: Independent time window for ribbon
@@ -599,7 +602,7 @@ All core settings (preset, RSI, stochastic, ADX, volume, session) must be identi
 
 ## Alert Reference
 
-### Signals v7.7.0 — 16 Alerts
+### Signals v7.8.0 — 16 Alerts
 
 | Alert | Fires When |
 |-------|------------|
