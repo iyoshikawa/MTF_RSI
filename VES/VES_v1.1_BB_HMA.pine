@@ -258,28 +258,43 @@ vol_bottom_raw = flip_to_bull and has_vol and (vol_z >= z_eff_long or (wave_bear
 vol_peak_raw = flip_to_bear and has_vol and (vol_z >= z_eff_short or (wave_bull_climax and vol_z >= z_eff_short * 0.6))
 
 // --- DEBUG: Fire on every Renko flip to test if volume/BB is blocking ---
-debug_mode = input.bool(true, "🔧 DEBUG: Bypass all gates (flip only)", group="🔧 Debug",
-     tooltip="When ON, signals fire on every Renko direction flip. Use to verify signals display correctly, then turn OFF to re-enable volume + BB gates.")
+debug_mode = input.bool(false, "🔧 DEBUG: Bypass all gates (flip only)", group="🔧 Debug",
+     tooltip="When ON, signals fire on every Renko direction flip. Use to verify signals display correctly, then turn OFF to re-enable gates.")
+debug_require_vol = input.bool(true, "🔧 Require Volume Z-Score", group="🔧 Debug",
+     tooltip="Toggle volume Z-score gate independently. Turn OFF to see if volume is the blocker.")
+debug_require_bb  = input.bool(true, "🔧 Require BB Outside Bands", group="🔧 Debug",
+     tooltip="Toggle BB band-edge gate independently. Turn OFF to see if BB is the blocker.")
+debug_require_trend = input.bool(true, "🔧 Require Trend Filter", group="🔧 Debug",
+     tooltip="Toggle soft trend filter independently.")
+debug_require_session = input.bool(true, "🔧 Require Session Filter", group="🔧 Debug",
+     tooltip="Toggle session time filter independently.")
 
 // --- Confluence Gates ---
-// BB: REQUIRED — price must have been at or beyond the band edge within last 2 bars
-// HMA: OPTIONAL — dashboard info only, does not gate entries
+// BB: price must have been at or beyond the band edge within last 2 bars
 bb_ok_long  = bb_ok_long_recent
 bb_ok_short = bb_ok_short_recent
 
-confluence_long  = bb_ok_long
-confluence_short = bb_ok_short
+// --- Build final gate chain with individual toggles ---
+// Volume gate: flip + Z-score (or wave climax)
+vol_gate_long  = not debug_require_vol or (has_vol and (vol_z >= z_eff_long or (wave_bear_climax and vol_z >= z_eff_long * 0.6)))
+vol_gate_short = not debug_require_vol or (has_vol and (vol_z >= z_eff_short or (wave_bull_climax and vol_z >= z_eff_short * 0.6)))
 
-// --- Soft Trend Filter ---
-// Block: don't buy into a strong waterfall, don't short into a strong ramp
-trend_ok_long  = not use_trend_filter or not strong_downtrend
-trend_ok_short = not use_trend_filter or not strong_uptrend
+// BB gate
+bb_gate_long  = not debug_require_bb or bb_ok_long
+bb_gate_short = not debug_require_bb or bb_ok_short
+
+// Trend gate
+trend_gate_long  = not debug_require_trend or not use_trend_filter or not strong_downtrend
+trend_gate_short = not debug_require_trend or not use_trend_filter or not strong_uptrend
+
+// Session gate
+session_gate = not debug_require_session or in_session
 
 // --- Final Signals ---
-// Debug mode: fire on every Renko flip regardless of volume/BB/trend
-// Normal mode: full gate chain — volume Z + BB outside bands + trend filter
-vol_bottom = debug_mode ? (flip_to_bull and in_session) : (vol_bottom_raw and confluence_long  and trend_ok_long  and in_session)
-vol_peak   = debug_mode ? (flip_to_bear and in_session) : (vol_peak_raw   and confluence_short and trend_ok_short and in_session)
+// Debug mode: fire on every Renko flip
+// Normal mode: each gate independently toggleable
+vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (flip_to_bull and vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate)
+vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (flip_to_bear and vol_gate_short and bb_gate_short and trend_gate_short and session_gate)
 
 // Display Z-score for the signal (used in labels)
 signal_z = vol_bottom ? vol_z : vol_peak ? vol_z : 0.0
@@ -589,16 +604,19 @@ if show_dash and barstate.islast
 
     // Row 14: Debug Gate Diagnostic
     if debug_mode
-        flip_ok = flip_to_bull or flip_to_bear
-        vol_ok = has_vol and vol_z >= z_threshold
-        dbg_flip = flip_ok ? "✓" : "✗"
-        dbg_vol  = has_vol ? (vol_ok ? "✓Z:" + str.tostring(vol_z, "0.1") : "✗Z:" + str.tostring(vol_z, "0.1")) : "✗NOVOL"
-        dbg_bb   = (bb_ok_long_recent or bb_ok_short_recent) ? "✓" : "✗"
-        dbg_trend = (trend_ok_long or trend_ok_short) ? "✓" : "✗"
-        dbg_sess = in_session ? "✓" : "✗"
         table.cell(dash, 0, 14, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 1, 14, "FLIP:" + dbg_flip + " VOL:" + dbg_vol, bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
-        table.cell(dash, 2, 14, "BB:" + dbg_bb + " TRD:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
+        table.cell(dash, 1, 14, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 2, 14, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
+    else
+        flip_ok = flip_to_bull or flip_to_bear
+        dbg_flip = flip_ok ? "✓" : "·"
+        dbg_vol  = not debug_require_vol ? "OFF" : (has_vol ? (vol_z >= z_threshold ? "✓" + str.tostring(vol_z, "0.1") : "✗" + str.tostring(vol_z, "0.1")) : "✗NOVOL")
+        dbg_bb   = not debug_require_bb ? "OFF" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
+        dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
+        dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
+        table.cell(dash, 0, 14, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 14, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 14, "TR:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
