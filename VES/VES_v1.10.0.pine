@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.9.0]
+// Volume Exhaustion Strategy [VES v1.10.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.9.0]",
+strategy("Volume Exhaustion Strategy [VES v1.10.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -333,6 +333,46 @@ vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and 
 signal_z = vol_bottom ? vol_z : vol_peak ? vol_z : 0.0
 
 // ============================================================================
+// CONFLUENCE COUNTER (6 factors)
+// ============================================================================
+// Counts how many independent confluences agree with a long or short setup.
+// Displayed on dashboard and labels. Does NOT gate entries — just information.
+
+// 1. Renko flip (always required, always 1 if signal fires)
+conf_flip_long  = flip_to_bull ? 1 : 0
+conf_flip_short = flip_to_bear ? 1 : 0
+
+// 2. Volume exhaustion (method-dependent)
+conf_vol_long  = vol_bottom_raw ? 1 : 0
+conf_vol_short = vol_peak_raw   ? 1 : 0
+
+// 3. BB outside bands (within 2 bars)
+conf_bb_long  = bb_ok_long_recent  ? 1 : 0
+conf_bb_short = bb_ok_short_recent ? 1 : 0
+
+// 4. Session window active
+conf_session = in_session_raw ? 1 : 0
+
+// 5. HMA position (price below for long, above for short)
+conf_hma_long  = hma_bear ? 1 : 0
+conf_hma_short = hma_bull ? 1 : 0
+
+// 6. EMA alignment (9 > 15 > 34 for counter-trend longs at bottom, inverted for shorts)
+// For mean-reversion: EMA stacked AGAINST you = you're buying a dip in an uptrend (strong)
+// or stacked WITH the reversal direction = trend is already turning
+conf_ema_long  = ema_stacked_bull ? 1 : 0  // EMAs bullish = buying dip in uptrend
+conf_ema_short = ema_stacked_bear ? 1 : 0  // EMAs bearish = selling rally in downtrend
+
+// Total confluence count
+conf_total_long  = conf_flip_long  + conf_vol_long  + conf_bb_long  + conf_session + conf_hma_long  + conf_ema_long
+conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_session + conf_hma_short + conf_ema_short
+conf_total = math.max(conf_total_long, conf_total_short)
+conf_max = 6
+
+// Exhaustion label text (method-specific value)
+exhaust_val_text = use_wave ? (flip_to_bull ? (wave_bear_exhausted ? "WvDecl" : wave_bear_climax ? "WvClmx" : "") : flip_to_bear ? (wave_bull_exhausted ? "WvDecl" : wave_bull_climax ? "WvClmx" : "") : "") : use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
+
+// ============================================================================
 // POSITION MANAGEMENT
 // ============================================================================
 net_pos   = strategy.position_size
@@ -585,19 +625,19 @@ barcolor(candle_col)
 // --- VOL PEAK / VOL BOTTOM Labels ---
 if show_labels and vol_bottom
     units = is_short ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
-    lbl_text = "▲ VOL\nBOTTOM"
+    lbl_text = "VEB " + exhaust_val_text + "\n" + str.tostring(conf_total_long) + "/" + str.tostring(conf_max)
     label.new(bar_index, low, lbl_text,
          style=label.style_label_up, color=#00E676, textcolor=color.white,
-         size=size.normal, yloc=yloc.belowbar,
-         tooltip="VEB Z:" + str.tostring(vol_z, "0.0") + " D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##"))
+         size=size.small, yloc=yloc.belowbar,
+         tooltip="VOL BOTTOM — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\nFlip:✓ Vol:" + (conf_vol_long > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_long > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long > 0 ? "✓" : "✗"))
 
 if show_labels and vol_peak
     units = is_long ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
-    lbl_text = "▼ VOL\nPEAK"
+    lbl_text = "VEP " + exhaust_val_text + "\n" + str.tostring(conf_total_short) + "/" + str.tostring(conf_max)
     label.new(bar_index, high, lbl_text,
          style=label.style_label_down, color=#FF6D00, textcolor=color.white,
-         size=size.normal, yloc=yloc.abovebar,
-         tooltip="VEP Z:" + str.tostring(vol_z, "0.0") + " D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##"))
+         size=size.small, yloc=yloc.abovebar,
+         tooltip="VOL PEAK — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\nFlip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗"))
 
 // --- Yellow Dots on EMA Wick Touches ---
 wick_ema = wick_dot_ema == "EMA 9" ? ema_9 : wick_dot_ema == "EMA 15" ? ema_15 : wick_dot_ema == "EMA 233" ? ema_233 : ema_34
@@ -639,7 +679,7 @@ dash_position = switch dash_pos
     "Bottom Left"  => position.bottom_left
     => position.top_right
 
-var table dash = table.new(dash_position, 3, 16, border_width=1,
+var table dash = table.new(dash_position, 3, 17, border_width=1,
      frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 85))
 
 if show_dash and barstate.islast
@@ -682,7 +722,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.9.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.10.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
@@ -735,58 +775,68 @@ if show_dash and barstate.islast
     table.cell(dash, 1, 7, hma_text, bgcolor=hma_conf_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 7, hma_slope_text, bgcolor=bg_row, text_color=hma_rising ? color.green : hma_falling ? color.red : color.gray, text_size=size.small)
 
-    // Row 8: Win Rate
+    // Row 8: Confluence Counter
+    conf_display = math.max(conf_total_long, conf_total_short)
+    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "H" : "·") + (conf_ema_long > 0 ? "E" : "·")
+    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "H" : "·") + (conf_ema_short > 0 ? "E" : "·")
+    conf_col = conf_display >= 5 ? color.new(color.green, 40) : conf_display >= 3 ? color.new(color.yellow, 50) : color.new(color.gray, 70)
+    conf_dir_text = conf_total_long > conf_total_short ? "L:" + conf_detail_l : conf_total_short > conf_total_long ? "S:" + conf_detail_s : "L:" + conf_detail_l
+    table.cell(dash, 0, 8, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 8, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 8, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+
+    // Row 9: Win Rate
     wr_col = win_rate >= 60 ? color.new(color.green, 50) : win_rate >= 50 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 8, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 8, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 8, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 9, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 9, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 9, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 9: Net P&L (All-time)
+    // Row 10: Net P&L (All-time)
     pnl_col = net_pnl >= 0 ? color.new(color.green, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 9, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 9, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 9, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
+    table.cell(dash, 0, 10, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 10, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 10, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
 
-    // Row 10: Profit Factor
+    // Row 11: Profit Factor
     pf_col = pf >= 2.0 ? color.new(color.green, 50) : pf >= 1.5 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 10, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 10, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 10, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 11, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 11, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 11, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 11: Expectancy
+    // Row 12: Expectancy
     exp_col = expectancy > 0 ? color.new(color.green, 60) : color.new(color.red, 60)
-    table.cell(dash, 0, 11, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 11, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 11, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 12, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 12, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 12, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 12: Avg W/L
-    table.cell(dash, 0, 12, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 12, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 12, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
+    // Row 13: Avg W/L
+    table.cell(dash, 0, 13, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 13, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 13, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
 
-    // Row 13: Trend
+    // Row 14: Trend
     trend_text = strong_uptrend ? "STRONG ▲" : strong_downtrend ? "STRONG ▼" : ema_stacked_bull ? "BULL" : ema_stacked_bear ? "BEAR" : "MIXED"
     trend_col  = strong_uptrend ? color.new(color.green, 50) : strong_downtrend ? color.new(color.red, 50) : ema_stacked_bull ? color.new(color.green, 70) : ema_stacked_bear ? color.new(color.red, 70) : color.new(color.gray, 70)
-    table.cell(dash, 0, 13, "Trend", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 13, trend_text, bgcolor=trend_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 13, "", bgcolor=bg_row)
+    table.cell(dash, 0, 14, "Trend", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 14, trend_text, bgcolor=trend_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 14, "", bgcolor=bg_row)
 
-    // Row 14: Volume Method + Stats
+    // Row 15: Volume Method + Stats
     wave_info = use_wave ? "W:" + str.tostring(wave_cum_vol, "#,##0") + " prev:" + str.tostring(prev_bear_wave, "#,##0") : ""
     roc_info  = use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : ""
     z_info    = use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
     method_info = use_wave ? wave_info : use_roc ? roc_info : use_z ? z_info : "—"
     vol_pass = vol_bottom_raw or vol_peak_raw
     vol_col  = vol_pass ? color.new(color.green, 50) : color.new(color.gray, 70)
-    table.cell(dash, 0, 14, "Vol " + vol_method_label, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 14, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 14, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 15, "Vol " + vol_method_label, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 15, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 15, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 15: Debug Gate Diagnostic
+    // Row 16: Debug Gate Diagnostic
     if debug_mode
-        table.cell(dash, 0, 15, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 1, 15, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 2, 15, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
+        table.cell(dash, 0, 16, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 1, 16, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 2, 16, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
     else
         flip_ok = flip_to_bull or flip_to_bear
         dbg_flip = flip_ok ? "✓" : "·"
@@ -794,9 +844,9 @@ if show_dash and barstate.islast
         dbg_bb   = not debug_require_bb ? "OFF" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
         dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
-        table.cell(dash, 0, 15, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 1, 15, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 2, 15, "TR:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 0, 16, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 16, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 16, "TR:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
