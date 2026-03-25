@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.6.0]
+// Volume Exhaustion Strategy [VES v1.7.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.6.0]",
+strategy("Volume Exhaustion Strategy [VES v1.7.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -38,6 +38,9 @@ is_hg = preset == "🟤 HG (Copper)"
 grp_tp = "💰 TP & Trail"
 tp_pts_in    = input.float(40.0, "Take Profit (points)", group=grp_tp, tooltip="Distance in price points from entry to TP. Each position exits independently when its TP is hit.")
 trail_pts_in = input.float(40.0, "Trailing Stop (points)", group=grp_tp, tooltip="Trail distance in points from the best price reached. Activates after 1 tick in favor.")
+be_enable    = input.bool(true, "Enable Breakeven Stop", group=grp_tp, tooltip="Once price moves N Renko bricks in favor, the stop is moved to entry + offset ticks. Protects capital on trades that initially work then reverse.")
+be_boxes     = input.int(3, "Bricks to Trigger BE", group=grp_tp, minval=1, maxval=20, tooltip="Number of Renko bricks price must move in your favor before the breakeven stop activates. 3 = default.")
+be_ticks     = input.int(3, "BE Offset (ticks profit)", group=grp_tp, minval=0, maxval=20, tooltip="Once BE triggers, stop is placed at entry + this many ticks. 0 = true breakeven. 3 = lock in 3 ticks profit.")
 
 // Preset overrides for TP/Trail
 tp_pts    = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : tp_pts_in
@@ -344,6 +347,12 @@ var int   pos_dir      = 0      // 1=long, -1=short, 0=flat
 var float highest_since = na
 var float lowest_since  = na
 
+// --- Breakeven Stop Tracking (per position) ---
+var bool  be1_triggered = false
+var bool  be2_triggered = false
+be_offset_pts = be_ticks * syminfo.mintick
+be_dist_pts   = is_renko ? be_boxes * brick_size : be_boxes * syminfo.mintick * 8  // fallback for non-Renko
+
 // Reset on flat
 if is_flat and not is_flat[1]
     entry1_price := na
@@ -351,11 +360,33 @@ if is_flat and not is_flat[1]
     pos_dir      := 0
     highest_since := na
     lowest_since  := na
+    be1_triggered := false
+    be2_triggered := false
 
 // Track high/low water marks for trail display
 if not is_flat
     highest_since := na(highest_since) ? high : math.max(highest_since, high)
     lowest_since  := na(lowest_since)  ? low  : math.min(lowest_since, low)
+
+// --- Breakeven Trigger Detection ---
+// Once price moves be_boxes bricks in favor, lock in BE + offset
+if be_enable and not na(entry1_price) and not be1_triggered
+    if is_long  and high >= entry1_price + be_dist_pts
+        be1_triggered := true
+    if is_short and low  <= entry1_price - be_dist_pts
+        be1_triggered := true
+
+if be_enable and not na(entry2_price) and not be2_triggered
+    if is_long  and high >= entry2_price + be_dist_pts
+        be2_triggered := true
+    if is_short and low  <= entry2_price - be_dist_pts
+        be2_triggered := true
+
+// BE stop price levels (na when not triggered — strategy.exit ignores na stops)
+be_stop_l1 = be1_triggered and is_long  ? entry1_price + be_offset_pts : na
+be_stop_l2 = be2_triggered and is_long  ? entry2_price + be_offset_pts : na
+be_stop_s1 = be1_triggered and is_short ? entry1_price - be_offset_pts : na
+be_stop_s2 = be2_triggered and is_short ? entry2_price - be_offset_pts : na
 
 // ============================================================================
 // DAILY P&L TRACKING
@@ -438,15 +469,20 @@ if vol_bottom and daily_ok
         pos_dir      := 1
         highest_since := high
         lowest_since  := low
+        be1_triggered := false
+        be2_triggered := false
     else if is_flat
         strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2")
         entry1_price := close
         pos_dir      := 1
         highest_since := high
         lowest_since  := low
+        be1_triggered := false
+        be2_triggered := false
     else if is_long and num_units < 2
         strategy.entry("L2", strategy.long, qty=1, comment="VEB D:2/2")
         entry2_price := close
+        be2_triggered := false
 
 // --- VOL PEAK → SHORT ---
 if vol_peak and daily_ok
@@ -459,33 +495,39 @@ if vol_peak and daily_ok
         pos_dir      := -1
         highest_since := high
         lowest_since  := low
+        be1_triggered := false
+        be2_triggered := false
     else if is_flat
         strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2")
         entry1_price := close
         pos_dir      := -1
         highest_since := high
         lowest_since  := low
+        be1_triggered := false
+        be2_triggered := false
     else if is_short and num_units < 2
         strategy.entry("S2", strategy.short, qty=1, comment="VEP D:2/2")
         entry2_price := close
+        be2_triggered := false
 
 // ============================================================================
-// EXITS — TP + Trailing Stop per position
+// EXITS — TP + Trailing Stop + Breakeven per position
 // ============================================================================
-// Each position independently: first of TP or Trail closes that position.
-// trail_points=1 → trailing stop activates after just 1 tick in favor (essentially immediate)
+// Each position independently: first of TP, Trail, or BE stop closes that position.
+// BE stop activates after N bricks in favor, then locks in entry + offset ticks.
+// Before BE triggers, only TP and Trail manage the exit.
 
 if is_long
     strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
+         stop=be_stop_l1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
     strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
+         stop=be_stop_l2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
 
 if is_short
     strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
+         stop=be_stop_s1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
     strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss="TRL")
+         stop=be_stop_s2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
 
 // --- Flatten outside session (optional) ---
 if flatten_outside and session_just_closed and not is_flat
@@ -554,6 +596,12 @@ tp_level_short = is_short and not na(entry1_price) ? entry1_price - tp_pts : na
 plot(tp_level_long,  "TP (Long)",  color=color.new(#00BFFF, 40), linewidth=1, style=plot.style_linebr)
 plot(tp_level_short, "TP (Short)", color=color.new(#00BFFF, 40), linewidth=1, style=plot.style_linebr)
 
+// --- Breakeven Level Display ---
+be_level_long  = be_enable and be1_triggered and is_long  ? entry1_price + be_offset_pts : na
+be_level_short = be_enable and be1_triggered and is_short ? entry1_price - be_offset_pts : na
+plot(be_level_long,  "BE (Long)",  color=color.new(color.yellow, 30), linewidth=1, style=plot.style_linebr)
+plot(be_level_short, "BE (Short)", color=color.new(color.yellow, 30), linewidth=1, style=plot.style_linebr)
+
 // ============================================================================
 // PERFORMANCE DASHBOARD
 // ============================================================================
@@ -607,7 +655,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.6.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.7.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
