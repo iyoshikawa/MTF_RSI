@@ -966,19 +966,15 @@ if div_bear_cond
 if div_bull_cond
     label.new(bar_index, low, "DIV▲", style=label.style_triangleup, color=div_bull_color, textcolor=div_bull_color, size=div_msize, yloc=yloc.belowbar)
 
-// Stop Loss Levels (merged long/short into single plot)
-stop_level_long = is_a_plus_long ? close - sl_aplus : is_a_long ? close - sl_a : is_a_minus_long ? close - sl_aminus : is_b_plus_long ? close - sl_bplus : is_b_long ? close - sl_b : na
-stop_level_short = is_a_plus_short ? close + sl_aplus : is_a_short ? close + sl_a : is_a_minus_short ? close + sl_aminus : is_b_plus_short ? close + sl_bplus : is_b_short ? close + sl_b : na
-stop_level = showStopLevels and tradeAllowed ? (is_long_setup ? stop_level_long : is_short_setup ? stop_level_short : na) : na
-stop_color = is_long_setup ? color.new(stop_long_color, 30) : color.new(stop_short_color, 30)
-plot(stop_level, "Stop Level", color=stop_color, linewidth=stop_line_width, style=plot.style_cross)
+// Stop Loss Level — locked at entry, not recalculated per bar
+stop_show = showStopLevels and tradeAllowed and not na(sig_sl_level) and sig_entry_dir != 0 and not sig_sl_hit
+stop_color = sig_entry_dir == 1 ? color.new(stop_long_color, 30) : color.new(stop_short_color, 30)
+plot(stop_show ? sig_sl_level : na, "Stop Level", color=stop_color, linewidth=stop_line_width, style=plot.style_linebr)
 
-// Take Profit Levels (merged long/short into single plot)
-tp_level_long = is_a_plus_long ? close + tp_aplus : is_a_long ? close + tp_a : is_a_minus_long ? close + tp_aminus : is_b_plus_long ? close + tp_bplus : is_b_long ? close + tp_b : na
-tp_level_short = is_a_plus_short ? close - tp_aplus : is_a_short ? close - tp_a : is_a_minus_short ? close - tp_aminus : is_b_plus_short ? close - tp_bplus : is_b_short ? close - tp_b : na
-tp_level = showTPLevels and tradeAllowed ? (is_long_setup ? tp_level_long : is_short_setup ? tp_level_short : na) : na
-tp_color = is_long_setup ? color.new(tp_long_color, 20) : color.new(tp_short_color, 20)
-plot(tp_level, "TP Level", color=tp_color, linewidth=tp_line_width, style=plot.style_cross)
+// Take Profit Level — locked at entry, not recalculated per bar
+tp_show = showTPLevels and tradeAllowed and not na(sig_tp_level) and sig_entry_dir != 0 and not sig_tp_hit
+tp_color = sig_entry_dir == 1 ? color.new(tp_long_color, 20) : color.new(tp_short_color, 20)
+plot(tp_show ? sig_tp_level : na, "TP Level", color=tp_color, linewidth=tp_line_width, style=plot.style_linebr)
 
 // Volume Spike Markers (using label.new — doesn't count toward 64 plot limit)
 vol_spike_confirm_color = color.new(vol_spike_confirm_col, 0)
