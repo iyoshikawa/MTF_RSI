@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.8.0]
+// Volume Exhaustion Strategy [VES v1.9.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.8.0]",
+strategy("Volume Exhaustion Strategy [VES v1.9.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -87,6 +87,11 @@ session_str = input.string("0930-1145,1330-1600:23456", "Session Config", group=
      tooltip="Format: TIME1,TIME2:DAYS\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri 7=Sat\nExample: 0930-1145,1330-1600:23456")
 flatten_outside = input.bool(false, "Flatten Positions Outside Session", group=grp_session,
      tooltip="If enabled, all open positions are closed when the session window ends. If disabled, positions ride until TP/Trail/Opposite signal.")
+
+grp_ql = "🔗 QuantLynk Webhook"
+ql_enabled  = input.bool(false, "Enable QuantLynk Alerts", group=grp_ql, tooltip="When enabled, all strategy.entry/exit/close calls include QuantLynk-formatted alert_message payloads. You must also set your TradingView alert message to: {{strategy.order.alert_message}}")
+ql_user_id  = input.string("", "QuantLynk User ID", group=grp_ql, tooltip="Your qv_user_id from QuantLynk. Find it in the webhook generator on the QuantLynk dashboard.")
+ql_alert_id = input.string("", "QuantLynk Alert ID", group=grp_ql, tooltip="Your alert_id from QuantLynk. Each alert target has a unique ID.")
 
 grp_vis = "🎨 Visuals"
 color_candles   = input.bool(true, "Color Candles by Direction", group=grp_vis)
@@ -454,15 +459,27 @@ if new_close
 // Daily DD limit hit — flatten and block new entries
 if daily_dd_enabled and daily_pnl <= -daily_dd_limit and not daily_dd_hit
     daily_dd_hit := true
-    strategy.close_all(comment="DAILY DD LIMIT")
+    strategy.close_all(comment="DAILY DD LIMIT", alert_message=ql_flatten)
 
 // Daily Profit Target hit — flatten and lock in the day
 if daily_pt_enabled and daily_pnl >= daily_pt_limit and not daily_pt_hit
     daily_pt_hit := true
-    strategy.close_all(comment="DAILY PT HIT")
+    strategy.close_all(comment="DAILY PT HIT", alert_message=ql_flatten)
 
 // Block entries when either daily limit is hit
 daily_ok = not daily_dd_hit and not daily_pt_hit
+
+// ============================================================================
+// QUANTLYNK WEBHOOK PAYLOADS
+// ============================================================================
+// Built once, attached to strategy calls via alert_message parameter.
+// Customer must set TradingView alert message to: {{strategy.order.alert_message}}
+
+ql_buy     = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "buy"}' : ''
+ql_sell    = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "sell"}' : ''
+ql_flatten = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "action": "flatten"}' : ''
+// For exits: use {{strategy.order.action}} which resolves to buy/sell at fire time
+ql_exit    = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "{{strategy.order.action}}"}' : ''
 
 // ============================================================================
 // ENTRIES
@@ -472,8 +489,8 @@ daily_ok = not daily_dd_hit and not daily_pt_hit
 if vol_bottom and daily_ok
     if is_short
         // Flatten shorts, then enter long
-        strategy.close_all(comment="FLATTEN→L")
-        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2")
+        strategy.close_all(comment="FLATTEN→L", alert_message=ql_flatten)
+        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2", alert_message=ql_buy)
         entry1_price := close
         entry2_price := na
         pos_dir      := 1
@@ -482,7 +499,7 @@ if vol_bottom and daily_ok
         be1_triggered := false
         be2_triggered := false
     else if is_flat
-        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2")
+        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2", alert_message=ql_buy)
         entry1_price := close
         pos_dir      := 1
         highest_since := high
@@ -490,7 +507,7 @@ if vol_bottom and daily_ok
         be1_triggered := false
         be2_triggered := false
     else if is_long and num_units < 2
-        strategy.entry("L2", strategy.long, qty=1, comment="VEB D:2/2")
+        strategy.entry("L2", strategy.long, qty=1, comment="VEB D:2/2", alert_message=ql_buy)
         entry2_price := close
         be2_triggered := false
 
@@ -498,8 +515,8 @@ if vol_bottom and daily_ok
 if vol_peak and daily_ok
     if is_long
         // Flatten longs, then enter short
-        strategy.close_all(comment="FLATTEN→S")
-        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2")
+        strategy.close_all(comment="FLATTEN→S", alert_message=ql_flatten)
+        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2", alert_message=ql_sell)
         entry1_price := close
         entry2_price := na
         pos_dir      := -1
@@ -508,7 +525,7 @@ if vol_peak and daily_ok
         be1_triggered := false
         be2_triggered := false
     else if is_flat
-        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2")
+        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2", alert_message=ql_sell)
         entry1_price := close
         pos_dir      := -1
         highest_since := high
@@ -516,7 +533,7 @@ if vol_peak and daily_ok
         be1_triggered := false
         be2_triggered := false
     else if is_short and num_units < 2
-        strategy.entry("S2", strategy.short, qty=1, comment="VEP D:2/2")
+        strategy.entry("S2", strategy.short, qty=1, comment="VEP D:2/2", alert_message=ql_sell)
         entry2_price := close
         be2_triggered := false
 
@@ -529,19 +546,19 @@ if vol_peak and daily_ok
 
 if is_long
     strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         stop=be_stop_l1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
+         stop=be_stop_l1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
     strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         stop=be_stop_l2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
+         stop=be_stop_l2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
 
 if is_short
     strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         stop=be_stop_s1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
+         stop=be_stop_s1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
     strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
-         stop=be_stop_s2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL")
+         stop=be_stop_s2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
 
 // --- Flatten outside session (optional) ---
 if flatten_outside and session_just_closed and not is_flat
-    strategy.close_all(comment="SESSION END")
+    strategy.close_all(comment="SESSION END", alert_message=ql_flatten)
 
 // ============================================================================
 // VISUAL ELEMENTS
@@ -665,7 +682,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.8.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.9.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
