@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.7.0]
+// Volume Exhaustion Strategy [VES v1.8.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.7.0]",
+strategy("Volume Exhaustion Strategy [VES v1.8.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -397,7 +397,10 @@ be_stop_s2 = be2_triggered and is_short ? entry2_price - be_offset_pts : na
 
 daily_dd_limit = input.float(3000.0, "Daily DD Limit ($)", group=grp_tp, minval=0, step=100,
      tooltip="Maximum daily drawdown in dollars. If daily P&L drops below this negative amount, all positions are flattened and no new entries until next day. 0 = disabled.")
+daily_pt_limit = input.float(0.0, "Daily Profit Target ($)", group=grp_tp, minval=0, step=100,
+     tooltip="Daily profit target in dollars. Once daily P&L reaches this amount, all positions are flattened and no new entries until next day. Locks in a winning day. 0 = disabled.")
 daily_dd_enabled = daily_dd_limit > 0
+daily_pt_enabled = daily_pt_limit > 0
 
 // New day detection — works on both time-based and Renko charts
 is_new_day = ta.change(time("D")) != 0
@@ -407,6 +410,7 @@ var float daily_pnl          = 0.0
 var float daily_high_equity  = strategy.equity
 var float daily_dd           = 0.0
 var bool  daily_dd_hit       = false
+var bool  daily_pt_hit       = false
 var int   daily_wins         = 0
 var int   daily_losses       = 0
 var int   daily_trades       = 0
@@ -420,6 +424,7 @@ if is_new_day
     daily_pnl           := 0.0
     daily_dd            := 0.0
     daily_dd_hit        := false
+    daily_pt_hit        := false
     daily_wins          := 0
     daily_losses        := 0
     daily_trades        := 0
@@ -451,8 +456,13 @@ if daily_dd_enabled and daily_pnl <= -daily_dd_limit and not daily_dd_hit
     daily_dd_hit := true
     strategy.close_all(comment="DAILY DD LIMIT")
 
-// Block entries when daily DD limit is hit
-daily_ok = not daily_dd_hit
+// Daily Profit Target hit — flatten and lock in the day
+if daily_pt_enabled and daily_pnl >= daily_pt_limit and not daily_pt_hit
+    daily_pt_hit := true
+    strategy.close_all(comment="DAILY PT HIT")
+
+// Block entries when either daily limit is hit
+daily_ok = not daily_dd_hit and not daily_pt_hit
 
 // ============================================================================
 // ENTRIES
@@ -655,7 +665,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.7.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.8.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
@@ -682,13 +692,14 @@ if show_dash and barstate.islast
     table.cell(dash, 2, 4, "", bgcolor=bg_row)
 
     // Row 5: Daily P&L
-    dpnl_col = daily_dd_hit ? color.new(#FF0000, 30) : daily_pnl >= 0 ? color.new(color.green, 50) : daily_pnl > -daily_dd_limit * 0.5 ? color.new(color.orange, 50) : color.new(color.red, 50)
+    dpnl_col = daily_dd_hit ? color.new(#FF0000, 30) : daily_pt_hit ? color.new(#00FF00, 30) : daily_pnl >= 0 ? color.new(color.green, 50) : daily_pnl > -daily_dd_limit * 0.5 ? color.new(color.orange, 50) : color.new(color.red, 50)
     dpnl_text = "$" + str.tostring(daily_pnl, "#,##0")
-    dpnl_dd_text = daily_dd_enabled ? "Max:$" + str.tostring(daily_dd_limit, "#,##0") : ""
+    dpnl_status = daily_dd_hit ? " ⛔ DD LIMIT" : daily_pt_hit ? " 🎯 TARGET HIT" : ""
+    dpnl_limits = (daily_dd_enabled ? "-$" + str.tostring(daily_dd_limit, "#,##0") : "") + (daily_dd_enabled and daily_pt_enabled ? " / " : "") + (daily_pt_enabled ? "+$" + str.tostring(daily_pt_limit, "#,##0") : "")
     dpnl_trades_text = str.tostring(daily_trades) + "t " + str.tostring(daily_wins) + "W/" + str.tostring(daily_losses) + "L"
     table.cell(dash, 0, 5, "Daily P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 5, daily_dd_hit ? dpnl_text + " ⛔ LIMIT" : dpnl_text, bgcolor=dpnl_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 5, dpnl_trades_text + " " + dpnl_dd_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, dpnl_text + dpnl_status, bgcolor=dpnl_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 5, dpnl_trades_text + " " + dpnl_limits, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
     // Row 6: Bollinger Bands Confluence
     bb_now_text = price_at_lower_bb ? "AT LOWER" : price_at_upper_bb ? "AT UPPER" : price_below_mid ? "LOWER HALF" : price_above_mid ? "UPPER HALF" : "MID"
