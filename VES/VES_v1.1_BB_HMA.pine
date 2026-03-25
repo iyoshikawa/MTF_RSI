@@ -44,16 +44,17 @@ tp_pts    = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : tp_pts_in
 trail_pts = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : trail_pts_in
 
 grp_vol = "📊 Volume Exhaustion Detection"
-z_threshold = input.float(0.3, "Z-Score Threshold", group=grp_vol, minval=0.1, maxval=4.0, step=0.1,
-     tooltip="Minimum volume Z-score to qualify as a volume exhaustion event. Lower = more signals, higher = more selective.\n0.3 = permissive (default — catches most reversals)\n0.5 = moderate\n1.0 = selective\n1.5 = very selective (~7% of bars)")
+vol_method = input.string("Wave Compare", "Detection Method", 
+     options=["Wave Compare", "Volume ROC", "Z-Score", "OFF (flip + BB only)"], group=grp_vol,
+     tooltip="Wave Compare: Compares cumulative volume of the ending wave vs prior same-direction wave. Exhaustion = declining wave volume while price extends. Best for Renko.\n\nVolume ROC: Detects volume acceleration/deceleration. Exhaustion = volume decelerating on the current wave while price pushes further. Good for Renko.\n\nZ-Score: Per-brick volume spike detection. Works poorly on Renko (uniform brick volume). Better on time-based charts.\n\nOFF: No volume gate — fires on every Renko flip that meets BB condition.")
 vol_lookback = input.int(20, "Volume Lookback (bars)", group=grp_vol, minval=5, maxval=200,
-     tooltip="Rolling window for volume mean and standard deviation. 20 = default. Shorter = more responsive to recent volume shifts.")
-cvd_roc_len = input.int(10, "CVD ROC Lookback", group=grp_vol, minval=2, maxval=50,
-     tooltip="Bars to measure CVD rate-of-change over. Used to detect momentum slowing (divergence). 10 = default.")
-cvd_weight = input.float(0.7, "CVD Divergence Z-Discount", group=grp_vol, minval=0.3, maxval=1.0, step=0.05,
-     tooltip="When CVD divergence is detected, the Z-threshold is multiplied by this value, allowing weaker volume spikes to qualify. 0.7 = 30% discount.")
-wave_enable = input.bool(true, "Enable Wave Volume Comparison", group=grp_vol,
-     tooltip="Also checks if the ending wave's cumulative volume exceeded the previous same-direction wave. Additional confirmation layer.")
+     tooltip="Rolling window for volume calculations. 20 = default.")
+wave_decline_pct = input.float(0.0, "Wave Volume Decline % (0=any decline)", group=grp_vol, minval=0.0, maxval=50.0, step=5.0,
+     tooltip="For Wave Compare: minimum % decline in wave volume vs prior same-direction wave to flag exhaustion. 0 = any decline counts. 20 = wave must be 20%+ weaker.")
+vol_roc_len = input.int(5, "ROC Smoothing (bars)", group=grp_vol, minval=2, maxval=20,
+     tooltip="For Volume ROC: SMA smoothing on the volume rate-of-change. Lower = more responsive.")
+z_threshold = input.float(0.3, "Z-Score Threshold", group=grp_vol, minval=0.1, maxval=4.0, step=0.1,
+     tooltip="For Z-Score method only. 0.3 = permissive, 1.5 = selective.")
 
 grp_ema = "📈 Moving Averages (OHLC4)"
 ema_fast_len  = input.int(9,   "EMA Fast",  group=grp_ema)
@@ -188,7 +189,7 @@ hma_ok_long_recent  = hma_bear or hma_bear[1] or hma_bear[2]
 hma_ok_short_recent = hma_bull or hma_bull[1] or hma_bull[2]
 
 // ============================================================================
-// VOLUME EXHAUSTION DETECTION — Hybrid CVD + Z-Score
+// VOLUME EXHAUSTION DETECTION — 3 Methods + OFF
 // ============================================================================
 
 // --- Brick Direction ---
@@ -197,30 +198,16 @@ bear_brick    = close < open
 flip_to_bull  = bull_brick and not bull_brick[1]
 flip_to_bear  = bear_brick and not bear_brick[1]
 
-// --- Volume Z-Score ---
+// --- Base Volume Data ---
 has_vol   = not na(volume) and volume > 0
 vol_safe  = has_vol ? volume : 0.0
-vol_sma   = ta.sma(vol_safe, vol_lookback)
-vol_std   = ta.stdev(vol_safe, vol_lookback)
-vol_z     = vol_std > 0 ? (vol_safe - vol_sma) / vol_std : 0.0
 
-// --- CVD (Cumulative Volume Delta) ---
-// On Renko: bullish brick = buy pressure, bearish brick = sell pressure
-bar_delta = bull_brick ? vol_safe : -vol_safe
-cvd       = ta.cum(bar_delta)
-
-// CVD Rate of Change — detects momentum slowing
-cvd_roc      = cvd - nz(cvd[cvd_roc_len])
-cvd_roc_prev = nz(cvd[1]) - nz(cvd[1 + cvd_roc_len])
-
-// CVD Divergence: momentum in the dominant direction is slowing
-// Sellers exhausting: CVD was falling but rate of decline is lessening
-cvd_bear_exhausting = cvd_roc > cvd_roc_prev and cvd_roc <= 0
-// Buyers exhausting: CVD was rising but rate of increase is lessening
-cvd_bull_exhausting = cvd_roc < cvd_roc_prev and cvd_roc >= 0
-
-// --- Wave Volume Tracking ---
-// Cumulates volume per directional wave (consecutive same-color bricks)
+// ============================================================================
+// METHOD 1: Wave Volume Compare (Weis Wave style)
+// Accumulates volume per directional wave (consecutive same-color bricks).
+// Exhaustion = the ending wave had DECLINING volume vs prior same-direction wave.
+// This means the dominant side pushed but with less conviction — they're tiring out.
+// ============================================================================
 var float wave_cum_vol      = 0.0
 var float prev_bull_wave    = 0.0
 var float prev_bear_wave    = 0.0
@@ -228,40 +215,79 @@ var float prev2_bull_wave   = 0.0
 var float prev2_bear_wave   = 0.0
 
 if flip_to_bull
-    // Bearish wave just ended
+    // Bearish wave just ended — store its cumulative volume
     prev2_bear_wave := prev_bear_wave
     prev_bear_wave  := wave_cum_vol
     wave_cum_vol    := vol_safe
 else if flip_to_bear
-    // Bullish wave just ended
+    // Bullish wave just ended — store its cumulative volume
     prev2_bull_wave := prev_bull_wave
     prev_bull_wave  := wave_cum_vol
     wave_cum_vol    := vol_safe
 else
     wave_cum_vol += vol_safe
 
-// Wave exhaustion: the ending wave had MORE volume than the prior same-direction wave
-// (climactic effort — "they pushed hard but couldn't continue")
-wave_bear_climax = wave_enable and prev_bear_wave > prev2_bear_wave and prev2_bear_wave > 0
-wave_bull_climax = wave_enable and prev_bull_wave > prev2_bull_wave and prev2_bull_wave > 0
+// Wave exhaustion: the ending wave had LESS volume than the prior same-direction wave
+// Bearish wave volume declined → sellers exhausting → VOL BOTTOM (long)
+// Bullish wave volume declined → buyers exhausting → VOL PEAK (short)
+wave_decline_thresh = 1.0 - (wave_decline_pct / 100.0)
+wave_bear_exhausted = prev2_bear_wave > 0 and prev_bear_wave < (prev2_bear_wave * wave_decline_thresh)
+wave_bull_exhausted = prev2_bull_wave > 0 and prev_bull_wave < (prev2_bull_wave * wave_decline_thresh)
 
-// --- Signal Generation ---
-// Effective Z-threshold: reduced when CVD divergence confirms exhaustion
-z_eff_long  = cvd_bear_exhausting ? z_threshold * cvd_weight : z_threshold
-z_eff_short = cvd_bull_exhausting ? z_threshold * cvd_weight : z_threshold
+// Also detect climactic volume (wave had MORE than prior — blowoff top/bottom)
+wave_bear_climax = prev_bear_wave > prev2_bear_wave and prev2_bear_wave > 0
+wave_bull_climax = prev_bull_wave > prev2_bull_wave and prev2_bull_wave > 0
 
-// VOL BOTTOM (Long): Renko flips bullish + volume exhaustion at the low
-// Requires: flip + (Z-score meets threshold OR wave climax with moderate Z)
-vol_bottom_raw = flip_to_bull and has_vol and (vol_z >= z_eff_long or (wave_bear_climax and vol_z >= z_eff_long * 0.6))
+// Wave method fires on either exhaustion OR climax
+wave_vol_bottom = flip_to_bull and has_vol and (wave_bear_exhausted or wave_bear_climax)
+wave_vol_peak   = flip_to_bear and has_vol and (wave_bull_exhausted or wave_bull_climax)
 
-// VOL PEAK (Short): Renko flips bearish + volume exhaustion at the high
-vol_peak_raw = flip_to_bear and has_vol and (vol_z >= z_eff_short or (wave_bull_climax and vol_z >= z_eff_short * 0.6))
+// ============================================================================
+// METHOD 2: Volume Rate of Change (ROC)
+// Smoothed volume ROC detects acceleration vs deceleration.
+// Exhaustion = volume is decelerating (ROC negative/falling) at the flip point.
+// ============================================================================
+vol_sma_fast = ta.sma(vol_safe, vol_roc_len)
+vol_sma_slow = ta.sma(vol_safe, vol_lookback)
+vol_roc_val  = vol_sma_slow > 0 ? ((vol_sma_fast - vol_sma_slow) / vol_sma_slow) * 100 : 0.0
+
+// Volume is decelerating (fast MA falling relative to slow MA)
+vol_decelerating = vol_roc_val < vol_roc_val[1]
+// Volume is at or below average (not a fresh surge)
+vol_below_avg = vol_sma_fast <= vol_sma_slow
+
+roc_vol_bottom = flip_to_bull and has_vol and (vol_decelerating or vol_below_avg)
+roc_vol_peak   = flip_to_bear and has_vol and (vol_decelerating or vol_below_avg)
+
+// ============================================================================
+// METHOD 3: Z-Score (original — kept for time-based charts)
+// ============================================================================
+vol_sma_z = ta.sma(vol_safe, vol_lookback)
+vol_std   = ta.stdev(vol_safe, vol_lookback)
+vol_z     = vol_std > 0 ? (vol_safe - vol_sma_z) / vol_std : 0.0
+
+zscore_vol_bottom = flip_to_bull and has_vol and vol_z >= z_threshold
+zscore_vol_peak   = flip_to_bear and has_vol and vol_z >= z_threshold
+
+// ============================================================================
+// METHOD SELECTOR — routes to the chosen detection method
+// ============================================================================
+use_wave = vol_method == "Wave Compare"
+use_roc  = vol_method == "Volume ROC"
+use_z    = vol_method == "Z-Score"
+use_off  = vol_method == "OFF (flip + BB only)"
+
+vol_bottom_raw = use_wave ? wave_vol_bottom : use_roc ? roc_vol_bottom : use_z ? zscore_vol_bottom : (flip_to_bull and has_vol)
+vol_peak_raw   = use_wave ? wave_vol_peak   : use_roc ? roc_vol_peak   : use_z ? zscore_vol_peak   : (flip_to_bear and has_vol)
+
+// Method label for dashboard
+vol_method_label = use_wave ? "WAVE" : use_roc ? "ROC" : use_z ? "Z-SCR" : "OFF"
 
 // --- DEBUG: Fire on every Renko flip to test if volume/BB is blocking ---
 debug_mode = input.bool(false, "🔧 DEBUG: Bypass all gates (flip only)", group="🔧 Debug",
      tooltip="When ON, signals fire on every Renko direction flip. Use to verify signals display correctly, then turn OFF to re-enable gates.")
-debug_require_vol = input.bool(true, "🔧 Require Volume Z-Score", group="🔧 Debug",
-     tooltip="Toggle volume Z-score gate independently. Turn OFF to see if volume is the blocker.")
+debug_require_vol = input.bool(true, "🔧 Require Volume Exhaustion", group="🔧 Debug",
+     tooltip="Toggle volume exhaustion gate independently. Turn OFF to see if volume is the blocker.")
 debug_require_bb  = input.bool(true, "🔧 Require BB Outside Bands", group="🔧 Debug",
      tooltip="Toggle BB band-edge gate independently. Turn OFF to see if BB is the blocker.")
 debug_require_trend = input.bool(true, "🔧 Require Trend Filter", group="🔧 Debug",
@@ -270,14 +296,13 @@ debug_require_session = input.bool(true, "🔧 Require Session Filter", group="�
      tooltip="Toggle session time filter independently.")
 
 // --- Confluence Gates ---
-// BB: price must have been at or beyond the band edge within last 2 bars
 bb_ok_long  = bb_ok_long_recent
 bb_ok_short = bb_ok_short_recent
 
 // --- Build final gate chain with individual toggles ---
-// Volume gate: flip + Z-score (or wave climax)
-vol_gate_long  = not debug_require_vol or (has_vol and (vol_z >= z_eff_long or (wave_bear_climax and vol_z >= z_eff_long * 0.6)))
-vol_gate_short = not debug_require_vol or (has_vol and (vol_z >= z_eff_short or (wave_bull_climax and vol_z >= z_eff_short * 0.6)))
+// Volume gate: uses whichever method is selected
+vol_gate_long  = not debug_require_vol or vol_bottom_raw
+vol_gate_short = not debug_require_vol or vol_peak_raw
 
 // BB gate
 bb_gate_long  = not debug_require_bb or bb_ok_long
@@ -292,9 +317,9 @@ session_gate = not debug_require_session or in_session
 
 // --- Final Signals ---
 // Debug mode: fire on every Renko flip
-// Normal mode: each gate independently toggleable
-vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (flip_to_bull and vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate)
-vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (flip_to_bear and vol_gate_short and bb_gate_short and trend_gate_short and session_gate)
+// Normal mode: flip is implicit in vol_bottom_raw/vol_peak_raw, then BB + trend + session
+vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate)
+vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and session_gate)
 
 // Display Z-score for the signal (used in labels)
 signal_z = vol_bottom ? vol_z : vol_peak ? vol_z : 0.0
@@ -593,14 +618,18 @@ if show_dash and barstate.islast
     trend_col  = strong_uptrend ? color.new(color.green, 50) : strong_downtrend ? color.new(color.red, 50) : ema_stacked_bull ? color.new(color.green, 70) : ema_stacked_bear ? color.new(color.red, 70) : color.new(color.gray, 70)
     table.cell(dash, 0, 12, "Trend", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 12, trend_text, bgcolor=trend_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 12, "CVD: " + (cvd_roc > 0 ? "▲" : cvd_roc < 0 ? "▼" : "—"), bgcolor=bg_row, text_color=cvd_roc > 0 ? color.green : cvd_roc < 0 ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 2, 12, "", bgcolor=bg_row)
 
-    // Row 13: Volume
-    vol_text = has_vol ? "Z:" + str.tostring(vol_z, "0.0") + " | " + str.tostring(vol_safe, "#,##0") : "NO DATA"
-    vol_col  = vol_z >= z_threshold ? color.new(color.yellow, 40) : vol_z >= 1.0 ? color.new(color.yellow, 70) : color.new(color.gray, 80)
-    table.cell(dash, 0, 13, "Volume", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 13, vol_text, bgcolor=vol_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 13, wave_enable ? "Wave:" + str.tostring(wave_cum_vol, "#,##0") : "", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    // Row 13: Volume Method + Stats
+    wave_info = use_wave ? "W:" + str.tostring(wave_cum_vol, "#,##0") + " prev:" + str.tostring(prev_bear_wave, "#,##0") : ""
+    roc_info  = use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : ""
+    z_info    = use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
+    method_info = use_wave ? wave_info : use_roc ? roc_info : use_z ? z_info : "—"
+    vol_pass = vol_bottom_raw or vol_peak_raw
+    vol_col  = vol_pass ? color.new(color.green, 50) : color.new(color.gray, 70)
+    table.cell(dash, 0, 13, "Vol " + vol_method_label, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 13, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 13, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
     // Row 14: Debug Gate Diagnostic
     if debug_mode
@@ -610,7 +639,7 @@ if show_dash and barstate.islast
     else
         flip_ok = flip_to_bull or flip_to_bear
         dbg_flip = flip_ok ? "✓" : "·"
-        dbg_vol  = not debug_require_vol ? "OFF" : (has_vol ? (vol_z >= z_threshold ? "✓" + str.tostring(vol_z, "0.1") : "✗" + str.tostring(vol_z, "0.1")) : "✗NOVOL")
+        dbg_vol  = not debug_require_vol ? "OFF" : (vol_pass ? "✓" : "✗")
         dbg_bb   = not debug_require_bb ? "OFF" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
         dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
