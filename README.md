@@ -36,6 +36,20 @@ Settings must match between both indicators (preset, RSI, stochastic, ADX, sessi
 | **B+** | 2 HTF aligned + HMA trend + anti-chop filters | Scalp — in and out | 50% max position |
 | **B** | 1 HTF aligned + HMA trend + anti-chop filters | Scalp — tight leash, 3-5 bars max | 25% max position |
 
+### Grade Upgrades Fire Immediately
+
+When a grade upgrades in the same direction (e.g. A- → A, A → A+, B → B+), the new grade fires on the same bar — it does not wait for the persistence countdown. Conditions getting stronger IS confirmation. Downgrades (A → B+) and direction flips (long → short) still reset and must re-confirm.
+
+| Scenario | What Happens |
+|----------|-------------|
+| A- → A (same direction) | A fires immediately |
+| A → A+ (same direction) | A+ fires immediately |
+| B → B+ → A- (chain) | Each fires as it upgrades |
+| A+ → A (downgrade) | Resets, must wait persist_bars |
+| A- → A (direction flipped) | Resets — not an upgrade |
+
+See `Indicator_Guide.md` for the full grading system with exact requirements per grade.
+
 ---
 
 ## TP/SL Reference — 1-Minute Chart
