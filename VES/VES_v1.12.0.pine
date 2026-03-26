@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.11.0]
+// Volume Exhaustion Strategy [VES v1.12.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.11.0]",
+strategy("Volume Exhaustion Strategy [VES v1.12.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -24,90 +24,109 @@ grp_preset = "⚡ Instrument Preset"
 preset = input.string("🔷 YM (Dow)", "Instrument",
      options=["🔷 YM (Dow)", "📈 NQ (NASDAQ)", "📊 ES (S&P)", "🛢️ CL (Crude)", "🟤 HG (Copper)", "⚙️ CUSTOM"],
      group=grp_preset,
-     tooltip="Auto-configures TP and Trail distances for the selected instrument.\n\nYM/MYM: 40pt TP, 40pt Trail\nNQ/MNQ: 40pt TP, 40pt Trail\nES/MES: 8pt TP, 8pt Trail\nCL/MCL: 0.20 TP, 0.20 Trail\nHG: 0.0050 TP, 0.0050 Trail\nCUSTOM: Uses manual TP/Trail inputs below.")
+     tooltip="Single dropdown to auto-configure all instrument-specific settings.\nSelect CUSTOM to use manual inputs for everything.\n\nPreset values (TP / Trail / Session / BE Bricks):\n🔷 YM/MYM: 40pt / 40pt / 0930-1145,1330-1600 / 3\n📈 NQ/MNQ: 40pt / 40pt / 0930-1145,1330-1600 / 3\n📊 ES/MES: 8pt / 8pt / 0930-1145,1330-1600 / 3\n🛢️ CL/MCL: 0.20 / 0.20 / 0900-1430 / 3\n🟤 HG: 0.0050 / 0.0050 / 0930-1145,1330-1600 / 3")
 
 is_ym = preset == "🔷 YM (Dow)"
 is_nq = preset == "📈 NQ (NASDAQ)"
 is_es = preset == "📊 ES (S&P)"
 is_cl = preset == "🛢️ CL (Crude)"
 is_hg = preset == "🟤 HG (Copper)"
+is_custom = preset == "⚙️ CUSTOM"
 
 // ============================================================================
 // CORE CONFIGURATION
 // ============================================================================
 grp_tp = "💰 TP & Trail"
-tp_pts_in    = input.float(40.0, "Take Profit (points)", group=grp_tp, tooltip="Distance in price points from entry to TP. Each position exits independently when its TP is hit.")
-trail_pts_in = input.float(40.0, "Trailing Stop (points)", group=grp_tp, tooltip="Trail distance in points from the best price reached. Activates after 1 tick in favor.")
-be_enable    = input.bool(true, "Enable Breakeven Stop", group=grp_tp, tooltip="Once price moves N Renko bricks in favor, the stop is moved to entry + offset ticks. Protects capital on trades that initially work then reverse.")
-be_boxes     = input.int(3, "Bricks to Trigger BE", group=grp_tp, minval=1, maxval=20, tooltip="Number of Renko bricks price must move in your favor before the breakeven stop activates. 3 = default.")
-be_ticks     = input.int(3, "BE Offset (ticks profit)", group=grp_tp, minval=0, maxval=20, tooltip="Once BE triggers, stop is placed at entry + this many ticks. 0 = true breakeven. 3 = lock in 3 ticks profit.")
+tp_pts_in    = input.float(40.0, "Take Profit (points)", group=grp_tp, tooltip="Distance in price points from entry to TP. Each position exits independently when its TP is hit.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
+trail_pts_in = input.float(40.0, "Trailing Stop (points)", group=grp_tp, tooltip="Trail distance in points from the best price reached. Activates immediately (trail_points=1).\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
+be_enable    = input.bool(true, "Enable Breakeven Stop", group=grp_tp, tooltip="Once price moves N Renko bricks in favor, the stop is moved to entry + offset ticks. Protects capital on trades that initially work then reverse.\n(Default: true)")
+be_boxes_in  = input.int(3, "Bricks to Trigger BE", group=grp_tp, minval=1, maxval=20, tooltip="Number of Renko bricks price must move in your favor before the breakeven stop activates.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3)")
+be_ticks_in  = input.int(3, "BE Offset (ticks profit)", group=grp_tp, minval=0, maxval=20, tooltip="Once BE triggers, stop is placed at entry + this many ticks. 0 = true breakeven.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3)")
+daily_dd_limit_in = input.float(3000.0, "Daily DD Limit ($)", group=grp_tp, minval=0, step=100,
+     tooltip="Maximum daily drawdown in dollars. Flattens all positions and blocks entries for rest of day. Set to 0 to disable.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3000)")
+daily_pt_limit = input.float(0.0, "Daily Profit Target ($)", group=grp_tp, minval=0, step=100,
+     tooltip="Daily profit target in dollars. Flattens and locks in the day when target hit. Set to 0 to disable.\n(Default: 0 = disabled)")
 
-// Preset overrides for TP/Trail
-tp_pts    = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : tp_pts_in
-trail_pts = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : trail_pts_in
+// --- Preset Overrides ---
+// CUSTOM uses manual inputs. All other presets override specific values.
+tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? tp_pts_in : tp_pts_in
+trail_pts     = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? trail_pts_in : trail_pts_in
+be_boxes      = is_custom ? be_boxes_in : is_cl ? 3 : is_es ? 3 : be_boxes_in
+be_ticks      = is_custom ? be_ticks_in : be_ticks_in
+daily_dd_limit = is_custom ? daily_dd_limit_in : is_cl ? 2000.0 : daily_dd_limit_in
+daily_dd_enabled = daily_dd_limit > 0
+daily_pt_enabled = daily_pt_limit > 0
 
 grp_vol = "📊 Volume Exhaustion Detection"
 vol_method = input.string("Wave Compare", "Detection Method", 
      options=["Wave Compare", "Volume ROC", "Z-Score", "OFF (flip + BB only)"], group=grp_vol,
-     tooltip="Wave Compare: Compares cumulative volume of the ending wave vs prior same-direction wave. Exhaustion = declining wave volume while price extends. Best for Renko.\n\nVolume ROC: Detects volume acceleration/deceleration. Exhaustion = volume decelerating on the current wave while price pushes further. Good for Renko.\n\nZ-Score: Per-brick volume spike detection. Works poorly on Renko (uniform brick volume). Better on time-based charts.\n\nOFF: No volume gate — fires on every Renko flip that meets BB condition.")
+     tooltip="Wave Compare: Compares cumulative volume of the ending wave vs prior same-direction wave. Exhaustion = declining wave volume while price extends. Best for Renko.\n\nVolume ROC: Detects volume acceleration/deceleration. Good for Renko.\n\nZ-Score: Per-brick volume spike detection. Works poorly on Renko. Better on time-based charts.\n\nOFF: No volume gate — fires on every Renko flip that meets BB condition.\n(Default: Wave Compare)")
 vol_lookback = input.int(20, "Volume Lookback (bars)", group=grp_vol, minval=5, maxval=200,
-     tooltip="Rolling window for volume calculations. 20 = default.")
+     tooltip="Rolling window for volume mean/std dev calculations.\n(Default: 20)")
 wave_decline_pct = input.float(0.0, "Wave Volume Decline % (0=any decline)", group=grp_vol, minval=0.0, maxval=50.0, step=5.0,
-     tooltip="For Wave Compare: minimum % decline in wave volume vs prior same-direction wave to flag exhaustion. 0 = any decline counts. 20 = wave must be 20%+ weaker.")
+     tooltip="For Wave Compare: minimum % decline in wave volume vs prior same-direction wave. 0 = any decline counts. 20 = wave must be 20%+ weaker.\n(Default: 0)")
 vol_roc_len = input.int(5, "ROC Smoothing (bars)", group=grp_vol, minval=2, maxval=20,
-     tooltip="For Volume ROC: SMA smoothing on the volume rate-of-change. Lower = more responsive.")
+     tooltip="For Volume ROC: SMA smoothing on volume rate-of-change. Lower = more responsive.\n(Default: 5)")
 z_threshold = input.float(0.3, "Z-Score Threshold", group=grp_vol, minval=0.1, maxval=4.0, step=0.1,
-     tooltip="For Z-Score method only. 0.3 = permissive, 1.5 = selective.")
+     tooltip="For Z-Score method only. 0.3 = permissive, 1.5 = selective.\n(Default: 0.3)")
 
 grp_ema = "📈 Moving Averages (OHLC4)"
-ema_fast_len  = input.int(9,   "EMA Fast",  group=grp_ema, tooltip="Fast EMA on OHLC4 source. Used in EMA alignment confluence (9 > 15 > 34 = bullish stack). Default 9.")
-ema_mid_len   = input.int(15,  "EMA Mid",   group=grp_ema, tooltip="Mid EMA on OHLC4 source. Middle of the alignment stack. Default 15.")
-ema_slow_len  = input.int(34,  "EMA Slow",  group=grp_ema, tooltip="Slow EMA on OHLC4 source. Primary trend direction reference. Default 34.")
-ema_macro_len = input.int(233, "EMA Macro",  group=grp_ema, tooltip="Fibonacci 233 EMA on OHLC4. Long-term trend anchor used by the soft trend filter. Price below 233 + stacked bearish EMAs = strong downtrend (suppresses longs).")
+ema_fast_len  = input.int(9,   "EMA Fast",  group=grp_ema, tooltip="Fast EMA on OHLC4 source. Used in EMA alignment confluence (9 > 15 > 34 = bullish stack).\n(Default: 9)")
+ema_mid_len   = input.int(15,  "EMA Mid",   group=grp_ema, tooltip="Mid EMA on OHLC4 source. Middle of the alignment stack.\n(Default: 15)")
+ema_slow_len  = input.int(34,  "EMA Slow",  group=grp_ema, tooltip="Slow EMA on OHLC4 source. Primary trend direction reference.\n(Default: 34)")
+ema_macro_len = input.int(233, "EMA Macro",  group=grp_ema, tooltip="Fibonacci 233 EMA on OHLC4. Long-term trend anchor used by the soft trend filter. Price below 233 + stacked bearish EMAs = strong downtrend (suppresses longs).\n(Default: 233)")
 
-grp_bb = "📉 Bollinger Bands (3-Min MTF)"
-bb_length   = input.int(10, "BB Length", group=grp_bb, tooltip="Lookback period for the Bollinger Band basis. Matches TradingView standard BB: SMA of close. Calculated on 3-minute timeframe.")
-bb_mult     = input.float(1.2, "BB Std Dev Multiplier", group=grp_bb, step=0.1, tooltip="Standard deviation multiplier for band width. 1.2 = tighter than default 2.0 — catches mean-reversion entries closer to the midline.")
-bb_tf       = input.timeframe("3", "BB Calculation Timeframe", group=grp_bb, tooltip="Timeframe for BB calculation. Default 3-min. The BB is computed on this timeframe and projected onto your chart.")
-bb_color_up = input.color(#2962FF, "Upper Band", group=grp_bb, inline="bbc1")
-bb_color_lo = input.color(#2962FF, "Lower Band", group=grp_bb, inline="bbc1")
-bb_color_mid = input.color(color.gray, "Midline", group=grp_bb, inline="bbc2")
+grp_bb = "📉 Bollinger Bands (MTF)"
+bb_length_in = input.int(10, "BB Length", group=grp_bb, tooltip="Lookback period for the BB basis (SMA of close). Matches TradingView standard BB.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 10)")
+bb_mult_in   = input.float(1.2, "BB Std Dev Multiplier", group=grp_bb, step=0.1, tooltip="Standard deviation multiplier for band width. 1.2 = tighter than standard 2.0 — catches mean-reversion entries closer to midline.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 1.2)")
+bb_tf_in     = input.timeframe("3", "BB Calculation Timeframe", group=grp_bb, tooltip="Timeframe for BB calculation. Computed via request.security() and projected onto your Renko chart.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3 minutes)")
+bb_color_up  = input.color(#2962FF, "Upper Band", group=grp_bb, inline="bbc1", tooltip="(Default: #2962FF blue)")
+bb_color_lo  = input.color(#2962FF, "Lower Band", group=grp_bb, inline="bbc1", tooltip="(Default: #2962FF blue)")
+bb_color_mid = input.color(color.gray, "Midline", group=grp_bb, inline="bbc2", tooltip="(Default: gray)")
 
-grp_hma = "〰️ HMA 20 (Chart TF)"
-hma_length = input.int(20, "HMA Length", group=grp_hma, tooltip="Hull Moving Average length. Calculated on chart timeframe (Renko bricks). OPTIONAL — shown on dashboard for reference, does not gate entries.")
-hma_src    = input.source(close, "HMA Source", group=grp_hma)
+// BB preset overrides
+bb_length = is_custom ? bb_length_in : bb_length_in
+bb_mult   = is_custom ? bb_mult_in : is_cl ? 1.4 : bb_mult_in
+bb_tf     = is_custom ? bb_tf_in : is_cl ? "5" : bb_tf_in
+
+grp_hma = "〰️ HMA (Chart TF)"
+hma_length = input.int(20, "HMA Length", group=grp_hma, tooltip="Hull Moving Average length. Calculated on chart timeframe (Renko bricks). OPTIONAL — confluence factor shown on dashboard, does not gate entries.\n(Default: 20)")
+hma_src    = input.source(close, "HMA Source", group=grp_hma, tooltip="Price source for HMA calculation.\n(Default: close)")
 
 grp_trend = "🛡️ Soft Trend Filter"
 use_trend_filter = input.bool(true, "Enable Soft Trend Filter", group=grp_trend,
-     tooltip="Suppresses signals that go directly into a strong stacked trend. A 'strong trend' = all 3 EMAs stacked (9<15<34) AND price below 233 EMA.\n\nWhen active: VOL BOTTOM longs blocked in strong downtrends, VOL PEAK shorts blocked in strong uptrends.\n\nThis prevents catching falling knives. Disable if you want to trade counter-trend reversals in all conditions.")
+     tooltip="Suppresses signals into strong stacked trends. Strong trend = EMAs stacked (9<15<34) AND price below 233 EMA.\n\nActive: VOL BOTTOM longs blocked in strong downtrends, VOL PEAK shorts blocked in strong uptrends.\n\nDisable to trade counter-trend reversals in all conditions.\n(Default: true)")
 
 grp_session = "⏰ Session Filter"
-use_session = input.bool(true, "Enable Session Filter", group=grp_session)
-session_str = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_session,
-     tooltip="Format: TIME1,TIME2:DAYS\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri 7=Sat\nExample: 0930-1145,1330-1600:23456")
+use_session = input.bool(true, "Enable Session Filter", group=grp_session, tooltip="When enabled, signals only fire during configured trading windows.\n(Default: true)")
+session_str_in = input.string("0930-1145,1330-1600:23456", "Session Config", group=grp_session,
+     tooltip="Format: TIME1,TIME2:DAYS (ET timezone)\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri 7=Sat\nOverridden by instrument preset unless CUSTOM is selected.\n\nPreset defaults:\nYM/NQ/ES/HG: 0930-1145,1330-1600:23456\nCL: 0900-1430:23456\n(Default: 0930-1145,1330-1600:23456)")
 flatten_outside = input.bool(false, "Flatten Positions Outside Session", group=grp_session,
-     tooltip="If enabled, all open positions are closed when the session window ends. If disabled, positions ride until TP/Trail/Opposite signal.")
+     tooltip="If enabled, all open positions are closed when the session window ends. If disabled, positions ride until TP/Trail/Opposite signal.\n(Default: false)")
+
+// Session preset override
+session_str = is_cl ? "0900-1430:23456" : is_custom ? session_str_in : session_str_in
 
 grp_ql = "🔗 QuantLynk Webhook"
-ql_enabled  = input.bool(false, "Enable QuantLynk Alerts", group=grp_ql, tooltip="When enabled, all strategy.entry/exit/close calls include QuantLynk-formatted alert_message payloads. You must also set your TradingView alert message to: {{strategy.order.alert_message}}")
-ql_user_id  = input.string("", "QuantLynk User ID", group=grp_ql, tooltip="Your qv_user_id from QuantLynk. Find it in the webhook generator on the QuantLynk dashboard.")
-ql_alert_id = input.string("", "QuantLynk Alert ID", group=grp_ql, tooltip="Your alert_id from QuantLynk. Each alert target has a unique ID.")
+ql_enabled  = input.bool(false, "Enable QuantLynk Alerts", group=grp_ql, tooltip="When enabled, all strategy calls include QuantLynk-formatted alert_message payloads.\nYou must also set your TradingView alert message to: {{strategy.order.alert_message}}\nWebhook URL: https://lynk.quantvue.io/quantlynk/place-order\n(Default: false)")
+ql_user_id  = input.string("", "QuantLynk User ID", group=grp_ql, tooltip="Your qv_user_id from QuantLynk. Find it in the webhook generator on the QuantLynk dashboard.\n(Default: empty)")
+ql_alert_id = input.string("", "QuantLynk Alert ID", group=grp_ql, tooltip="Your alert_id from QuantLynk. Each alert target has a unique ID.\n(Default: empty)")
 
 grp_vis = "🎨 Visuals"
-color_candles   = input.bool(true, "Color Candles by Direction", group=grp_vis)
-show_labels     = input.bool(true, "Show VOL PEAK / VOL BOTTOM Labels", group=grp_vis)
-show_wick_dots  = input.bool(true, "Show Yellow Dots on EMA Wick Touches", group=grp_vis)
-wick_dot_ema    = input.string("EMA 34", "Wick Touch EMA", options=["EMA 9", "EMA 15", "EMA 34", "EMA 233"], group=grp_vis)
-bull_candle_col = input.color(#00BFFF, "Bullish Candle", group=grp_vis, inline="cc1")
-bear_candle_col = input.color(#FF4081, "Bearish Candle", group=grp_vis, inline="cc1")
-ema9_color      = input.color(#FFFFFF, "EMA 9",   group=grp_vis, inline="ec1")
-ema15_color     = input.color(#FFD700, "EMA 15",  group=grp_vis, inline="ec1")
-ema34_color     = input.color(#00BFFF, "EMA 34",  group=grp_vis, inline="ec2")
-ema233_color    = input.color(#FF6B00, "EMA 233", group=grp_vis, inline="ec2")
+color_candles   = input.bool(true, "Color Candles by Direction", group=grp_vis, tooltip="Colors Renko bricks by direction: bullish = blue, bearish = pink.\n(Default: true)")
+show_labels     = input.bool(true, "Show VOL PEAK / VOL BOTTOM Labels", group=grp_vis, tooltip="Displays VEB/VEP arrow labels with exhaustion method and confluence count at signal bars.\n(Default: true)")
+show_wick_dots  = input.bool(true, "Show Yellow Dots on EMA Wick Touches", group=grp_vis, tooltip="Visual-only yellow dots when a wick touches the selected EMA but price closes on the other side (bounce).\n(Default: true)")
+wick_dot_ema    = input.string("EMA 34", "Wick Touch EMA", options=["EMA 9", "EMA 15", "EMA 34", "EMA 233"], group=grp_vis, tooltip="Which EMA to detect wick touches on.\n(Default: EMA 34)")
+bull_candle_col = input.color(#00BFFF, "Bullish Candle", group=grp_vis, inline="cc1", tooltip="(Default: #00BFFF cyan)")
+bear_candle_col = input.color(#FF4081, "Bearish Candle", group=grp_vis, inline="cc1", tooltip="(Default: #FF4081 pink)")
+ema9_color      = input.color(#FFFFFF, "EMA 9",   group=grp_vis, inline="ec1", tooltip="(Default: #FFFFFF white)")
+ema15_color     = input.color(#FFD700, "EMA 15",  group=grp_vis, inline="ec1", tooltip="(Default: #FFD700 gold)")
+ema34_color     = input.color(#00BFFF, "EMA 34",  group=grp_vis, inline="ec2", tooltip="(Default: #00BFFF cyan)")
+ema233_color    = input.color(#FF6B00, "EMA 233", group=grp_vis, inline="ec2", tooltip="(Default: #FF6B00 orange)")
 
 grp_dash = "📋 Dashboard"
-show_dash = input.bool(true, "Show Dashboard", group=grp_dash)
-dash_pos  = input.string("Top Right", "Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash)
+show_dash = input.bool(true, "Show Dashboard", group=grp_dash, tooltip="Shows the performance and status dashboard on the chart.\n(Default: true)")
+dash_pos  = input.string("Top Right", "Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash, tooltip="Corner of the chart for the dashboard table.\n(Default: Top Right)")
 
 // ============================================================================
 // CHART TYPE DETECTION
@@ -293,15 +312,15 @@ vol_method_label = use_wave ? "WAVE" : use_roc ? "ROC" : use_z ? "Z-SCR" : "OFF"
 
 // --- DEBUG: Fire on every Renko flip to test if volume/BB is blocking ---
 debug_mode = input.bool(false, "🔧 DEBUG: Bypass all gates (flip only)", group="🔧 Debug",
-     tooltip="When ON, signals fire on every Renko direction flip. Use to verify signals display correctly, then turn OFF to re-enable gates.")
+     tooltip="When ON, signals fire on every Renko direction flip regardless of all gates. Use to verify the engine works, then turn OFF.\n(Default: false)")
 debug_require_vol = input.bool(true, "🔧 Require Volume Exhaustion", group="🔧 Debug",
-     tooltip="Toggle volume exhaustion gate independently. Turn OFF to see if volume is the blocker.")
+     tooltip="Toggle volume exhaustion gate. Turn OFF to see if volume is blocking signals.\n(Default: true)")
 debug_require_bb  = input.bool(true, "🔧 Require BB Outside Bands", group="🔧 Debug",
-     tooltip="Toggle BB band-edge gate independently. Turn OFF to see if BB is the blocker.")
+     tooltip="Toggle BB band-edge gate. Turn OFF to see if BB is blocking signals.\n(Default: true)")
 debug_require_trend = input.bool(true, "🔧 Require Trend Filter", group="🔧 Debug",
-     tooltip="Toggle soft trend filter independently.")
+     tooltip="Toggle soft trend filter. Turn OFF to allow counter-trend signals.\n(Default: true)")
 debug_require_session = input.bool(true, "🔧 Require Session Filter", group="🔧 Debug",
-     tooltip="Toggle session time filter independently.")
+     tooltip="Toggle session time filter. Turn OFF to allow signals outside trading hours.\n(Default: true)")
 
 // --- Confluence Gates ---
 bb_ok_long  = bb_ok_long_recent
@@ -439,13 +458,6 @@ be_stop_s2 = be2_triggered and is_short ? entry2_price - be_offset_pts : na
 // Detects new trading day via date change, snapshots equity at day open,
 // calculates running daily P&L, tracks daily drawdown, and optionally
 // flattens positions if daily DD limit is hit.
-
-daily_dd_limit = input.float(3000.0, "Daily DD Limit ($)", group=grp_tp, minval=0, step=100,
-     tooltip="Maximum daily drawdown in dollars. If daily P&L drops below this negative amount, all positions are flattened and no new entries until next day. 0 = disabled.")
-daily_pt_limit = input.float(0.0, "Daily Profit Target ($)", group=grp_tp, minval=0, step=100,
-     tooltip="Daily profit target in dollars. Once daily P&L reaches this amount, all positions are flattened and no new entries until next day. Locks in a winning day. 0 = disabled.")
-daily_dd_enabled = daily_dd_limit > 0
-daily_pt_enabled = daily_pt_limit > 0
 
 // New day detection — works on both time-based and Renko charts
 is_new_day = ta.change(time("D")) != 0
@@ -722,7 +734,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.11.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.12.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
