@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.10.0]
+// Volume Exhaustion Strategy [VES v1.11.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.10.0]",
+strategy("Volume Exhaustion Strategy [VES v1.11.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -24,7 +24,7 @@ grp_preset = "⚡ Instrument Preset"
 preset = input.string("🔷 YM (Dow)", "Instrument",
      options=["🔷 YM (Dow)", "📈 NQ (NASDAQ)", "📊 ES (S&P)", "🛢️ CL (Crude)", "🟤 HG (Copper)", "⚙️ CUSTOM"],
      group=grp_preset,
-     tooltip="Auto-configures TP, Trail, and default Z-threshold for the selected instrument.")
+     tooltip="Auto-configures TP and Trail distances for the selected instrument.\n\nYM/MYM: 40pt TP, 40pt Trail\nNQ/MNQ: 40pt TP, 40pt Trail\nES/MES: 8pt TP, 8pt Trail\nCL/MCL: 0.20 TP, 0.20 Trail\nHG: 0.0050 TP, 0.0050 Trail\nCUSTOM: Uses manual TP/Trail inputs below.")
 
 is_ym = preset == "🔷 YM (Dow)"
 is_nq = preset == "📈 NQ (NASDAQ)"
@@ -60,10 +60,10 @@ z_threshold = input.float(0.3, "Z-Score Threshold", group=grp_vol, minval=0.1, m
      tooltip="For Z-Score method only. 0.3 = permissive, 1.5 = selective.")
 
 grp_ema = "📈 Moving Averages (OHLC4)"
-ema_fast_len  = input.int(9,   "EMA Fast",  group=grp_ema)
-ema_mid_len   = input.int(15,  "EMA Mid",   group=grp_ema)
-ema_slow_len  = input.int(34,  "EMA Slow",  group=grp_ema)
-ema_macro_len = input.int(233, "EMA Macro",  group=grp_ema, tooltip="Fibonacci 233. Long-term trend anchor.")
+ema_fast_len  = input.int(9,   "EMA Fast",  group=grp_ema, tooltip="Fast EMA on OHLC4 source. Used in EMA alignment confluence (9 > 15 > 34 = bullish stack). Default 9.")
+ema_mid_len   = input.int(15,  "EMA Mid",   group=grp_ema, tooltip="Mid EMA on OHLC4 source. Middle of the alignment stack. Default 15.")
+ema_slow_len  = input.int(34,  "EMA Slow",  group=grp_ema, tooltip="Slow EMA on OHLC4 source. Primary trend direction reference. Default 34.")
+ema_macro_len = input.int(233, "EMA Macro",  group=grp_ema, tooltip="Fibonacci 233 EMA on OHLC4. Long-term trend anchor used by the soft trend filter. Price below 233 + stacked bearish EMAs = strong downtrend (suppresses longs).")
 
 grp_bb = "📉 Bollinger Bands (3-Min MTF)"
 bb_length   = input.int(10, "BB Length", group=grp_bb, tooltip="Lookback period for the Bollinger Band basis. Matches TradingView standard BB: SMA of close. Calculated on 3-minute timeframe.")
@@ -79,7 +79,7 @@ hma_src    = input.source(close, "HMA Source", group=grp_hma)
 
 grp_trend = "🛡️ Soft Trend Filter"
 use_trend_filter = input.bool(true, "Enable Soft Trend Filter", group=grp_trend,
-     tooltip="When enabled, suppresses signals that go directly into a strong stacked trend. Does NOT hard-block — just filters the most dangerous counter-trend entries.")
+     tooltip="Suppresses signals that go directly into a strong stacked trend. A 'strong trend' = all 3 EMAs stacked (9<15<34) AND price below 233 EMA.\n\nWhen active: VOL BOTTOM longs blocked in strong downtrends, VOL PEAK shorts blocked in strong uptrends.\n\nThis prevents catching falling knives. Disable if you want to trade counter-trend reversals in all conditions.")
 
 grp_session = "⏰ Session Filter"
 use_session = input.bool(true, "Enable Session Filter", group=grp_session)
@@ -722,7 +722,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.10.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.11.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
