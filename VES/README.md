@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 1.15.0  
+**Version:** 1.16.0  
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -125,6 +125,8 @@ Default 3 bricks. Labels show `5b`. Debug shows `F:✗2b<3` when rejected.
 | Breakeven Stop | Winners turning to losers | ON (BE+3 after 3b) |
 | Daily DD Limit | Blowing up on bad day | $3,000 |
 | Daily PT Target | Overtrading winning day | Disabled |
+| Slippage (v1.16.0) | Unrealistic backtest P&L | 3 ticks |
+| Safety Flatten (v1.16.0) | Broker position desync | Disabled |
 
 ---
 
@@ -132,7 +134,7 @@ Default 3 bricks. Labels show `5b`. Debug shows `F:✗2b<3` when rejected.
 
 | Row | Label | Shows |
 |-----|-------|-------|
-| 0 | VES v1.15.0 | Preset, chart type, debug |
+| 0 | VES v1.16.0 | Preset, chart type, debug |
 | 1 | TP/TRAIL | TP + trail with mode (FIX/ATR/MAX) + ⚡ tighten |
 | 2 | SIGNAL | scanning / VEB / VEP + Z-score |
 | 3 | Position | FLAT / LONG D:1/2 / SHORT D:2/2 + trail level |
@@ -170,10 +172,23 @@ All tooltips show `(Default: X)` for recovery if saved over.
 
 ## QuantLynk Webhook
 
-1. Enable in 🔗 QuantLynk settings, enter User ID + Alert ID
+1. Enable in QUANTLYNK COMPATIBILITY settings, enter User ID + Alert ID
 2. TradingView alert message: `{{strategy.order.alert_message}}`
-3. Webhook URL: `https://lynk.quantvue.io/quantlynk/place-order`
+3. Webhook URL: Your QuantLynk endpoint (see QuantLynk dashboard)
 4. **Test on SIM first** — flatten is account-wide
+
+---
+
+## ATS Safety Flatten (v1.16.0)
+
+Fires a redundant flatten webhook whenever the strategy transitions to fully flat. Catches position desync from manual flattens, missed webhooks, or broker-side auto-flattens. Harmless no-op if broker is already flat.
+
+1. Enable in ATS COMPATIBILITY settings, enter User ID + Spam Key
+2. Create a **second** TradingView alert on this strategy:
+   - Condition: "Any alert() function call"
+   - Webhook URL: Your ATS webhook endpoint
+   - Message: leave default
+3. Also fires a redundant QL flatten if QuantLynk is enabled
 
 ---
 
@@ -189,6 +204,7 @@ All tooltips show `(Default: X)` for recovery if saved over.
 | 1.13 | ATR adaptive trail + ADR exhaustion filter |
 | 1.14 | Min wave length filter |
 | 1.15 | BB squeeze filter |
+| 1.16 | Slippage 3 ticks, ATS safety flatten, input layout (QZeus style) |
 
 ---
 

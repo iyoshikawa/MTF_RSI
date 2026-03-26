@@ -1,5 +1,5 @@
 # VES Backtest Guide — Multi-Instrument Comparison
-**Version:** 1.15.0
+**Version:** 1.16.0
 
 ## ⚠️ Renko Backtest Disclaimer
 TradingView Renko backtests fill at synthetic brick prices. Results show **directional edge** but dollar amounts are inflated by 30-50%. Use for **relative comparison** between settings, not absolute performance. Forward test on SIM via QuantLynk for real data.
