@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.13.0]
+// Volume Exhaustion Strategy [VES v1.14.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.13.0]",
+strategy("Volume Exhaustion Strategy [VES v1.14.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -74,6 +74,8 @@ daily_dd_enabled = daily_dd_limit > 0
 daily_pt_enabled = daily_pt_limit > 0
 
 grp_vol = "📊 Volume Exhaustion Detection"
+min_wave_len = input.int(3, "Min Wave Length (bricks)", group=grp_vol, minval=1, maxval=20,
+     tooltip="Minimum number of consecutive same-direction bricks before a flip counts as a valid signal. Prevents whipsaw entries on 1-2 brick chop.\n1 = every flip counts (no filter)\n3 = need 3+ bricks in one direction before the reversal qualifies\n5 = very selective, only trades larger swings\n(Default: 3)")
 vol_method = input.string("Wave Compare", "Detection Method", 
      options=["Wave Compare", "Volume ROC", "Z-Score", "OFF (flip + BB only)"], group=grp_vol,
      tooltip="Wave Compare: Compares cumulative volume of the ending wave vs prior same-direction wave. Exhaustion = declining wave volume while price extends. Best for Renko.\n\nVolume ROC: Detects volume acceleration/deceleration. Good for Renko.\n\nZ-Score: Per-brick volume spike detection. Works poorly on Renko. Better on time-based charts.\n\nOFF: No volume gate — fires on every Renko flip that meets BB condition.\n(Default: Wave Compare)")
@@ -276,8 +278,24 @@ hma_ok_short_recent = hma_bull or hma_bull[1] or hma_bull[2]
 // --- Brick Direction ---
 bull_brick    = close >= open
 bear_brick    = close < open
-flip_to_bull  = bull_brick and not bull_brick[1]
-flip_to_bear  = bear_brick and not bear_brick[1]
+raw_flip_bull = bull_brick and not bull_brick[1]
+raw_flip_bear = bear_brick and not bear_brick[1]
+
+// --- Wave Length Counter ---
+// Counts consecutive same-direction bricks. Resets on flip.
+// The count at flip time = how many bricks the ending wave had.
+var int wave_len = 0
+wave_len := bull_brick == bull_brick[1] ? wave_len + 1 : 1
+
+// Only count a flip as valid if the prior wave was at least N bricks long
+// wave_len is 1 on the flip bar (new direction just started)
+// We check the PRIOR wave's length — stored before reset
+var int prev_wave_len = 0
+if raw_flip_bull or raw_flip_bear
+    prev_wave_len := nz(wave_len[1], 1)
+
+flip_to_bull = raw_flip_bull and prev_wave_len >= min_wave_len
+flip_to_bear = raw_flip_bear and prev_wave_len >= min_wave_len
 
 // --- Base Volume Data ---
 has_vol   = not na(volume) and volume > 0
@@ -295,12 +313,13 @@ var float prev_bear_wave    = 0.0
 var float prev2_bull_wave   = 0.0
 var float prev2_bear_wave   = 0.0
 
-if flip_to_bull
+// Track ALL waves using raw flips (not filtered) so wave volume history stays accurate
+if raw_flip_bull
     // Bearish wave just ended — store its cumulative volume
     prev2_bear_wave := prev_bear_wave
     prev_bear_wave  := wave_cum_vol
     wave_cum_vol    := vol_safe
-else if flip_to_bear
+else if raw_flip_bear
     // Bullish wave just ended — store its cumulative volume
     prev2_bull_wave := prev_bull_wave
     prev_bull_wave  := wave_cum_vol
@@ -444,6 +463,7 @@ conf_max = 6
 
 // Exhaustion label text (method-specific value)
 exhaust_val_text = use_wave ? (flip_to_bull ? (wave_bear_exhausted ? "WvDecl" : wave_bear_climax ? "WvClmx" : "") : flip_to_bear ? (wave_bull_exhausted ? "WvDecl" : wave_bull_climax ? "WvClmx" : "") : "") : use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
+wave_len_text = str.tostring(prev_wave_len) + "b"  // e.g. "5b" = 5 bricks in prior wave
 
 // ============================================================================
 // POSITION MANAGEMENT
@@ -691,7 +711,7 @@ barcolor(candle_col)
 // --- VOL PEAK / VOL BOTTOM Labels ---
 if show_labels and vol_bottom
     units = is_short ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
-    lbl_text = "VEB " + exhaust_val_text + "\n" + str.tostring(conf_total_long) + "/" + str.tostring(conf_max)
+    lbl_text = "VEB " + exhaust_val_text + "\n" + wave_len_text + " " + str.tostring(conf_total_long) + "/" + str.tostring(conf_max)
     label.new(bar_index, low, lbl_text,
          style=label.style_label_up, color=#00E676, textcolor=color.white,
          size=size.small, yloc=yloc.belowbar,
@@ -699,7 +719,7 @@ if show_labels and vol_bottom
 
 if show_labels and vol_peak
     units = is_long ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
-    lbl_text = "VEP " + exhaust_val_text + "\n" + str.tostring(conf_total_short) + "/" + str.tostring(conf_max)
+    lbl_text = "VEP " + exhaust_val_text + "\n" + wave_len_text + " " + str.tostring(conf_total_short) + "/" + str.tostring(conf_max)
     label.new(bar_index, high, lbl_text,
          style=label.style_label_down, color=#FF6D00, textcolor=color.white,
          size=size.small, yloc=yloc.abovebar,
@@ -788,7 +808,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.13.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.14.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
@@ -915,14 +935,16 @@ if show_dash and barstate.islast
         table.cell(dash, 2, 17, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
     else
         flip_ok = flip_to_bull or flip_to_bear
-        dbg_flip = flip_ok ? "✓" : "·"
+        raw_flip = raw_flip_bull or raw_flip_bear
+        dbg_flip = flip_ok ? "✓" : raw_flip ? "✗" + str.tostring(prev_wave_len) + "b<" + str.tostring(min_wave_len) : "·"
         dbg_vol  = not debug_require_vol ? "OFF" : (vol_pass ? "✓" : "✗")
         dbg_bb   = not debug_require_bb ? "OFF" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
         dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
+        dbg_adr  = not enable_adr_filter ? "OFF" : (adr_ok ? "✓" : "✗" + str.tostring(adr_pct_used, "0") + "%")
         table.cell(dash, 0, 17, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
         table.cell(dash, 1, 17, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 2, 17, "TR:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 17, "TR:" + dbg_trend + " SS:" + dbg_sess + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
