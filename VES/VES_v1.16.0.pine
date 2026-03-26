@@ -1,9 +1,9 @@
 // ============================================================================
 // Volume Exhaustion Strategy [VES v1.16.0]
-// Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
+// Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
-//@version=5
+//@version=6
 strategy("Volume Exhaustion Strategy [VES v1.16.0]",
      overlay          = true,
      pyramiding       = 2,
@@ -65,11 +65,11 @@ adr_tighten_pct = input.float(70.0, "Tighten Threshold (%)", group=grp_adr, minv
 
 // --- Preset Overrides ---
 // CUSTOM uses manual inputs. All other presets override specific values.
-tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? tp_pts_in : tp_pts_in
-trail_fixed   = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? trail_pts_in : trail_pts_in
-be_boxes      = is_custom ? be_boxes_in : is_cl ? 3 : is_es ? 3 : be_boxes_in
-be_ticks      = is_custom ? be_ticks_in : be_ticks_in
-daily_dd_limit = is_custom ? daily_dd_limit_in : is_cl ? 2000.0 : daily_dd_limit_in
+tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : tp_pts_in
+trail_fixed   = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : trail_pts_in
+be_boxes      = be_boxes_in
+be_ticks      = be_ticks_in
+daily_dd_limit = is_cl ? 2000.0 : daily_dd_limit_in
 daily_dd_enabled = daily_dd_limit > 0
 daily_pt_enabled = daily_pt_limit > 0
 
@@ -107,9 +107,9 @@ bb_min_width_pts = input.float(0.0, "Min BB Width (points, 0=auto)", group=grp_b
      tooltip="Minimum distance between upper and lower BB (in price points) to allow signals. Set to 0 for auto-detection (uses 2× TP distance as minimum — if TP is 40pt, bands must be at least 80pt wide).\nManual examples: YM=60, NQ=60, ES=6, CL=0.30\n(Default: 0 = auto)")
 
 // BB preset overrides
-bb_length = is_custom ? bb_length_in : bb_length_in
-bb_mult   = is_custom ? bb_mult_in : is_cl ? 1.4 : bb_mult_in
-bb_tf     = is_custom ? bb_tf_in : is_cl ? "5" : bb_tf_in
+bb_length = bb_length_in
+bb_mult   = is_cl ? 1.4 : bb_mult_in
+bb_tf     = is_cl ? "5" : bb_tf_in
 
 grp_hma = "〰️ HMA (Chart TF)"
 hma_length = input.int(20, "HMA Length", group=grp_hma, tooltip="Hull Moving Average length. Calculated on chart timeframe (Renko bricks). OPTIONAL — confluence factor shown on dashboard, does not gate entries.\n(Default: 20)")
@@ -127,23 +127,7 @@ flatten_outside = input.bool(false, "Flatten Positions Outside Session", group=g
      tooltip="If enabled, all open positions are closed when the session window ends. If disabled, positions ride until TP/Trail/Opposite signal.\n(Default: false)")
 
 // Session preset override
-session_str = is_cl ? "0900-1430:23456" : is_custom ? session_str_in : session_str_in
-
-grp_vis = "🎨 Visuals"
-color_candles   = input.bool(true, "Color Candles by Direction", group=grp_vis, tooltip="Colors Renko bricks by direction: bullish = blue, bearish = pink.\n(Default: true)")
-show_labels     = input.bool(true, "Show VOL PEAK / VOL BOTTOM Labels", group=grp_vis, tooltip="Displays VEB/VEP arrow labels with exhaustion method and confluence count at signal bars.\n(Default: true)")
-show_wick_dots  = input.bool(true, "Show Yellow Dots on EMA Wick Touches", group=grp_vis, tooltip="Visual-only yellow dots when a wick touches the selected EMA but price closes on the other side (bounce).\n(Default: true)")
-wick_dot_ema    = input.string("EMA 34", "Wick Touch EMA", options=["EMA 9", "EMA 15", "EMA 34", "EMA 233"], group=grp_vis, tooltip="Which EMA to detect wick touches on.\n(Default: EMA 34)")
-bull_candle_col = input.color(#00BFFF, "Bullish Candle", group=grp_vis, inline="cc1", tooltip="(Default: #00BFFF cyan)")
-bear_candle_col = input.color(#FF4081, "Bearish Candle", group=grp_vis, inline="cc1", tooltip="(Default: #FF4081 pink)")
-ema9_color      = input.color(#FFFFFF, "EMA 9",   group=grp_vis, inline="ec1", tooltip="(Default: #FFFFFF white)")
-ema15_color     = input.color(#FFD700, "EMA 15",  group=grp_vis, inline="ec1", tooltip="(Default: #FFD700 gold)")
-ema34_color     = input.color(#00BFFF, "EMA 34",  group=grp_vis, inline="ec2", tooltip="(Default: #00BFFF cyan)")
-ema233_color    = input.color(#FF6B00, "EMA 233", group=grp_vis, inline="ec2", tooltip="(Default: #FF6B00 orange)")
-
-grp_dash = "📋 Dashboard"
-show_dash = input.bool(true, "Show Dashboard", group=grp_dash, tooltip="Shows the performance and status dashboard on the chart.\n(Default: true)")
-dash_pos  = input.string("Top Right", "Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash, tooltip="Corner of the chart for the dashboard table.\n(Default: Top Right)")
+session_str = is_cl ? "0900-1430:23456" : session_str_in
 
 grp_ats = "ATS COMPATIBILITY"
 ats_flatten_enabled = input.bool(false, "⚠ READ TOOLTIP → ATS SAFETY FLATTEN", group=grp_ats,
@@ -163,13 +147,28 @@ ql_user_id  = input.string("", "QuantLynk User ID", group=grp_ql,
 ql_alert_id = input.string("", "QuantLynk Alert ID", group=grp_ql,
      tooltip="Your alert_id from QuantLynk. Each alert target has a unique ID.\n(Default: empty)")
 
+grp_vis = "🎨 Visuals"
+color_candles   = input.bool(true, "Color Candles by Direction", group=grp_vis, tooltip="Colors Renko bricks by direction: bullish = blue, bearish = pink.\n(Default: true)")
+show_labels     = input.bool(true, "Show VOL PEAK / VOL BOTTOM Labels", group=grp_vis, tooltip="Displays VEB/VEP arrow labels with exhaustion method and confluence count at signal bars.\n(Default: true)")
+show_wick_dots  = input.bool(true, "Show Yellow Dots on EMA Wick Touches", group=grp_vis, tooltip="Visual-only yellow dots when a wick touches the selected EMA but price closes on the other side (bounce).\n(Default: true)")
+wick_dot_ema    = input.string("EMA 34", "Wick Touch EMA", options=["EMA 9", "EMA 15", "EMA 34", "EMA 233"], group=grp_vis, tooltip="Which EMA to detect wick touches on.\n(Default: EMA 34)")
+bull_candle_col = input.color(#00BFFF, "Bullish Candle", group=grp_vis, inline="cc1", tooltip="(Default: #00BFFF cyan)")
+bear_candle_col = input.color(#FF4081, "Bearish Candle", group=grp_vis, inline="cc1", tooltip="(Default: #FF4081 pink)")
+ema9_color      = input.color(#FFFFFF, "EMA 9",   group=grp_vis, inline="ec1", tooltip="(Default: #FFFFFF white)")
+ema15_color     = input.color(#FFD700, "EMA 15",  group=grp_vis, inline="ec1", tooltip="(Default: #FFD700 gold)")
+ema34_color     = input.color(#00BFFF, "EMA 34",  group=grp_vis, inline="ec2", tooltip="(Default: #00BFFF cyan)")
+ema233_color    = input.color(#FF6B00, "EMA 233", group=grp_vis, inline="ec2", tooltip="(Default: #FF6B00 orange)")
+
+grp_dash = "📋 Dashboard"
+show_dash = input.bool(true, "Show Dashboard", group=grp_dash, tooltip="Shows the performance and status dashboard on the chart.\n(Default: true)")
+dash_pos  = input.string("Top Right", "Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=grp_dash, tooltip="Corner of the chart for the dashboard table.\n(Default: Top Right)")
+
 // ============================================================================
 // CHART TYPE DETECTION
 // ============================================================================
-is_renko      = chart.is_renko
-is_nonstandard = chart.is_renko or chart.is_range or chart.is_linebreak or chart.is_kagi or chart.is_pnf
-chart_label    = is_renko ? "RENKO" : chart.is_range ? "RANGE" : chart.is_heikinashi ? "HA" : "STD"
-brick_size     = is_renko ? (high - low) : 0.0
+is_renko    = chart.is_renko
+chart_label = is_renko ? "RENKO" : chart.is_range ? "RANGE" : chart.is_heikinashi ? "HA" : "STD"
+brick_size  = is_renko ? (high - low) : 0.0
 
 // ============================================================================
 // SESSION PARSING
@@ -222,7 +221,7 @@ bb_src_calc(len, mult) =>
     dev   = mult * ta.stdev(close, len)
     [basis, basis + dev, basis - dev]
 
-[bb_basis, bb_upper, bb_lower] = request.security(cleanTicker, bb_tf, bb_src_calc(bb_length, bb_mult), lookahead=barmerge.lookahead_on)
+[bb_basis, bb_upper, bb_lower] = request.security(cleanTicker, bb_tf, bb_src_calc(bb_length, bb_mult), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 
 // Price position relative to bands
 price_at_lower_bb = close <= bb_lower
@@ -239,7 +238,6 @@ bb_ok_short_recent = bb_ok_short_now or bb_ok_short_now[1] or bb_ok_short_now[2]
 
 // BB Bandwidth — squeeze detection
 bb_width_pts = bb_upper - bb_lower
-bb_bandwidth = bb_basis > 0 ? bb_width_pts / bb_basis * 100 : 0.0  // as % of basis
 // Auto min width: 2× TP distance — if TP is 40pt, bands must be at least 80pt wide
 // This ensures there's enough room for price to reach TP from the band edge
 bb_min_width_effective = bb_min_width_pts > 0 ? bb_min_width_pts : tp_pts * 2.0
@@ -272,7 +270,7 @@ else if rth_is_open
     rth_low  := math.min(nz(rth_low, low), low)
 
 // ADR baseline — average of prior completed daily ranges
-adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], lookahead=barmerge.lookahead_on)
+adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 today_range = not na(rth_high) and not na(rth_low) ? rth_high - rth_low : 0.0
 adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0.0
 
@@ -291,10 +289,6 @@ hma_bull = close > hma_val
 hma_bear = close < hma_val
 hma_rising  = hma_val > hma_val[1]
 hma_falling = hma_val < hma_val[1]
-
-// HMA 2-bar lookback (was below/above recently — catches the turn)
-hma_ok_long_recent  = hma_bear or hma_bear[1] or hma_bear[2]
-hma_ok_short_recent = hma_bull or hma_bull[1] or hma_bull[2]
 
 // ============================================================================
 // VOLUME EXHAUSTION DETECTION — 3 Methods + OFF
@@ -400,7 +394,6 @@ zscore_vol_peak   = flip_to_bear and has_vol and vol_z >= z_threshold
 use_wave = vol_method == "Wave Compare"
 use_roc  = vol_method == "Volume ROC"
 use_z    = vol_method == "Z-Score"
-use_off  = vol_method == "OFF (flip + BB only)"
 
 vol_bottom_raw = use_wave ? wave_vol_bottom : use_roc ? roc_vol_bottom : use_z ? zscore_vol_bottom : (flip_to_bull and has_vol)
 vol_peak_raw   = use_wave ? wave_vol_peak   : use_roc ? roc_vol_peak   : use_z ? zscore_vol_peak   : (flip_to_bear and has_vol)
@@ -446,9 +439,6 @@ session_gate = not debug_require_session or in_session
 vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate and adr_ok)
 vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and session_gate and adr_ok)
 
-// Display Z-score for the signal (used in labels)
-signal_z = vol_bottom ? vol_z : vol_peak ? vol_z : 0.0
-
 // ============================================================================
 // CONFLUENCE COUNTER (6 factors)
 // ============================================================================
@@ -483,7 +473,6 @@ conf_ema_short = ema_stacked_bear ? 1 : 0  // EMAs bearish = selling rally in do
 // Total confluence count
 conf_total_long  = conf_flip_long  + conf_vol_long  + conf_bb_long  + conf_session + conf_hma_long  + conf_ema_long
 conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_session + conf_hma_short + conf_ema_short
-conf_total = math.max(conf_total_long, conf_total_short)
 conf_max = 6
 
 // Exhaustion label text (method-specific value)
@@ -498,6 +487,26 @@ is_flat   = net_pos == 0
 is_long   = net_pos > 0
 is_short  = net_pos < 0
 num_units = math.round(math.abs(net_pos))
+
+// ============================================================================
+// WEBHOOK PAYLOADS (defined before use in position management + daily P&L)
+// ============================================================================
+
+// --- QuantLynk ---
+// Attached to strategy calls via alert_message parameter.
+// Customer must set TradingView alert message to: {{strategy.order.alert_message}}
+ql_buy     = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "buy"}' : ''
+ql_sell    = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "sell"}' : ''
+ql_flatten = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "action": "flatten"}' : ''
+ql_exit    = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "{{strategy.order.action}}"}' : ''
+
+// --- ATS Safety Flatten ---
+// Fired via alert() on flat transition — NOT via alert_message (which goes to QL).
+// User must create a SECOND TradingView alert:
+//   Condition: This strategy → "Any alert() function call"
+//   Webhook URL: Your ATS webhook endpoint (see ATS dashboard)
+//   Message: (leave as default — alert() provides the payload)
+ats_flatten_payload = ats_flatten_enabled ? '{"contract": "{{ticker}}", "trade_type": "exit", "quantity": 1, "price": {{close}}, "spam-key": "' + ats_spam_key + '", "user_id": "' + ats_user_id + '", "strategy": 0, "comment": "' + ats_comment + '"}' : ''
 
 // Convert points to ticks for strategy.exit()
 tp_ticks    = math.round(tp_pts / syminfo.mintick)
@@ -571,22 +580,16 @@ is_new_day = ta.change(time("D")) != 0
 
 var float equity_at_day_open = strategy.equity
 var float daily_pnl          = 0.0
-var float daily_high_equity  = strategy.equity
-var float daily_dd           = 0.0
 var bool  daily_dd_hit       = false
 var bool  daily_pt_hit       = false
 var int   daily_wins         = 0
 var int   daily_losses       = 0
 var int   daily_trades       = 0
-var float prev_day_pnl       = 0.0
 
 // Snapshot at day open
 if is_new_day
-    prev_day_pnl        := daily_pnl
     equity_at_day_open  := strategy.equity
-    daily_high_equity   := strategy.equity
     daily_pnl           := 0.0
-    daily_dd            := 0.0
     daily_dd_hit        := false
     daily_pt_hit        := false
     daily_wins          := 0
@@ -595,10 +598,6 @@ if is_new_day
 
 // Update running daily P&L
 daily_pnl := strategy.equity - equity_at_day_open
-
-// Track daily high-water mark and drawdown
-daily_high_equity := math.max(daily_high_equity, strategy.equity)
-daily_dd := daily_high_equity - strategy.equity
 
 // Track daily trade count using closed trades (increments when a new trade closes)
 total_closed = strategy.closedtrades
@@ -627,28 +626,6 @@ if daily_pt_enabled and daily_pnl >= daily_pt_limit and not daily_pt_hit
 
 // Block entries when either daily limit is hit
 daily_ok = not daily_dd_hit and not daily_pt_hit
-
-// ============================================================================
-// QUANTLYNK WEBHOOK PAYLOADS
-// ============================================================================
-// Built once, attached to strategy calls via alert_message parameter.
-// Customer must set TradingView alert message to: {{strategy.order.alert_message}}
-
-ql_buy     = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "buy"}' : ''
-ql_sell    = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "sell"}' : ''
-ql_flatten = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "action": "flatten"}' : ''
-// For exits: use {{strategy.order.action}} which resolves to buy/sell at fire time
-ql_exit    = ql_enabled ? '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "1", "order_type": "market", "price": {{close}}, "action": "{{strategy.order.action}}"}' : ''
-
-// ============================================================================
-// ATS SAFETY FLATTEN PAYLOAD
-// ============================================================================
-// Fired via alert() on flat transition — NOT via alert_message (which goes to QL).
-// User must create a SECOND TradingView alert:
-//   Condition: This strategy → "Any alert() function call"
-//   Webhook URL: Your ATS webhook endpoint (see ATS dashboard)
-//   Message: (leave as default — alert() provides the payload)
-ats_flatten_payload = ats_flatten_enabled ? '{"contract": "{{ticker}}", "trade_type": "exit", "quantity": 1, "price": {{close}}, "spam-key": "' + ats_spam_key + '", "user_id": "' + ats_user_id + '", "strategy": 0, "comment": "' + ats_comment + '"}' : ''
 
 // ============================================================================
 // ENTRIES
