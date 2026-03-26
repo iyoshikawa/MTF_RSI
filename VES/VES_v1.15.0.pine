@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.14.0]
+// Volume Exhaustion Strategy [VES v1.15.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.14.0]",
+strategy("Volume Exhaustion Strategy [VES v1.15.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -101,6 +101,10 @@ bb_tf_in     = input.timeframe("3", "BB Calculation Timeframe", group=grp_bb, to
 bb_color_up  = input.color(#2962FF, "Upper Band", group=grp_bb, inline="bbc1", tooltip="(Default: #2962FF blue)")
 bb_color_lo  = input.color(#2962FF, "Lower Band", group=grp_bb, inline="bbc1", tooltip="(Default: #2962FF blue)")
 bb_color_mid = input.color(color.gray, "Midline", group=grp_bb, inline="bbc2", tooltip="(Default: gray)")
+bb_squeeze_filter = input.bool(true, "Suppress Signals in BB Squeeze", group=grp_bb,
+     tooltip="When enabled, blocks all signals when Bollinger Band width is too narrow. In a tight squeeze, TP can never be reached because the range is smaller than the target. Prevents guaranteed-loss entries.\n(Default: true)")
+bb_min_width_pts = input.float(0.0, "Min BB Width (points, 0=auto)", group=grp_bb, minval=0.0, step=5.0,
+     tooltip="Minimum distance between upper and lower BB (in price points) to allow signals. Set to 0 for auto-detection (uses 2× TP distance as minimum — if TP is 40pt, bands must be at least 80pt wide).\nManual examples: YM=60, NQ=60, ES=6, CL=0.30\n(Default: 0 = auto)")
 
 // BB preset overrides
 bb_length = is_custom ? bb_length_in : bb_length_in
@@ -219,6 +223,14 @@ bb_ok_long_now    = price_at_lower_bb
 bb_ok_short_now   = price_at_upper_bb
 bb_ok_long_recent = bb_ok_long_now or bb_ok_long_now[1] or bb_ok_long_now[2]
 bb_ok_short_recent = bb_ok_short_now or bb_ok_short_now[1] or bb_ok_short_now[2]
+
+// BB Bandwidth — squeeze detection
+bb_width_pts = bb_upper - bb_lower
+bb_bandwidth = bb_basis > 0 ? bb_width_pts / bb_basis * 100 : 0.0  // as % of basis
+// Auto min width: 2× TP distance — if TP is 40pt, bands must be at least 80pt wide
+// This ensures there's enough room for price to reach TP from the band edge
+bb_min_width_effective = bb_min_width_pts > 0 ? bb_min_width_pts : tp_pts * 2.0
+bb_is_squeezed = bb_squeeze_filter and bb_width_pts < bb_min_width_effective
 
 // ============================================================================
 // ATR TRAILING STOP CALCULATION
@@ -396,15 +408,15 @@ debug_require_session = input.bool(true, "🔧 Require Session Filter", group="�
      tooltip="Toggle session time filter. Turn OFF to allow signals outside trading hours.\n(Default: true)")
 
 // --- Confluence Gates ---
-bb_ok_long  = bb_ok_long_recent
-bb_ok_short = bb_ok_short_recent
+bb_ok_long  = bb_ok_long_recent and not bb_is_squeezed
+bb_ok_short = bb_ok_short_recent and not bb_is_squeezed
 
 // --- Build final gate chain with individual toggles ---
 // Volume gate: uses whichever method is selected
 vol_gate_long  = not debug_require_vol or vol_bottom_raw
 vol_gate_short = not debug_require_vol or vol_peak_raw
 
-// BB gate
+// BB gate (includes squeeze check)
 bb_gate_long  = not debug_require_bb or bb_ok_long
 bb_gate_short = not debug_require_bb or bb_ok_short
 
@@ -808,7 +820,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.14.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.15.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
@@ -855,13 +867,14 @@ if show_dash and barstate.islast
     table.cell(dash, 2, 6, adr_status, bgcolor=bg_row, text_color=adr_pct_used >= adr_exhaust_pct ? color.red : adr_tightening ? color.orange : color.green, text_size=size.small)
 
     // Row 7: Bollinger Bands Confluence
-    bb_now_text = price_at_lower_bb ? "AT LOWER" : price_at_upper_bb ? "AT UPPER" : price_below_mid ? "LOWER HALF" : price_above_mid ? "UPPER HALF" : "MID"
-    bb_gate_long  = bb_ok_long_recent ? "✓" : "✗"
-    bb_gate_short = bb_ok_short_recent ? "✓" : "✗"
-    bb_conf_col = (bb_ok_long_recent or bb_ok_short_recent) ? color.new(color.green, 50) : color.new(color.gray, 70)
+    bb_now_text = bb_is_squeezed ? "⛔ SQUEEZE" : price_at_lower_bb ? "AT LOWER" : price_at_upper_bb ? "AT UPPER" : price_below_mid ? "LOWER HALF" : price_above_mid ? "UPPER HALF" : "MID"
+    bb_dash_gate_l = bb_ok_long ? "✓" : "✗"
+    bb_dash_gate_s = bb_ok_short ? "✓" : "✗"
+    bb_conf_col = bb_is_squeezed ? color.new(#FF0000, 40) : (bb_ok_long or bb_ok_short) ? color.new(color.green, 50) : color.new(color.gray, 70)
+    bb_width_text = str.tostring(bb_width_pts, "#.#") + "/" + str.tostring(bb_min_width_effective, "#.#") + "pt"
     table.cell(dash, 0, 7, "BB (" + bb_tf + "m)", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 7, bb_now_text, bgcolor=bb_conf_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 7, "L:" + bb_gate_long + " S:" + bb_gate_short, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 2, 7, bb_is_squeezed ? bb_width_text : "L:" + bb_dash_gate_l + " S:" + bb_dash_gate_s, bgcolor=bg_row, text_color=bb_is_squeezed ? color.red : color.gray, text_size=size.small)
 
     // Row 8: HMA 20 (Optional — info only)
     hma_text = hma_bear ? "PRICE < HMA" : hma_bull ? "PRICE > HMA" : "AT HMA"
@@ -938,7 +951,7 @@ if show_dash and barstate.islast
         raw_flip = raw_flip_bull or raw_flip_bear
         dbg_flip = flip_ok ? "✓" : raw_flip ? "✗" + str.tostring(prev_wave_len) + "b<" + str.tostring(min_wave_len) : "·"
         dbg_vol  = not debug_require_vol ? "OFF" : (vol_pass ? "✓" : "✗")
-        dbg_bb   = not debug_require_bb ? "OFF" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
+        dbg_bb   = not debug_require_bb ? "OFF" : bb_is_squeezed ? "✗SQZ" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
         dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
         dbg_adr  = not enable_adr_filter ? "OFF" : (adr_ok ? "✓" : "✗" + str.tostring(adr_pct_used, "0") + "%")
