@@ -1,97 +1,110 @@
 # VES Backtest Guide — Multi-Instrument Comparison
+**Version:** 1.15.0
 
 ## ⚠️ Renko Backtest Disclaimer
-TradingView Renko backtests fill at synthetic brick prices, not real market prices. Results show **directional edge** but dollar amounts are inflated by 30-50%. Use these numbers for **relative comparison** between instruments and settings, not as absolute performance expectations.
-
-For real performance data, forward test on SIM via QuantLynk.
+TradingView Renko backtests fill at synthetic brick prices. Results show **directional edge** but dollar amounts are inflated by 30-50%. Use for **relative comparison** between settings, not absolute performance. Forward test on SIM via QuantLynk for real data.
 
 ---
 
 ## Instruments to Test
 
-| Symbol | Preset | Chart | Brick | Base TF | $/pt Full | $/pt Micro | Commission |
-|--------|--------|-------|-------|---------|-----------|------------|------------|
-| YM1! | 🔷 YM | Renko Trad 8 | 8 pts | 30s | $5/pt | — | $2.25/ct |
-| MYM1! | 🔷 YM | Renko Trad 8 | 8 pts | 30s | — | $0.50/pt | $0.62/ct |
-| NQ1! | 📈 NQ | Renko Trad 8 | 8 pts | 30s | $20/pt | — | $2.25/ct |
-| MNQ1! | 📈 NQ | Renko Trad 8 | 8 pts | 30s | — | $2/pt | $0.62/ct |
-| ES1! | 📊 ES | Renko Trad 4 | 4 pts | 30s | $50/pt | — | $2.25/ct |
-| MES1! | 📊 ES | Renko Trad 4 | 4 pts | 30s | — | $5/pt | $0.62/ct |
-| CL1! | 🛢️ CL | Renko Trad 8 | 0.08 | 30s | $1000/pt | — | $2.25/ct |
-| MCL1! | 🛢️ CL | Renko Trad 8 | 0.08 | 30s | — | $100/pt | $1.25/ct |
-
-**Notes:**
-- Micro contracts (MYM, MNQ, MES, MCL) use the same price chart as full-size. Same preset, same TP/Trail points. Only commission and dollar-per-point differ.
-- ES uses 4-pt brick (not 8) because ES has smaller range than YM/NQ.
-- CL brick size is 0.08 (8 ticks at 0.01 per tick).
+| Symbol | Preset | Brick | Base TF | $/pt Full | $/pt Micro | Commission |
+|--------|--------|-------|---------|-----------|------------|------------|
+| YM1! | 🔷 YM | 8 pts | 30s | $5/pt | — | $2.25/ct |
+| MYM1! | 🔷 YM | 8 pts | 30s | — | $0.50/pt | $0.62/ct |
+| NQ1! | 📈 NQ | 8 pts | 30s | $20/pt | — | $2.25/ct |
+| MNQ1! | 📈 NQ | 8 pts | 30s | — | $2/pt | $0.62/ct |
+| ES1! | 📊 ES | 4 pts | 30s | $50/pt | — | $2.25/ct |
+| MES1! | 📊 ES | 4 pts | 30s | — | $5/pt | $0.62/ct |
+| CL1! | 🛢️ CL | 0.08 | 30s | $1000/pt | — | $2.25/ct |
+| MCL1! | 🛢️ CL | 0.08 | 30s | — | $100/pt | $1.25/ct |
 
 ---
 
-## Backtest Settings per Instrument
+## Strategy Settings per Instrument
 
-### Strategy Properties (in TradingView Strategy Tester settings)
+### Strategy Properties
 | Setting | Full-Size | Micro |
 |---------|-----------|-------|
 | Initial Capital | $25,000 | $5,000 |
-| Commission | $2.25/contract | $0.62/contract (MNQ/MYM/MES), $1.25 (MCL) |
+| Commission | $2.25/ct | $0.62/ct ($1.25 MCL) |
 | Slippage | 1 tick | 1 tick |
 | Pyramiding | 2 | 2 |
 | Default Qty | 1 | 1 |
 
-### Strategy Inputs (same for full and micro)
+### Strategy Inputs
 | Setting | YM/MYM | NQ/MNQ | ES/MES | CL/MCL |
 |---------|--------|--------|--------|--------|
 | Preset | 🔷 YM | 📈 NQ | 📊 ES | 🛢️ CL |
 | TP | 40 pts | 40 pts | 8 pts | 0.20 |
+| Trail Mode | Fixed | Fixed | Fixed | Fixed |
 | Trail | 40 pts | 40 pts | 8 pts | 0.20 |
+| BE Enable | ON | ON | ON | ON |
+| BE Bricks | 3 | 3 | 3 | 3 |
+| BE Ticks | 3 | 3 | 3 | 3 |
+| Min Wave Length | 3 | 3 | 3 | 3 |
 | BB Length | 10 | 10 | 10 | 10 |
-| BB StdDev | 1.2 | 1.2 | 1.2 | 1.2 |
-| BB TF | 3 min | 3 min | 3 min | 3 min |
-| Vol Method | Wave Compare | Wave Compare | Wave Compare | Wave Compare |
-| Session | 0930-1145,1330-1600 | 0930-1145,1330-1600 | 0930-1145,1330-1600 | 0900-1430 |
+| BB StdDev | 1.2 | 1.2 | 1.2 | 1.4 |
+| BB TF | 3 min | 3 min | 3 min | 5 min |
+| BB Squeeze | ON | ON | ON | ON |
+| ADR Filter | ON | ON | ON | ON |
+| Session | 0930-1145,1330-1600 | same | same | 0900-1430 |
+| Trend Filter | ON | ON | ON | ON |
+| Vol Method | Wave Compare | same | same | same |
 | DEBUG | OFF | OFF | OFF | OFF |
 | All Gates | ON | ON | ON | ON |
 
 ---
 
-## How to Run Each Backtest
+## Test Procedure
 
-1. Open the instrument chart (e.g. NQ1!)
-2. Set chart to Renko Traditional, brick size per table above, 30s base
-3. Add VES strategy
-4. In Settings → Properties: set commission and initial capital per table
-5. In Settings → Inputs: select the correct instrument preset
-6. Set Detection Method to "Wave Compare"
-7. Make sure DEBUG is OFF, all gate toggles ON
-8. Wait for strategy to load, then record the results below
+### Step 1: Baseline — All Protections ON
+Load each instrument with settings above. Record stats.
 
-**Repeat for each of the 4 detection methods:**
-- Wave Compare
-- Volume ROC
-- Z-Score
-- OFF (flip + BB only)
+### Step 2: Volume Method Comparison
+For each instrument, switch only the Detection Method and record:
+1. Wave Compare
+2. Volume ROC
+3. Z-Score
+4. OFF (flip + BB only)
+
+### Step 3: Trail Mode Comparison (optional)
+For the best volume method, test:
+1. Fixed (original)
+2. ATR (1.5x multiplier)
+3. Wider of Both
 
 ---
 
 ## Results Template
 
-Copy this table and fill in after each test run.
+### [INSTRUMENT] — Renko [BRICK] / [BASE TF]
 
-### [INSTRUMENT] — [SYMBOL] — Renko [BRICK] [BASE TF]
+**Volume Method Comparison:**
 
-| Method | Trades | Win % | Net P&L | Prof Factor | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-------------|------------|---------|----------|--------|
+| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
+|--------|--------|-------|---------|-----|------------|---------|----------|--------|
 | Wave Compare | | | | | | | | |
 | Volume ROC | | | | | | | | |
 | Z-Score | | | | | | | | |
 | OFF (flip+BB) | | | | | | | | |
 
+**Trail Mode Comparison (using best vol method):**
+
+| Trail Mode | Trades | Win % | Net P&L | PF | Expectancy | Max DD |
+|------------|--------|-------|---------|-----|------------|--------|
+| Fixed 40pt | | | | | | |
+| ATR 1.5x | | | | | | |
+| Wider of Both | | | | | | |
+
 ---
+
+## Pre-Built Result Tables
 
 ### YM1! — Renko Trad 8 / 30s
 
-| Method | Trades | Win % | Net P&L | Prof Factor | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-------------|------------|---------|----------|--------|
+| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
+|--------|--------|-------|---------|-----|------------|---------|----------|--------|
 | Wave Compare | | | | | | | | |
 | Volume ROC | | | | | | | | |
 | Z-Score | | | | | | | | |
@@ -99,8 +112,8 @@ Copy this table and fill in after each test run.
 
 ### NQ1! — Renko Trad 8 / 30s
 
-| Method | Trades | Win % | Net P&L | Prof Factor | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-------------|------------|---------|----------|--------|
+| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
+|--------|--------|-------|---------|-----|------------|---------|----------|--------|
 | Wave Compare | | | | | | | | |
 | Volume ROC | | | | | | | | |
 | Z-Score | | | | | | | | |
@@ -108,17 +121,17 @@ Copy this table and fill in after each test run.
 
 ### ES1! — Renko Trad 4 / 30s
 
-| Method | Trades | Win % | Net P&L | Prof Factor | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-------------|------------|---------|----------|--------|
+| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
+|--------|--------|-------|---------|-----|------------|---------|----------|--------|
 | Wave Compare | | | | | | | | |
 | Volume ROC | | | | | | | | |
 | Z-Score | | | | | | | | |
 | OFF (flip+BB) | | | | | | | | |
 
-### CL1! — Renko Trad 8 / 30s
+### CL1! — Renko Trad 0.08 / 30s
 
-| Method | Trades | Win % | Net P&L | Prof Factor | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-------------|------------|---------|----------|--------|
+| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
+|--------|--------|-------|---------|-----|------------|---------|----------|--------|
 | Wave Compare | | | | | | | | |
 | Volume ROC | | | | | | | | |
 | Z-Score | | | | | | | | |
@@ -128,10 +141,12 @@ Copy this table and fill in after each test run.
 
 ## What to Look For
 
-**Best method per instrument:** Compare profit factor and expectancy across the 4 methods. The one with highest PF at reasonable trade count wins.
+**Best method per instrument:** Highest profit factor at reasonable trade count.
 
-**Trade frequency:** Z-Score will likely produce very few signals on Renko. OFF will produce the most. Wave Compare and ROC should be in between.
+**Trade frequency:** Z-Score will likely produce very few on Renko. OFF the most. Wave Compare and ROC in between.
 
-**Stability:** If an instrument's results are wildly different between methods, the edge is likely coming from the TP/Trail exit management, not the entry detection. That's fine — it means the exits are doing the work.
+**Stability:** If results are similar across methods, the edge is in exit management (TP/Trail/BE), not entry detection. That's robust.
 
-**Cross-instrument:** If one instrument consistently outperforms across all methods, prioritize forward testing on that instrument first.
+**Protection impact:** Compare with BB Squeeze ON vs OFF, and Min Wave 3 vs 1. The protections should reduce trade count but improve PF and reduce DD.
+
+**Cross-instrument:** If one instrument consistently outperforms, prioritize SIM testing there first.
