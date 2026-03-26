@@ -1,10 +1,10 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v1.12.0]
+// Volume Exhaustion Strategy [VES v1.13.0]
 // Mean-reversion on volume exhaustion with CVD + Z-Score hybrid detection
 // Optimized for Renko charts, works on any chart type
 // ============================================================================
 //@version=5
-strategy("Volume Exhaustion Strategy [VES v1.12.0]",
+strategy("Volume Exhaustion Strategy [VES v1.13.0]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -38,7 +38,11 @@ is_custom = preset == "⚙️ CUSTOM"
 // ============================================================================
 grp_tp = "💰 TP & Trail"
 tp_pts_in    = input.float(40.0, "Take Profit (points)", group=grp_tp, tooltip="Distance in price points from entry to TP. Each position exits independently when its TP is hit.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
-trail_pts_in = input.float(40.0, "Trailing Stop (points)", group=grp_tp, tooltip="Trail distance in points from the best price reached. Activates immediately (trail_points=1).\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
+trail_mode   = input.string("Fixed", "Trail Mode", options=["Fixed", "ATR", "Wider of Both"], group=grp_tp,
+     tooltip="Fixed: Uses the fixed Trail points value below.\nATR: Trail distance = ATR × multiplier. Adapts to current volatility.\nWider of Both: Uses whichever is larger — fixed or ATR. Gives a floor in calm markets, room in volatile ones.\n(Default: Fixed)")
+trail_pts_in = input.float(40.0, "Trail Fixed (points)", group=grp_tp, tooltip="Fixed trail distance in points from the best price reached.\nUsed when Trail Mode is 'Fixed' or 'Wider of Both'.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
+atr_trail_len = input.int(14, "ATR Length", group=grp_tp, minval=1, maxval=50, tooltip="Lookback period for ATR calculation. Used when Trail Mode is 'ATR' or 'Wider of Both'.\n(Default: 14)")
+atr_trail_mult = input.float(1.5, "ATR Multiplier", group=grp_tp, minval=0.5, maxval=5.0, step=0.25, tooltip="Trail distance = ATR × this value. 1.0 = tight, 1.5 = standard, 2.0 = wide.\nUsed when Trail Mode is 'ATR' or 'Wider of Both'.\n(Default: 1.5)")
 be_enable    = input.bool(true, "Enable Breakeven Stop", group=grp_tp, tooltip="Once price moves N Renko bricks in favor, the stop is moved to entry + offset ticks. Protects capital on trades that initially work then reverse.\n(Default: true)")
 be_boxes_in  = input.int(3, "Bricks to Trigger BE", group=grp_tp, minval=1, maxval=20, tooltip="Number of Renko bricks price must move in your favor before the breakeven stop activates.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3)")
 be_ticks_in  = input.int(3, "BE Offset (ticks profit)", group=grp_tp, minval=0, maxval=20, tooltip="Once BE triggers, stop is placed at entry + this many ticks. 0 = true breakeven.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3)")
@@ -47,10 +51,22 @@ daily_dd_limit_in = input.float(3000.0, "Daily DD Limit ($)", group=grp_tp, minv
 daily_pt_limit = input.float(0.0, "Daily Profit Target ($)", group=grp_tp, minval=0, step=100,
      tooltip="Daily profit target in dollars. Flattens and locks in the day when target hit. Set to 0 to disable.\n(Default: 0 = disabled)")
 
+grp_adr = "📏 ADR Exhaustion Filter"
+enable_adr_filter = input.bool(true, "Enable ADR Exhaustion Filter", group=grp_adr,
+     tooltip="Suppresses new entries when today's range has consumed most of the average daily range. The day's move is likely done — don't enter late.\n(Default: true)")
+adr_length = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50,
+     tooltip="Number of trading days to average for the daily range baseline. 10 ≈ 2 weeks.\n(Default: 10)")
+adr_exhaust_pct = input.float(80.0, "Exhaustion Threshold (%)", group=grp_adr, minval=50.0, maxval=100.0, step=5.0,
+     tooltip="If today's high-low range exceeds this % of ADR, new signals are suppressed.\n80% = conservative (stops early). 95% = permissive (trades deeper into the day's range).\n(Default: 80)")
+adr_tighten_trail = input.bool(true, "Tighten Trail When ADR > 70%", group=grp_adr,
+     tooltip="When the day's range exceeds 70% of ADR, the trailing stop tightens by 30%. Locks in profits as the day's move exhausts.\n(Default: true)")
+adr_tighten_pct = input.float(70.0, "Tighten Threshold (%)", group=grp_adr, minval=40.0, maxval=90.0, step=5.0,
+     tooltip="Trail tightens when ADR usage exceeds this %. Lower = tighten earlier, higher = more room.\n(Default: 70)")
+
 // --- Preset Overrides ---
 // CUSTOM uses manual inputs. All other presets override specific values.
 tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? tp_pts_in : tp_pts_in
-trail_pts     = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? trail_pts_in : trail_pts_in
+trail_fixed   = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_custom ? trail_pts_in : trail_pts_in
 be_boxes      = is_custom ? be_boxes_in : is_cl ? 3 : is_es ? 3 : be_boxes_in
 be_ticks      = is_custom ? be_ticks_in : be_ticks_in
 daily_dd_limit = is_custom ? daily_dd_limit_in : is_cl ? 2000.0 : daily_dd_limit_in
@@ -203,6 +219,44 @@ bb_ok_long_recent = bb_ok_long_now or bb_ok_long_now[1] or bb_ok_long_now[2]
 bb_ok_short_recent = bb_ok_short_now or bb_ok_short_now[1] or bb_ok_short_now[2]
 
 // ============================================================================
+// ATR TRAILING STOP CALCULATION
+// ============================================================================
+atr_val = ta.atr(atr_trail_len)
+atr_trail_dist = atr_val * atr_trail_mult
+
+// Resolve trail distance based on mode
+trail_pts_resolved = trail_mode == "ATR" ? atr_trail_dist : trail_mode == "Wider of Both" ? math.max(trail_fixed, atr_trail_dist) : trail_fixed
+
+// ============================================================================
+// ADR EXHAUSTION FILTER
+// ============================================================================
+// Developing RTH session high/low — tracks bar-by-bar during 0930-1600 ET
+rth_is_open = not na(time(timeframe.period, "0930-1600:23456", "America/New_York"))
+rth_just_opened = rth_is_open and not rth_is_open[1]
+
+var float rth_high = na
+var float rth_low = na
+
+if rth_just_opened
+    rth_high := high
+    rth_low  := low
+else if rth_is_open
+    rth_high := math.max(nz(rth_high, high), high)
+    rth_low  := math.min(nz(rth_low, low), low)
+
+// ADR baseline — average of prior completed daily ranges
+adr_val = request.security(cleanTicker, "D", ta.sma(high - low, adr_length)[1], lookahead=barmerge.lookahead_on)
+today_range = not na(rth_high) and not na(rth_low) ? rth_high - rth_low : 0.0
+adr_pct_used = adr_val > 0 ? (today_range / adr_val) * 100 : 0.0
+
+// ADR exhaustion gate — suppress new entries when day's range is nearly consumed
+adr_ok = not enable_adr_filter or adr_pct_used < adr_exhaust_pct
+
+// ADR trail tightening — reduce trail by 30% when approaching exhaustion
+adr_tightening = adr_tighten_trail and adr_pct_used >= adr_tighten_pct
+trail_pts = adr_tightening ? trail_pts_resolved * 0.7 : trail_pts_resolved
+
+// ============================================================================
 // HMA 20 (Chart Timeframe)
 // ============================================================================
 hma_val  = ta.hma(hma_src, hma_length)
@@ -344,9 +398,9 @@ session_gate = not debug_require_session or in_session
 
 // --- Final Signals ---
 // Debug mode: fire on every Renko flip
-// Normal mode: flip is implicit in vol_bottom_raw/vol_peak_raw, then BB + trend + session
-vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate)
-vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and session_gate)
+// Normal mode: flip is implicit in vol_bottom_raw/vol_peak_raw, then BB + trend + session + ADR
+vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate and adr_ok)
+vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and session_gate and adr_ok)
 
 // Display Z-score for the signal (used in labels)
 signal_z = vol_bottom ? vol_z : vol_peak ? vol_z : 0.0
@@ -691,7 +745,7 @@ dash_position = switch dash_pos
     "Bottom Left"  => position.bottom_left
     => position.top_right
 
-var table dash = table.new(dash_position, 3, 17, border_width=1,
+var table dash = table.new(dash_position, 3, 18, border_width=1,
      frame_color=color.new(color.white, 80), border_color=color.new(color.gray, 85))
 
 if show_dash and barstate.islast
@@ -734,14 +788,16 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v1.12.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v1.13.0", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 
     // Row 1: TP/TRAIL
+    trail_mode_lbl = trail_mode == "ATR" ? "ATR" : trail_mode == "Wider of Both" ? "MAX" : "FIX"
+    trail_tight_lbl = adr_tightening ? " ⚡" : ""
     table.cell(dash, 0, 1, "TP/TRAIL", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 1, str.tostring(tp_pts, "#.##") + "pt TP", bgcolor=bg_row, text_color=#00BFFF, text_size=size.normal)
-    table.cell(dash, 2, 1, str.tostring(trail_pts, "#.##") + "pt TRAIL", bgcolor=bg_row, text_color=#00BFFF, text_size=size.normal)
+    table.cell(dash, 2, 1, str.tostring(trail_pts, "#.##") + "pt " + trail_mode_lbl + trail_tight_lbl, bgcolor=adr_tightening ? color.new(color.orange, 50) : bg_row, text_color=#00BFFF, text_size=size.normal)
 
     // Row 2: Signal
     table.cell(dash, 0, 2, "SIGNAL", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
@@ -770,85 +826,93 @@ if show_dash and barstate.islast
     table.cell(dash, 1, 5, dpnl_text + dpnl_status, bgcolor=dpnl_col, text_color=txt, text_size=size.normal)
     table.cell(dash, 2, 5, dpnl_trades_text + " " + dpnl_limits, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 6: Bollinger Bands Confluence
+    // Row 6: ADR Exhaustion
+    adr_text = not enable_adr_filter ? "OFF" : str.tostring(adr_pct_used, "0") + "% of " + str.tostring(adr_val, "#.#") + "pt"
+    adr_col = not enable_adr_filter ? color.new(color.gray, 80) : adr_pct_used >= adr_exhaust_pct ? color.new(#FF0000, 40) : adr_pct_used >= adr_tighten_pct ? color.new(color.orange, 50) : color.new(color.green, 60)
+    adr_status = adr_pct_used >= adr_exhaust_pct ? "⛔ EXHAUSTED" : adr_tightening ? "⚡ TIGHTENED" : "✓ OK"
+    table.cell(dash, 0, 6, "ADR", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, adr_text, bgcolor=adr_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 6, adr_status, bgcolor=bg_row, text_color=adr_pct_used >= adr_exhaust_pct ? color.red : adr_tightening ? color.orange : color.green, text_size=size.small)
+
+    // Row 7: Bollinger Bands Confluence
     bb_now_text = price_at_lower_bb ? "AT LOWER" : price_at_upper_bb ? "AT UPPER" : price_below_mid ? "LOWER HALF" : price_above_mid ? "UPPER HALF" : "MID"
     bb_gate_long  = bb_ok_long_recent ? "✓" : "✗"
     bb_gate_short = bb_ok_short_recent ? "✓" : "✗"
     bb_conf_col = (bb_ok_long_recent or bb_ok_short_recent) ? color.new(color.green, 50) : color.new(color.gray, 70)
-    table.cell(dash, 0, 6, "BB (" + bb_tf + "m)", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 6, bb_now_text, bgcolor=bb_conf_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 6, "L:" + bb_gate_long + " S:" + bb_gate_short, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 7, "BB (" + bb_tf + "m)", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, bb_now_text, bgcolor=bb_conf_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 7, "L:" + bb_gate_long + " S:" + bb_gate_short, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 7: HMA 20 (Optional — info only)
+    // Row 8: HMA 20 (Optional — info only)
     hma_text = hma_bear ? "PRICE < HMA" : hma_bull ? "PRICE > HMA" : "AT HMA"
     hma_slope_text = hma_rising ? "▲ RISING" : hma_falling ? "▼ FALLING" : "— FLAT"
     hma_conf_col = hma_bear ? color.new(#00E676, 60) : hma_bull ? color.new(#FF6D00, 60) : color.new(color.gray, 70)
-    table.cell(dash, 0, 7, "HMA 20 ℹ", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 7, hma_text, bgcolor=hma_conf_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 7, hma_slope_text, bgcolor=bg_row, text_color=hma_rising ? color.green : hma_falling ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 8, "HMA 20 ℹ", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 8, hma_text, bgcolor=hma_conf_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 8, hma_slope_text, bgcolor=bg_row, text_color=hma_rising ? color.green : hma_falling ? color.red : color.gray, text_size=size.small)
 
-    // Row 8: Confluence Counter
+    // Row 9: Confluence Counter
     conf_display = math.max(conf_total_long, conf_total_short)
     conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "H" : "·") + (conf_ema_long > 0 ? "E" : "·")
     conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "H" : "·") + (conf_ema_short > 0 ? "E" : "·")
     conf_col = conf_display >= 5 ? color.new(color.green, 40) : conf_display >= 3 ? color.new(color.yellow, 50) : color.new(color.gray, 70)
     conf_dir_text = conf_total_long > conf_total_short ? "L:" + conf_detail_l : conf_total_short > conf_total_long ? "S:" + conf_detail_s : "L:" + conf_detail_l
-    table.cell(dash, 0, 8, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 8, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 8, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 9, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 9, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 9, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 9: Win Rate
+    // Row 10: Win Rate
     wr_col = win_rate >= 60 ? color.new(color.green, 50) : win_rate >= 50 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 9, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 9, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 9, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 10, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 10, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 10, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 10: Net P&L (All-time)
+    // Row 11: Net P&L (All-time)
     pnl_col = net_pnl >= 0 ? color.new(color.green, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 10, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 10, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 10, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
+    table.cell(dash, 0, 11, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 11, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 11, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
 
-    // Row 11: Profit Factor
+    // Row 12: Profit Factor
     pf_col = pf >= 2.0 ? color.new(color.green, 50) : pf >= 1.5 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 11, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 11, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 11, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 12, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 12, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 12, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 12: Expectancy
+    // Row 13: Expectancy
     exp_col = expectancy > 0 ? color.new(color.green, 60) : color.new(color.red, 60)
-    table.cell(dash, 0, 12, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 12, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 12, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 13, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 13, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 13, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 13: Avg W/L
-    table.cell(dash, 0, 13, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 13, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 13, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
+    // Row 14: Avg W/L
+    table.cell(dash, 0, 14, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 14, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 14, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
 
-    // Row 14: Trend
+    // Row 15: Trend
     trend_text = strong_uptrend ? "STRONG ▲" : strong_downtrend ? "STRONG ▼" : ema_stacked_bull ? "BULL" : ema_stacked_bear ? "BEAR" : "MIXED"
     trend_col  = strong_uptrend ? color.new(color.green, 50) : strong_downtrend ? color.new(color.red, 50) : ema_stacked_bull ? color.new(color.green, 70) : ema_stacked_bear ? color.new(color.red, 70) : color.new(color.gray, 70)
-    table.cell(dash, 0, 14, "Trend", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 14, trend_text, bgcolor=trend_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 14, "", bgcolor=bg_row)
+    table.cell(dash, 0, 15, "Trend", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 15, trend_text, bgcolor=trend_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 15, "", bgcolor=bg_row)
 
-    // Row 15: Volume Method + Stats
+    // Row 16: Volume Method + Stats
     wave_info = use_wave ? "W:" + str.tostring(wave_cum_vol, "#,##0") + " prev:" + str.tostring(prev_bear_wave, "#,##0") : ""
     roc_info  = use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : ""
     z_info    = use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
     method_info = use_wave ? wave_info : use_roc ? roc_info : use_z ? z_info : "—"
     vol_pass = vol_bottom_raw or vol_peak_raw
     vol_col  = vol_pass ? color.new(color.green, 50) : color.new(color.gray, 70)
-    table.cell(dash, 0, 15, "Vol " + vol_method_label, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 15, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 15, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 16, "Vol " + vol_method_label, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 16, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 16, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 16: Debug Gate Diagnostic
+    // Row 17: Debug Gate Diagnostic
     if debug_mode
-        table.cell(dash, 0, 16, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 1, 16, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 2, 16, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
+        table.cell(dash, 0, 17, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 1, 17, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 2, 17, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
     else
         flip_ok = flip_to_bull or flip_to_bear
         dbg_flip = flip_ok ? "✓" : "·"
@@ -856,9 +920,9 @@ if show_dash and barstate.islast
         dbg_bb   = not debug_require_bb ? "OFF" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
         dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
-        table.cell(dash, 0, 16, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 1, 16, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 2, 16, "TR:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 0, 17, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 17, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 17, "TR:" + dbg_trend + " SS:" + dbg_sess, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
