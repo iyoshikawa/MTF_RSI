@@ -1,5 +1,5 @@
 # VES Backtest Guide — Multi-Instrument Comparison
-**Version:** 2.0.0
+**Version:** 2.0.3
 
 ## ⚠️ Renko Backtest Disclaimer
 TradingView Renko backtests fill at synthetic brick prices. Results show **directional edge** but dollar amounts are inflated by 30-50%. Use for **relative comparison** between settings, not absolute performance. Forward test on SIM via QuantLynk for real data.
@@ -21,7 +21,7 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 
 ---
 
-## Strategy Settings per Instrument (v2.0.2 Defaults)
+## Strategy Settings per Instrument (v2.0.3 Defaults)
 
 ### Strategy Properties
 | Setting | Full-Size | Micro |
@@ -39,13 +39,20 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 | TP | 40 pts | 40 pts | 8 pts | 0.20 |
 | Trail Mode | Fixed | Fixed | Fixed | Fixed |
 | Trail | 40 pts | 40 pts | 8 pts | 0.20 |
+| Trail Activation | 1 brick | 1 brick | 1 brick | 1 brick |
 | BE Enable | ON | ON | ON | ON |
 | BE Bricks | 3 | 3 | 3 | 3 |
 | BE Ticks | 3 | 3 | 3 | 3 |
 | Min Wave Length | 3 | 3 | 3 | 3 |
 | EMA Stack | 21/34/50 | same | same | same |
 | HMA Length | 20 | 20 | 20 | 20 |
-| Trend Gate (HMA×EMA21) | ON | ON | ON | ON |
+| HMA Gate (HMA×EMA21) | ON | ON | ON | ON |
+| req_V (Volume) | ON | ON | ON | ON |
+| req_B (BB) | ON | ON | ON | ON |
+| req_S (Session) | ON | ON | ON | ON |
+| req_H (Hpx) | OFF | OFF | OFF | OFF |
+| req_E (EMA Stack) | OFF | OFF | OFF | OFF |
+| req_W (XWave) | OFF | OFF | OFF | OFF |
 | BB Length | 10 | 10 | 10 | 10 |
 | BB StdDev | 1.2 | 1.2 | 1.2 | 1.4 |
 | BB TF | 3 min | 3 min | 3 min | 5 min |
@@ -56,14 +63,13 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 | Session | 0930-1145,1330-1600 | same | same | 0900-1430 |
 | Vol Method | Wave Compare | same | same | same |
 | DEBUG | OFF | OFF | OFF | OFF |
-| All Gates | ON | ON | ON | ON |
 
 ---
 
 ## Test Procedure
 
-### Step 1: Baseline — All Protections ON (v2.0.2 defaults)
-Load each instrument with settings above. Record stats.
+### Step 1: Baseline — All Protections ON (v2.0.3 defaults)
+Load each instrument with settings above. Record stats. Note: v2.0.3 defaults are identical to v2.0.2 in signal behavior — the ADR fix and trail activation change are structural, not filter changes.
 
 ### Step 2: Volume Method Comparison
 For each instrument, switch only the Detection Method and record:
@@ -72,11 +78,15 @@ For each instrument, switch only the Detection Method and record:
 3. Z-Score
 4. OFF (flip + BB only)
 
-### Step 3: New Feature Isolation (v2.0.2)
-Test each new feature by toggling its debug gate:
-1. **Chop Detector impact:** Toggle 🔧 Require Chop Detector ON/OFF
-2. **Trend Gate impact:** Toggle 🔧 Require Trend Gate ON/OFF
-3. **BB Squeeze ratio:** Compare 0.45 / 0.60 / 0.70
+### Step 3: New Feature Isolation (v2.0.3)
+Test each new feature by toggling one at a time:
+1. **req_H impact:** Toggle `Require Hpx Confluence` ON — compare trade count and PF vs baseline
+2. **req_E impact:** Toggle `Require EMA Stack` ON — compare trade count and PF vs baseline
+3. **req_W impact:** Toggle `Require Cross-Wave Ratio` ON — compare trade count and PF vs baseline
+4. **Trail Activation:** Compare 1 brick (default) vs 2 bricks vs 3 bricks — look for reduced premature exits
+5. **Chop Detector impact:** Toggle 🔧 Require Chop Detector ON/OFF
+6. **HMA Gate impact:** Toggle 🔧 Require Trend Gate ON/OFF
+7. **BB Squeeze ratio:** Compare 0.45 / 0.60 / 0.70
 
 ### Step 4: Cross-Wave Volume Ratio Tuning
 Compare confluence quality at different thresholds:
@@ -96,14 +106,18 @@ For the best volume method, test:
 
 ### [INSTRUMENT] — Renko [BRICK] / [BASE TF]
 
-**v2.0.2 Baseline:**
+**v2.0.3 Baseline:**
 
 | Config | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
 |--------|--------|-------|---------|-----|------------|---------|----------|--------|
 | All defaults | | | | | | | | |
+| req_H ON | | | | | | | | |
+| req_E ON | | | | | | | | |
+| req_W ON | | | | | | | | |
 | Chop OFF | | | | | | | | |
-| Trend Gate OFF | | | | | | | | |
-| Both OFF | | | | | | | | |
+| HMA Gate OFF | | | | | | | | |
+| Trail Act 2b | | | | | | | | |
+| Trail Act 3b | | | | | | | | |
 
 **Volume Method Comparison:**
 
@@ -126,13 +140,17 @@ For the best volume method, test:
 
 ## What to Look For
 
+**req_H/E/W value:** Compare PF and trade count with each requirement ON vs OFF. If PF improves meaningfully and trade count drop is acceptable, that factor is adding real edge — consider leaving it ON. If PF is flat or worse, the factor is over-filtering. Test one at a time before combining.
+
+**Trail Activation:** Compare 1 vs 2 vs 3 bricks. If average loss improves (trail not kicking in prematurely) without hurting average win, increase is justified. Watch for reduced win rate — if the trail starts too late, winners get stopped at BE instead of trailing out.
+
 **Chop Detector value:** Compare trade count and PF with chop ON vs OFF. If PF improves and trade count drops, the detector is filtering real chop.
 
-**Trend Gate value:** Compare with HMA×EMA21 gate ON vs OFF. Should reduce losers more than it reduces winners.
+**HMA Gate value:** Compare with HMA×EMA21 gate ON vs OFF. Should reduce losers more than it reduces winners.
 
 **BB Squeeze adaptive:** Should auto-calibrate. If results are similar across instruments without manual width tuning, the adaptive ratio is working.
 
-**Cross-Wave Ratio:** Since it's a confluence (not gate), check if high-confluence signals (6+/7) outperform low ones (4/7). If yes, the XWave ratio adds real information.
+**Cross-Wave Ratio:** Since it's a confluence (and optionally a gate via req_W), check if high-confluence signals (6+/7) outperform low ones (4/7). If yes, the XWave ratio adds real information.
 
 **Stability:** If results are similar across methods, the edge is in exit management (TP/Trail/BE), not entry detection. That's robust.
 

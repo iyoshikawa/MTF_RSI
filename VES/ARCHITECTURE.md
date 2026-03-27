@@ -1,5 +1,5 @@
-# Volume Exhaustion Strategy (VES) — Architecture Document v3
-## Updated for VES v2.0.2
+# Volume Exhaustion Strategy (VES) — Architecture Document v4
+## Updated for VES v2.0.3
 
 ---
 
@@ -35,25 +35,28 @@
 
 ---
 
-## GATE CHAIN (v2.0.2)
+## GATE CHAIN (v2.0.3)
 
-All gates must pass for a signal to fire:
+All active gates must pass for a signal to fire. Gates marked `req_*` are controlled by the 🎯 Confluence Requirements input group.
 
-| Gate | Type | What It Does |
-|------|------|-------------|
-| Min Wave Length | Required | Prior wave ≥ N bricks (default 3) |
-| Renko Flip | Required | Brick direction changed |
-| Volume Exhaustion | Required | Wave Compare / ROC / Z-Score / OFF |
-| BB Outside + Squeeze | Required | Price at band edge + width above adaptive threshold |
-| HMA × EMA 21 | Toggleable | HMA 20 above/below EMA 21 confirms momentum direction |
-| Session Window | Required | Inside configured trading hours |
-| ADR Exhaustion | Toggleable | Day's range < 80% of ADR |
-| Chop Detector | Toggleable | Avg of last 5 waves ≥ 5 bricks |
-| Daily Limits | Required | DD and PT not hit |
+| Gate | Control | Default | What It Does |
+|------|---------|---------|-------------|
+| Min Wave Length | Always on | Required | Prior wave ≥ N bricks (default 3) |
+| Renko Flip | Always on | Required | Brick direction changed |
+| Volume Exhaustion | req_V | ON | Wave Compare / ROC / Z-Score / OFF |
+| BB Outside + Squeeze | req_B | ON | Price at band edge + width above adaptive threshold |
+| HMA Gate (HMA×EMA21) | Trend Filter toggle | ON | HMA 20 above/below EMA 21 — momentum direction |
+| Hpx Confluence | req_H | OFF | Price position vs HMA 20 — mean-reversion side |
+| EMA Stack | req_E | OFF | Full 21/34/50 alignment in signal direction |
+| Cross-Wave Ratio | req_W | OFF | Counter-wave ≤ threshold % of dominant wave |
+| Session Window | req_S | ON | Inside configured trading hours |
+| ADR Exhaustion | Toggleable | ON | Day's range < 80% of ADR |
+| Chop Detector | Toggleable | ON | Avg of last 5 waves ≥ 5 bricks |
+| Daily Limits | Always on | Required | DD and PT not hit |
 
 ---
 
-## TREND SYSTEM (v2.0.2)
+## TREND SYSTEM (v2.0.3)
 
 ### Moving Averages (ALL on OHLC4 source)
 | MA | Length | Purpose |
@@ -61,7 +64,11 @@ All gates must pass for a signal to fire:
 | EMA | 21 | Fast — trend structure, HMA cross reference |
 | EMA | 34 | Mid — alignment confirmation |
 | EMA | 50 | Slow — trend anchor (replaces old 233 macro) |
-| HMA | 20 | Momentum — leads EMAs, crosses EMA 21 for trend gate |
+| HMA | 20 | Dual role: HMA Gate (vs EMA 21) + Hpx confluence (vs price) |
+
+### HMA Dual Role (v2.0.3 — clarified)
+1. **HMA Gate:** HMA 20 crossing EMA 21. HMA above = bullish momentum → shorts blocked. HMA below = bearish momentum → longs blocked. Controlled by Trend Filter toggle.
+2. **Hpx Confluence:** Price position vs HMA 20. Close below HMA = +1 long confluence (mean-reversion into bearish structure). Close above HMA = +1 short confluence. Optionally required via `req_H`.
 
 ### Three-State Trend Read
 1. **Trend Intact:** 21/34/50 stacked + HMA on right side of EMA 21 → trade with trend
@@ -112,19 +119,19 @@ All gates must pass for a signal to fire:
 
 ---
 
-## 7 CONFLUENCES (v2.0.2)
+## 7 CONFLUENCES (v2.0.3)
 
-Informational scoring — does NOT gate entries.
+Informational scoring — each factor can be promoted to a **required gate** via the 🎯 Confluence Requirements group.
 
-| # | Code | Factor |
-|---|------|--------|
-| 1 | F | Renko Flip |
-| 2 | V | Volume Exhaustion |
-| 3 | B | BB Outside Bands |
-| 4 | S | Session Active |
-| 5 | H | HMA Position (price vs HMA) |
-| 6 | E | EMA 21/34/50 Alignment |
-| 7 | W | Cross-Wave Volume Ratio |
+| # | Code | Factor | req_* default |
+|---|------|--------|---------------|
+| 1 | F | Renko Flip | Always required |
+| 2 | V | Volume Exhaustion | req_V = ON |
+| 3 | B | BB Outside Bands | req_B = ON |
+| 4 | S | Session Active | req_S = ON |
+| 5 | Hpx | HMA Position (price vs HMA) | req_H = OFF |
+| 6 | E | EMA 21/34/50 Alignment | req_E = OFF |
+| 7 | W | Cross-Wave Volume Ratio | req_W = OFF |
 
 ---
 
@@ -167,3 +174,6 @@ Full status panel with signal state, position, session, P&L, all gates, all conf
 5. **Flatten-and-reverse** — opposite signal closes everything, then enters new direction
 6. **Adaptive thresholds** — BB squeeze and chop detector self-calibrate, no manual session tuning
 7. **Gates vs Confluences** — gates block signals (binary), confluences score quality (additive)
+8. **req_* system** — any confluence factor can be promoted to a required gate without touching debug toggles. V/B/S default ON (preserve prior behavior), H/E/W default OFF (informational)
+9. **Renko-native trail activation** — `trail_activation_bricks` maps trail start to actual brick moves rather than a hardcoded 1-tick trigger
+10. **ADR uses prior day range** — `daily_high/low[1]` with `lookahead_on` prevents intraday bar updates from repainting ADR calculations

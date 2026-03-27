@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 2.0.2
+**Version:** 2.0.3
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -8,6 +8,22 @@
 ## What This Strategy Does
 
 VES is a **mean-reversion strategy** that detects when buying or selling pressure has exhausted at a swing extreme, then enters the reversal. It fires **VOL BOTTOM** (long) signals at swing lows and **VOL PEAK** (short) signals at swing highs. It manages two independent positions with take-profit, trailing stop, and breakeven stop exits.
+
+---
+
+## What Changed in v2.0.3
+
+Targeted fixes and a new confluence requirements system:
+
+- **ADR repaint fix:** `daily_high`/`daily_low` now use `[1]` offset + `lookahead_on`. Prevents the daily bar's intraday updates from retroactively changing the ADR calculation on historical bars.
+- **Trail Activation Bricks:** New input (default 1, range 1–5). Controls how many Renko bricks price must move in your favor before the trailing stop begins tracking. Replaces the previous hardcoded `trail_points=1`, which started the trail immediately regardless of chart type or brick size. At default (1 brick), behavior is nearly identical to before — but now you can set 2–3 bricks for more room before the trail engages.
+- **Confluence Requirements group (🎯):** New input group with six toggles:
+  - `req_V` / `req_B` / `req_S` — ON by default (Volume, BB, Session — the core gates)
+  - `req_H` / `req_E` / `req_W` — OFF by default (Hpx, EMA Stack, Cross-Wave Ratio)
+  - Each toggle makes its confluence factor **required** for a signal to fire, independently of the debug section. With defaults unchanged, backtest results are identical to v2.0.2. Flip `req_H`, `req_E`, or `req_W` to ON to promote those factors from informational → required.
+- **HMA tooltip clarified:** Documents both roles — (1) Hpx Confluence: price position vs HMA for mean-reversion scoring; (2) HMA Gate: HMA vs EMA 21 cross for momentum blocking. Previously only the gate role was described.
+- **Labeling consistency:** "Trend Gate" → **"HMA Gate"** in dashboard row 8. Confluence detail code `H` → `Hpx` throughout (labels, tooltips, debug row).
+- **Debug row 18 expanded:** Now shows `Hpx:` / `E:` / `W:` gate status alongside existing F/V/BB/TR/SS/CH/ADR columns.
 
 ---
 
@@ -29,13 +45,15 @@ Major overhaul of the trend, squeeze, and chop detection systems:
 
 ## How It Works — The Signal Chain
 
-A trade only fires when ALL required gates pass simultaneously:
+A trade only fires when ALL active gates pass simultaneously. The `req_*` toggles in **🎯 Confluence Requirements** control which factors are required gates vs informational-only:
 
 ```
-Min Wave → Renko Flip → Volume Exhaustion → BB Outside + No Squeeze → Trend Gate → Session → ADR → Chop → Daily Limits
-    ↓           ↓              ↓                    ↓                      ↓          ↓        ↓      ↓         ↓
- REQUIRED    REQUIRED       REQUIRED            REQUIRED               GATE(HMA)   REQUIRED  TOGGLE  GATE     REQUIRED
+Min Wave → Flip → Volume → BB+Squeeze → HMA Gate → Hpx → EMA Stack → XWave → Session → ADR → Chop → Daily Limits
+    ↓        ↓     req_V    req_B        GATE(HMA)  req_H   req_E      req_W   req_S     TOGGLE  GATE    REQUIRED
+  ALWAYS   ALWAYS  ON       ON           TOGGLE     OFF     OFF        OFF     ON
 ```
+
+With defaults (V/B/S = ON, H/E/W = OFF), behavior is identical to v2.0.2. Enable `req_H`, `req_E`, or `req_W` to promote those factors from informational → required.
 
 ### Gate 1: Minimum Wave Length (Required, default 3 bricks)
 The prior directional wave must be at least N bricks long. Prevents whipsaw chains on 1-2 brick chop flips. Set to 1 to disable.
@@ -43,51 +61,60 @@ The prior directional wave must be at least N bricks long. Prevents whipsaw chai
 ### Gate 2: Renko Flip (Always Required)
 A new brick in the opposite direction of the prior run.
 
-### Gate 3: Volume Exhaustion (Required — 3 Methods + OFF)
+### Gate 3: Volume Exhaustion (req_V — default ON)
 **Wave Compare (Recommended for Renko):** Accumulates volume per directional wave. Fires on Wave Decline (ending wave had less volume — tiring out) or Wave Climax (blowoff — more volume but nobody left).
 
-**Volume ROC:** Compares fast volume MA (5) to slow MA (20). Fires when volume is decelerating or below average at the flip. Better suited for time-based/Heiken Ashi charts.
+**Volume ROC:** Compares fast volume MA (5) to slow MA (20). Better suited for time-based/Heiken Ashi charts.
 
 **Z-Score:** Per-brick spike detection. Works poorly on Renko. Included for time-based charts.
 
 **OFF:** No volume gate. Fires on every flip that meets other conditions.
 
-### Gate 4: Bollinger Bands (Required — Includes Adaptive Squeeze)
+### Gate 4: Bollinger Bands (req_B — default ON, includes Adaptive Squeeze)
 1. **Band Position:** Price at/beyond BB edge within last 2 bars.
-2. **Adaptive Squeeze Filter (v2.0.0):** BB width must be ≥ 60% of its own 50-bar moving average. Auto-calibrates — no manual adjustment needed between sessions or instruments. When squeezed, all signals blocked until bands expand.
+2. **Adaptive Squeeze Filter:** BB width must be ≥ 60% of its own 50-bar MA. Auto-calibrates across sessions and instruments. When squeezed, all signals blocked until bands expand.
 
-### Gate 5: Trend Warning Gate — HMA × EMA 21 (v2.0.0, Toggleable)
-HMA 20 (OHLC4) crossing through EMA 21 (OHLC4) signals a momentum shift. When HMA drops below EMA 21, longs are blocked (bearish momentum). When HMA rises above EMA 21, shorts are blocked (bullish momentum). Replaces the old 9/15/34 + 233 soft trend filter with a cleaner momentum-based read.
+### Gate 5: HMA Gate — HMA × EMA 21 (Toggleable via Trend Filter group)
+HMA 20 (OHLC4) crossing through EMA 21 signals a momentum shift. HMA below EMA 21 → longs blocked. HMA above EMA 21 → shorts blocked. This is a separate, always-evaluated gate — independent from the Hpx confluence factor.
 
-### Gate 6: Session Window (Required)
+### Gate 6: Hpx Confluence (req_H — default OFF)
+Price position relative to HMA 20. Long: close below HMA (entering into bearish structure). Short: close above HMA (entering into bullish structure). Reflects the mean-reversion premise. Turn ON to require this in addition to the HMA Gate.
+
+### Gate 7: EMA Stack (req_E — default OFF)
+Requires full 21/34/50 alignment in the signal direction. Reduces trade count in transitional markets. Turn ON to require trend stack for every entry.
+
+### Gate 8: Cross-Wave Volume Ratio (req_W — default OFF)
+Requires counter-wave volume ≤ configured ratio vs dominant wave. Only meaningful when EMAs are stacked. Turn ON to require hollow counter-waves.
+
+### Gate 9: Session Window (req_S — default ON)
 Default: 0930-1145, 1330-1600 ET. CL uses 0900-1430.
 
-### Gate 7: ADR Exhaustion Filter (Toggleable, default ON)
+### Gate 10: ADR Exhaustion Filter (Toggleable, default ON)
 80% of ADR consumed → new entries suppressed. 70% → trail tightens 30%.
 
-### Gate 8: Chop Detector (v2.0.0, Toggleable)
-Averages the length of the last 5 completed waves. If the average is below 5 bricks, the market is flipping back and forth without follow-through. All signals blocked until the average rises above the threshold.
+### Gate 11: Chop Detector (Toggleable, default ON)
+Averages the last 5 completed wave lengths. Below 5 bricks average → flip-heavy chop → all signals blocked.
 
-### Gate 9: Daily Limits (Required)
+### Gate 12: Daily Limits (Required)
 DD limit ($3,000) and profit target (disabled by default). Flattens and blocks when hit.
 
 ---
 
-## The 7 Confluences (v2.0.0)
+## The 7 Confluences (v2.0.3)
 
-Informational score on each signal label and dashboard. Does NOT gate entries.
+Scored on every signal label and dashboard. Default behavior: informational only. Each factor can be promoted to a **required gate** via the 🎯 Confluence Requirements group.
 
-| # | Code | Factor | Long | Short |
-|---|------|--------|------|-------|
-| 1 | F | Renko Flip | Bull brick after bear run | Bear brick after bull run |
-| 2 | V | Volume Exhaustion | Wave decline/climax at low | Wave decline/climax at high |
-| 3 | B | BB Outside Bands | At/below lower BB (2-bar) | At/above upper BB (2-bar) |
-| 4 | S | Session Active | In trading window | In trading window |
-| 5 | H | HMA Position | Price < HMA 20 | Price > HMA 20 |
-| 6 | E | EMA Alignment | 21 > 34 > 50 stacked | 21 < 34 < 50 stacked |
-| 7 | W | Cross-Wave Vol Ratio | Dip vol ≤50% of push vol (bull stack) | Pop vol ≤50% of push vol (bear stack) |
+| # | Code | Factor | Long | Short | Default |
+|---|------|--------|------|-------|---------|
+| 1 | F | Renko Flip | Bull brick after bear run | Bear brick after bull run | Always required |
+| 2 | V | Volume Exhaustion | Wave decline/climax at low | Wave decline/climax at high | req_V = ON |
+| 3 | B | BB Outside Bands | At/below lower BB (2-bar) | At/above upper BB (2-bar) | req_B = ON |
+| 4 | S | Session Active | In trading window | In trading window | req_S = ON |
+| 5 | Hpx | HMA Position | Price < HMA 20 | Price > HMA 20 | req_H = OFF |
+| 6 | E | EMA Alignment | 21 > 34 > 50 stacked | 21 < 34 < 50 stacked | req_E = OFF |
+| 7 | W | Cross-Wave Vol Ratio | Dip vol ≤50% of push vol (bull stack) | Pop vol ≤50% of push vol (bear stack) | req_W = OFF |
 
-**Label example:** `VEB WvDecl 5b 5/7` = VOL BOTTOM, Wave Decline, 5-brick wave, 5/7 confluences.
+**Label example:** `VEB WvDecl 5b 5/7` = VOL BOTTOM, Wave Decline, 5-brick wave, 5 of 7 confluences active.
 
 ---
 
@@ -99,6 +126,29 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 - **Flatten-and-reverse:** Opposite signal closes all, enters new direction
 
 ---
+
+## New v2.0.3 Settings — Defaults and Tuning
+
+### Trail Activation Bricks
+
+| Setting | Default | Conservative | Aggressive |
+|---------|---------|-------------|------------|
+| Trail Activation | 1 brick | 2–3 bricks | 1 brick |
+
+At 1 brick (default), trail behavior matches v2.0.2. Increase to 2–3 bricks to give trades more room before the trail engages — reduces premature exits on initial volatility but gives back more on reversals.
+
+### Confluence Requirements (🎯 group)
+
+| Toggle | Default | Effect When ON |
+|--------|---------|---------------|
+| req_V — Volume Exhaustion | ON | Signal requires volume confirmation |
+| req_B — BB Band-Edge | ON | Signal requires price at BB edge |
+| req_S — Session Window | ON | Signal requires active session |
+| req_H — Hpx (HMA Position) | OFF | Signal requires price on mean-reversion side of HMA |
+| req_E — EMA Stack | OFF | Signal requires full 21/34/50 trend alignment |
+| req_W — Cross-Wave Ratio | OFF | Signal requires hollow counter-wave (needs stack) |
+
+**Note:** req_H, req_E, and req_W are OFF by default. Enabling them significantly reduces trade count — test one at a time in backtest before combining.
 
 ## New v2.0.0 Settings — Defaults and Tuning Ranges
 
@@ -146,7 +196,8 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 | Chop Detector | Trading flip-heavy markets | ON (avg ≥5b) |
 | ADR Exhaustion | Late entries, range spent | ON (80%) |
 | ADR Trail Tighten | Giving back profits | ON (70%) |
-| HMA × EMA 21 Gate | Momentum shift trades | ON |
+| HMA Gate (HMA×EMA21) | Momentum shift trades | ON |
+| Trail Activation Bricks | Trail kicking in too early | 1 brick (immediate) |
 | Breakeven Stop | Winners turning to losers | ON (BE+3 after 3b) |
 | Daily DD Limit | Blowing up on bad day | $3,000 |
 | Daily PT Target | Overtrading winning day | Disabled |
@@ -159,7 +210,7 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 
 | Row | Label | Shows |
 |-----|-------|-------|
-| 0 | VES v2.0.2 | Preset, chart type, debug |
+| 0 | VES v2.0.3 | Preset, chart type, debug |
 | 1 | TP/TRAIL | TP + trail with mode (FIX/ATR/MAX) + ⚡ tighten |
 | 2 | SIGNAL | scanning / VEB / VEP + chop status + avg wave len |
 | 3 | Position | FLAT / LONG D:1/2 / SHORT D:2/2 + trail level |
@@ -167,17 +218,17 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 | 5 | Daily P&L | P&L, trades W/L, DD/PT limits |
 | 6 | ADR | % used, OK / TIGHTENED / EXHAUSTED |
 | 7 | BB | Position + squeeze status + width vs threshold |
-| 8 | Trend Gate | HMA vs EMA 21 position + HMA slope |
+| 8 | HMA Gate | HMA vs EMA 21 position + HMA slope |
 | 9 | EMA Stack | 21/34/50 alignment (BULL / BEAR / MIXED) |
 | 10 | XWave Ratio | Cross-wave volume comparison + ratio % |
-| 11 | Confluence | X/7 with FVBSHEW breakdown |
+| 11 | Confluence | X/7 with F·V·B·S·Hpx·E·W breakdown |
 | 12 | Win Rate | Win % + closed trades |
 | 13 | Net P&L | All-time P&L + max DD |
 | 14 | Prof Factor | PF + W/L count |
 | 15 | Expectancy | $/trade |
 | 16 | Avg W/L | Avg win $ / avg loss $ |
 | 17 | Vol [METHOD] | Exhaustion status + method stats |
-| 18 | 🔧 GATES | F V BB CH TR SS ADR pass/fail |
+| 18 | 🔧 GATES | F·V·BB·TR + Hpx·E·W·SS·CH·ADR pass/fail |
 
 ---
 
@@ -234,6 +285,7 @@ Fires a redundant flatten webhook whenever the strategy transitions to fully fla
 | **2.0** | **EMA 21/34/50 stack, HMA×EMA21 trend gate, cross-wave volume ratio, adaptive BB squeeze, chop detector, 7 confluences** |
 | 2.0.1 | Bug fixes: na protection, multi-close tracking, confluence in entry comments, squeeze release alert, HMA color input |
 | 2.0.2 | Code refinements: VER constant, explicit YM/NQ presets, entry dedup, tooltip extraction, BB TF label fix, dead code removal |
+| **2.0.3** | **ADR repaint fix, trail activation bricks, confluence requirements group (req_H/E/W), HMA Gate rename, Hpx labeling, debug row expansion** |
 
 ---
 
