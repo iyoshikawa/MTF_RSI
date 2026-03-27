@@ -1,7 +1,15 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.4]
+// Volume Exhaustion Strategy [VES v2.0.5]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.5 CHANGES:
+//   - FIX: Hard stop loss was missing entirely. strategy.exit() calls had no
+//     loss= parameter — only be_stop (requires favorable movement to activate)
+//     and trail (same). If price went straight against entry, there was no stop.
+//     Added sl_pts input (default 40pt) and sl_ticks computed from it.
+//     All four strategy.exit() calls now include loss=sl_ticks.
+//     Dashboard TP/TRAIL row updated to show SL value alongside TP and Trail.
 // ============================================================================
 // v2.0.4 CHANGES:
 //   - FIX: BB gate lookback upgraded from fixed 2-bar to per-wave boolean.
@@ -62,7 +70,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.4"
+VER = "2.0.5"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -96,6 +104,7 @@ is_hg = preset == "🟤 HG (Copper)"
 // ============================================================================
 grp_tp = "💰 TP & Trail"
 tp_pts_in    = input.float(40.0, "Take Profit (points)", group=grp_tp, tooltip="Distance in price points from entry to TP. Each position exits independently when its TP is hit.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
+sl_pts_in    = input.float(40.0, "Stop Loss (points)", group=grp_tp, minval=1.0, step=5.0, tooltip="Hard stop loss distance in price points from entry. This is the maximum loss per contract.\nFires immediately if price moves against entry by this amount — no favorable movement required.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
 trail_mode   = input.string("Fixed", "Trail Mode", options=["Fixed", "ATR", "Wider of Both"], group=grp_tp,
      tooltip="Fixed: Uses the fixed Trail points value below.\nATR: Trail distance = ATR × multiplier. Adapts to current volatility.\nWider of Both: Uses whichever is larger — fixed or ATR. Gives a floor in calm markets, room in volatile ones.\n(Default: Fixed)")
 trail_pts_in = input.float(40.0, "Trail Fixed (points)", group=grp_tp, tooltip="Fixed trail distance in points from the best price reached.\nUsed when Trail Mode is 'Fixed' or 'Wider of Both'.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 40.0)")
@@ -126,6 +135,7 @@ adr_tighten_pct = input.float(70.0, "Tighten Threshold (%)", group=grp_adr, minv
 // --- Preset Overrides ---
 // CUSTOM uses manual inputs. All other presets override specific values.
 tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_ym or is_nq ? 40.0 : tp_pts_in
+sl_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_ym or is_nq ? 40.0 : sl_pts_in
 trail_fixed   = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_ym or is_nq ? 40.0 : trail_pts_in
 be_boxes      = be_boxes_in
 be_ticks      = be_ticks_in
@@ -652,6 +662,7 @@ ats_flatten_payload = ats_flatten_enabled ? '{"contract": "{{ticker}}", "trade_t
 
 // Convert points to ticks for strategy.exit()
 tp_ticks    = math.round(tp_pts / syminfo.mintick)
+sl_ticks    = math.round(sl_pts / syminfo.mintick)
 trail_ticks = math.round(trail_pts / syminfo.mintick)
 
 // Trail activation: Renko-native — N bricks must move in favor before trail begins
@@ -809,15 +820,15 @@ if vol_peak and daily_ok
 // EXITS — TP + Trailing Stop + Breakeven per position
 // ============================================================================
 if is_long
-    strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
+    strategy.exit("XL1", from_entry="L1", profit=tp_ticks, loss=sl_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_l1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
-    strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
+    strategy.exit("XL2", from_entry="L2", profit=tp_ticks, loss=sl_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_l2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
 
 if is_short
-    strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
+    strategy.exit("XS1", from_entry="S1", profit=tp_ticks, loss=sl_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_s1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
-    strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
+    strategy.exit("XS2", from_entry="S2", profit=tp_ticks, loss=sl_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_s2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
 
 // --- Flatten outside session (optional) ---
@@ -856,7 +867,7 @@ conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:"
 if show_labels and vol_bottom
     units = is_short ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
     lbl_text = "VEB " + exhaust_val_text + "\n" + wave_len_text + " " + str.tostring(conf_total_long) + "/" + str.tostring(conf_max)
-    tip = "VOL BOTTOM — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\n" + conf_str_long
+    tip = "VOL BOTTOM — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " SL:" + str.tostring(close - sl_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\n" + conf_str_long
     label.new(bar_index, low, lbl_text,
          style=label.style_label_up, color=#00E676, textcolor=color.white,
          size=size.small, yloc=yloc.belowbar, tooltip=tip)
@@ -864,7 +875,7 @@ if show_labels and vol_bottom
 if show_labels and vol_peak
     units = is_long ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
     lbl_text = "VEP " + exhaust_val_text + "\n" + wave_len_text + " " + str.tostring(conf_total_short) + "/" + str.tostring(conf_max)
-    tip = "VOL PEAK — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\n" + conf_str_short
+    tip = "VOL PEAK — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " SL:" + str.tostring(close + sl_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\n" + conf_str_short
     label.new(bar_index, high, lbl_text,
          style=label.style_label_down, color=#FF6D00, textcolor=color.white,
          size=size.small, yloc=yloc.abovebar, tooltip=tip)
@@ -958,8 +969,8 @@ if show_dash and barstate.islast
     // Row 1: TP/TRAIL
     trail_mode_lbl = trail_mode == "ATR" ? "ATR" : trail_mode == "Wider of Both" ? "MAX" : "FIX"
     trail_tight_lbl = adr_tightening ? " ⚡" : ""
-    table.cell(dash, 0, 1, "TP/TRAIL", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 1, str.tostring(tp_pts, "#.##") + "pt TP", bgcolor=bg_row, text_color=#00BFFF, text_size=size.normal)
+    table.cell(dash, 0, 1, "TP/SL/TRAIL", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(tp_pts, "#.##") + "pt TP  " + str.tostring(sl_pts, "#.##") + "pt SL", bgcolor=bg_row, text_color=#00BFFF, text_size=size.normal)
     table.cell(dash, 2, 1, str.tostring(trail_pts, "#.##") + "pt " + trail_mode_lbl + trail_tight_lbl, bgcolor=adr_tightening ? color.new(color.orange, 50) : bg_row, text_color=#00BFFF, text_size=size.normal)
 
     // Row 2: Signal + Chop Status
