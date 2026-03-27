@@ -1,7 +1,21 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.3]
+// Volume Exhaustion Strategy [VES v2.0.4]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.4 CHANGES:
+//   - FIX: BB gate lookback upgraded from fixed 2-bar to per-wave boolean.
+//     The prior wave is tracked for whether it EVER touched the BB edge during
+//     its entire duration. On Renko, the flip bar is already 1 brick away from
+//     the wave extreme; the old 2-bar window routinely missed valid band touches.
+//     bb_ok_long_recent / bb_ok_short_recent now use per-wave state vars.
+//   - FIX: Wave Compare warmup — when prev2_bear/bull_wave is 0 (first wave seen
+//     in that direction), the signal was permanently blocked. Now the first wave
+//     passes if prev_wave > 0, treating first observation as "exhausted by default".
+//     Prevents dead-zone after gaps, rollovers, or one-sided morning sessions.
+//   - FIX: Chop gate bootstrap — prior default of chop_min_avg for warmup period
+//     meant first 4 waves had ZERO chop protection (5.0 < 5.0 = false). Default
+//     now 0.0 until N waves measured, blocking entries until history is established.
 // ============================================================================
 // v2.0.3 CHANGES:
 //   - ADR fix: daily_high/daily_low now use [1] offset + lookahead_on to prevent
@@ -48,7 +62,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.3"
+VER = "2.0.4"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -292,11 +306,28 @@ price_at_upper_bb = close >= bb_upper
 price_below_mid   = close < bb_basis
 price_above_mid   = close > bb_basis
 
-// BB gate: price at or beyond the band edge (strict), with 2-bar lookback
-bb_ok_long_now    = price_at_lower_bb
-bb_ok_short_now   = price_at_upper_bb
-bb_ok_long_recent = bb_ok_long_now or bb_ok_long_now[1] or bb_ok_long_now[2]
-bb_ok_short_recent = bb_ok_short_now or bb_ok_short_now[1] or bb_ok_short_now[2]
+// BB gate: per-wave boolean — did the PRIOR wave ever touch the band edge?
+// On Renko the flip bar is already 1 brick away from the wave extreme; a fixed
+// bar-count lookback routinely misses valid touches. Instead we track whether
+// the wave that just ended touched the band at any point during its life.
+// State vars reset on each flip; prior wave value carried into the gate.
+var bool cur_wave_lower_bb  = false
+var bool cur_wave_upper_bb  = false
+var bool prev_wave_lower_bb = false
+var bool prev_wave_upper_bb = false
+
+if raw_flip_bull or raw_flip_bear
+    prev_wave_lower_bb := cur_wave_lower_bb
+    prev_wave_upper_bb := cur_wave_upper_bb
+    cur_wave_lower_bb  := price_at_lower_bb
+    cur_wave_upper_bb  := price_at_upper_bb
+else
+    cur_wave_lower_bb  := cur_wave_lower_bb or price_at_lower_bb
+    cur_wave_upper_bb  := cur_wave_upper_bb or price_at_upper_bb
+
+// Gate passes if current flip bar is at the band OR if prior wave touched it
+bb_ok_long_recent  = price_at_lower_bb or prev_wave_lower_bb
+bb_ok_short_recent = price_at_upper_bb or prev_wave_upper_bb
 
 // BB Bandwidth — adaptive squeeze detection (v2.0.0)
 bb_width_pts = nz(bb_upper - bb_lower, 0.0)
@@ -378,7 +409,10 @@ if raw_flip_bull or raw_flip_bear
     if array.size(wave_len_history) > chop_wave_count
         array.shift(wave_len_history)
 
-avg_wave_len = array.size(wave_len_history) >= chop_wave_count ? array.avg(wave_len_history) : chop_min_avg  // don't block until we have enough data
+// Default to 0.0 (not chop_min_avg) during warmup so the gate BLOCKS until
+// N waves are measured. Prior default of chop_min_avg meant 5.0 < 5.0 = false
+// — first 4 waves had zero chop protection.
+avg_wave_len = array.size(wave_len_history) >= chop_wave_count ? array.avg(wave_len_history) : 0.0
 is_choppy = use_chop_filter and avg_wave_len < chop_min_avg
 
 // --- Base Volume Data ---
@@ -405,10 +439,15 @@ else if raw_flip_bear
 else
     wave_cum_vol += vol_safe
 
-// Wave exhaustion: the ending wave had LESS volume than the prior same-direction wave
+// Wave exhaustion: the ending wave had LESS volume than the prior same-direction wave.
+// Warmup fix: when prev2 is still 0 (only 1 prior wave observed), allow the signal
+// if prev_wave > 0 — we saw selling/buying pressure end and flip, which is sufficient.
+// Prevents permanent block after gaps, rollovers, or one-sided morning sessions.
 wave_decline_thresh = 1.0 - (wave_decline_pct / 100.0)
-wave_bear_exhausted = prev2_bear_wave > 0 and prev_bear_wave < (prev2_bear_wave * wave_decline_thresh)
-wave_bull_exhausted = prev2_bull_wave > 0 and prev_bull_wave < (prev2_bull_wave * wave_decline_thresh)
+wave_bear_exhausted = (prev2_bear_wave == 0 and prev_bear_wave > 0) or
+                      (prev2_bear_wave > 0 and prev_bear_wave < (prev2_bear_wave * wave_decline_thresh))
+wave_bull_exhausted = (prev2_bull_wave == 0 and prev_bull_wave > 0) or
+                      (prev2_bull_wave > 0 and prev_bull_wave < (prev2_bull_wave * wave_decline_thresh))
 
 // Also detect climactic volume (blowoff top/bottom)
 wave_bear_climax = prev_bear_wave > prev2_bear_wave and prev2_bear_wave > 0
