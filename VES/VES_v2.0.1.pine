@@ -80,8 +80,8 @@ adr_tighten_pct = input.float(70.0, "Tighten Threshold (%)", group=grp_adr, minv
 
 // --- Preset Overrides ---
 // CUSTOM uses manual inputs. All other presets override specific values.
-tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : tp_pts_in
-trail_fixed   = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : trail_pts_in
+tp_pts        = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_ym or is_nq ? 40.0 : tp_pts_in
+trail_fixed   = is_cl ? 0.20 : is_hg ? 0.0050 : is_es ? 8.0 : is_ym or is_nq ? 40.0 : trail_pts_in
 be_boxes      = be_boxes_in
 be_ticks      = be_ticks_in
 daily_dd_limit = is_cl ? 2000.0 : daily_dd_limit_in
@@ -515,7 +515,10 @@ conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_sessi
 conf_max = 7
 
 // Exhaustion label text (method-specific value)
-exhaust_val_text = use_wave ? (flip_to_bull ? (wave_bear_exhausted ? "WvDecl" : wave_bear_climax ? "WvClmx" : "") : flip_to_bear ? (wave_bull_exhausted ? "WvDecl" : wave_bull_climax ? "WvClmx" : "") : "") : use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
+wave_decl_or_clmx_bear = wave_bear_exhausted ? "WvDecl" : wave_bear_climax ? "WvClmx" : ""
+wave_decl_or_clmx_bull = wave_bull_exhausted ? "WvDecl" : wave_bull_climax ? "WvClmx" : ""
+wave_label = flip_to_bull ? wave_decl_or_clmx_bear : flip_to_bear ? wave_decl_or_clmx_bull : ""
+exhaust_val_text = use_wave ? wave_label : use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
 wave_len_text = str.tostring(prev_wave_len) + "b"
 
 // ============================================================================
@@ -656,25 +659,18 @@ if vol_bottom and daily_ok
     conf_text_l = str.tostring(conf_total_long) + "/" + str.tostring(conf_max)
     if is_short
         strategy.close_all(comment="FLATTEN→L", alert_message=ql_flatten)
+    if is_short or is_flat
         strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2 " + conf_text_l, alert_message=ql_buy)
-        entry1_price := close
-        entry2_price := na
-        pos_dir      := 1
-        highest_since := high
-        lowest_since  := low
-        be1_triggered := false
-        be2_triggered := false
-    else if is_flat
-        strategy.entry("L1", strategy.long, qty=1, comment="VEB D:1/2 " + conf_text_l, alert_message=ql_buy)
-        entry1_price := close
-        pos_dir      := 1
+        entry1_price  := close
+        entry2_price  := na
+        pos_dir       := 1
         highest_since := high
         lowest_since  := low
         be1_triggered := false
         be2_triggered := false
     else if is_long and num_units < 2
         strategy.entry("L2", strategy.long, qty=1, comment="VEB D:2/2 " + conf_text_l, alert_message=ql_buy)
-        entry2_price := close
+        entry2_price  := close
         be2_triggered := false
 
 // --- VOL PEAK → SHORT ---
@@ -682,25 +678,18 @@ if vol_peak and daily_ok
     conf_text_s = str.tostring(conf_total_short) + "/" + str.tostring(conf_max)
     if is_long
         strategy.close_all(comment="FLATTEN→S", alert_message=ql_flatten)
+    if is_long or is_flat
         strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2 " + conf_text_s, alert_message=ql_sell)
-        entry1_price := close
-        entry2_price := na
-        pos_dir      := -1
-        highest_since := high
-        lowest_since  := low
-        be1_triggered := false
-        be2_triggered := false
-    else if is_flat
-        strategy.entry("S1", strategy.short, qty=1, comment="VEP D:1/2 " + conf_text_s, alert_message=ql_sell)
-        entry1_price := close
-        pos_dir      := -1
+        entry1_price  := close
+        entry2_price  := na
+        pos_dir       := -1
         highest_since := high
         lowest_since  := low
         be1_triggered := false
         be2_triggered := false
     else if is_short and num_units < 2
         strategy.entry("S2", strategy.short, qty=1, comment="VEP D:2/2 " + conf_text_s, alert_message=ql_sell)
-        entry2_price := close
+        entry2_price  := close
         be2_triggered := false
 
 // ============================================================================
@@ -899,7 +888,8 @@ if show_dash and barstate.islast
     bb_dash_gate_s = bb_ok_short ? "✓" : "✗"
     bb_conf_col = bb_squeeze_release ? color.new(#00FF00, 30) : bb_is_squeezed ? color.new(#FF0000, 40) : (bb_ok_long or bb_ok_short) ? color.new(color.green, 50) : color.new(color.gray, 70)
     bb_width_text = str.tostring(bb_width_pts, "#.#") + "/" + str.tostring(bb_squeeze_threshold, "#.#") + "pt"
-    table.cell(dash, 0, 7, "BB (" + bb_tf + "m)", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    bb_tf_label = bb_tf == "D" ? "D" : bb_tf == "W" ? "W" : bb_tf == "M" ? "M" : bb_tf + "m"
+    table.cell(dash, 0, 7, "BB (" + bb_tf_label + ")", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 7, bb_now_text, bgcolor=bb_conf_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 7, bb_is_squeezed ? bb_width_text : "L:" + bb_dash_gate_l + " S:" + bb_dash_gate_s, bgcolor=bg_row, text_color=bb_is_squeezed ? color.red : color.gray, text_size=size.small)
 
