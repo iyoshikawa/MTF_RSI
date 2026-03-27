@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — Architecture Document v3
-## Updated for VES v2.0.0
+## Updated for VES v2.0.1
 
 ---
 
@@ -35,7 +35,7 @@
 
 ---
 
-## GATE CHAIN (v2.0.0)
+## GATE CHAIN (v2.0.1)
 
 All gates must pass for a signal to fire:
 
@@ -53,7 +53,7 @@ All gates must pass for a signal to fire:
 
 ---
 
-## TREND SYSTEM (v2.0.0)
+## TREND SYSTEM (v2.0.1)
 
 ### Moving Averages (ALL on OHLC4 source)
 | MA | Length | Purpose |
@@ -76,7 +76,7 @@ All gates must pass for a signal to fire:
 
 ---
 
-## CHOP DETECTION (v2.0.0)
+## CHOP DETECTION (v2.0.1)
 
 ### Wave Length Chop Detector
 - Tracks the last N completed wave lengths in a rolling array
@@ -112,7 +112,7 @@ All gates must pass for a signal to fire:
 
 ---
 
-## 7 CONFLUENCES (v2.0.0)
+## 7 CONFLUENCES (v2.0.1)
 
 Informational scoring — does NOT gate entries.
 
