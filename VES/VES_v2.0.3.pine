@@ -1,7 +1,26 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.2]
+// Volume Exhaustion Strategy [VES v2.0.3]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.3 CHANGES:
+//   - ADR fix: daily_high/daily_low now use [1] offset + lookahead_on to prevent
+//     repainting from intraday daily bar updates.
+//   - Added trail_activation_bricks input (grp_tp): Renko-native trail activation.
+//     Trail starts tracking only after price moves N bricks in favor. Replaces
+//     hardcoded trail_points=1 in strategy.exit() calls.
+//   - HMA input tooltip clarified: documents dual roles — Hpx confluence (price
+//     vs HMA position) AND HMA Gate (HMA vs EMA 21 cross).
+//   - NEW grp_req "🎯 Confluence Requirements" group: req_V/req_B/req_S (default ON)
+//     and req_H/req_E/req_W (default OFF). Makes each confluence factor optionally
+//     required for a signal to fire, independent of debug toggles.
+//   - Gate chain updated: req_* inputs incorporated into vol/bb/session gates;
+//     new hpx_gate, ema_stack_gate, xwave_gate added to final signal logic.
+//   - Trail activation plumbing: brick_safe/trail_act_pts/trail_act_ticks computed
+//     and used in strategy.exit() trail_points parameter.
+//   - Dashboard row 8 label: "Trend Gate" → "HMA Gate".
+//   - Confluence detail strings: "H" → "Hpx" for clarity.
+//   - Debug row 18: added Hpx/E/W gate status columns.
 // ============================================================================
 // v2.0.2 CHANGES:
 //   - Extracted VER constant — single source of truth for version string.
@@ -29,7 +48,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.2"
+VER = "2.0.3"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -71,6 +90,8 @@ atr_trail_mult = input.float(1.5, "ATR Multiplier", group=grp_tp, minval=0.5, ma
 be_enable    = input.bool(true, "Enable Breakeven Stop", group=grp_tp, tooltip="Once price moves N Renko bricks in favor, the stop is moved to entry + offset ticks. Protects capital on trades that initially work then reverse.\n(Default: true)")
 be_boxes_in  = input.int(3, "Bricks to Trigger BE", group=grp_tp, minval=1, maxval=20, tooltip="Number of Renko bricks price must move in your favor before the breakeven stop activates.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3)")
 be_ticks_in  = input.int(3, "BE Offset (ticks profit)", group=grp_tp, minval=0, maxval=20, tooltip="Once BE triggers, stop is placed at entry + this many ticks. 0 = true breakeven.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3)")
+trail_activation_bricks = input.int(1, "Trail Activation (bricks)", group=grp_tp, minval=1, maxval=5,
+     tooltip="Number of Renko bricks price must move in your favor before the trailing stop begins tracking. Renko-native: 1 brick = one full brick_size move.\n1 = trail activates immediately on the next brick (standard). 2–3 = gives the trade more room before the trail engages, reducing premature exits on initial volatility.\nOn non-Renko charts, falls back to 8 × syminfo.mintick per 'brick'.\n(Default: 1)")
 daily_dd_limit_in = input.float(3000.0, "Daily DD Limit ($)", group=grp_tp, minval=0, step=100,
      tooltip="Maximum daily drawdown in dollars. Flattens all positions and blocks entries for rest of day. Set to 0 to disable.\nOverridden by instrument preset unless CUSTOM is selected.\n(Default: 3000)")
 daily_pt_limit = input.float(0.0, "Daily Profit Target ($)", group=grp_tp, minval=0, step=100,
@@ -138,7 +159,7 @@ bb_mult   = is_cl ? 1.4 : bb_mult_in
 bb_tf     = is_cl ? "5" : bb_tf_in
 
 grp_hma = "〰️ HMA (Chart TF)"
-hma_length = input.int(20, "HMA Length", group=grp_hma, tooltip="Hull Moving Average length on OHLC4 source. HMA 20 crossing the EMA 21 triggers the trend-warning gate — blocks new signals when momentum shifts against the trade direction.\nConservative: 24 (fewer false crosses). Aggressive: 16 (faster momentum detection).\n(Default: 20)")
+hma_length = input.int(20, "HMA Length", group=grp_hma, tooltip="Hull Moving Average length on OHLC4 source. Serves two roles:\n\n1. Hpx Confluence: Price position relative to HMA. Close below HMA = +1 long confluence (bearish structure). Close above HMA = +1 short confluence (bullish structure). This reflects the mean-reversion premise — entering against the HMA position.\n\n2. HMA Gate: HMA 20 crossing through EMA 21. HMA above EMA 21 = bullish momentum → shorts blocked. HMA below EMA 21 = bearish momentum → longs blocked. Gate can be disabled in Trend Filter group.\n\nConservative: 24 (fewer false crosses). Aggressive: 16 (faster momentum detection).\n(Default: 20)")
 
 grp_trend = "🛡️ Trend Filter (HMA × EMA 21)"
 use_trend_gate = input.bool(true, "Enable Trend Warning Gate", group=grp_trend,
@@ -314,8 +335,10 @@ else if rth_is_open
 rth_range = nz(rth_high - rth_low, 0.0)
 
 // ADR calculation using daily timeframe
-daily_high = request.security(cleanTicker, "D", high)
-daily_low  = request.security(cleanTicker, "D", low)
+// [1] offset + lookahead_on prevents repainting from intraday daily bar updates —
+// we want yesterday's confirmed range, not the still-forming today range.
+daily_high = request.security(cleanTicker, "D", high[1], lookahead=barmerge.lookahead_on)
+daily_low  = request.security(cleanTicker, "D", low[1],  lookahead=barmerge.lookahead_on)
 daily_range = nz(daily_high - daily_low, 0.0)
 adr_val = nz(ta.sma(daily_range, adr_length), 0.0)
 adr_pct_used = adr_val > 0 ? (rth_range / adr_val) * 100 : 0.0
@@ -461,16 +484,40 @@ debug_require_session = input.bool(true, "🔧 Require Session Filter", group="�
 debug_require_chop = input.bool(true, "🔧 Require Chop Detector", group="🔧 Debug",
      tooltip="Toggle chop detector. Turn OFF to allow signals during choppy wave patterns.\n(Default: true)")
 
+// ============================================================================
+// CONFLUENCE REQUIREMENTS
+// ============================================================================
+// Independent of debug toggles — these make each confluence factor REQUIRED
+// for a signal to fire. Default: V/B/S required (core gates), H/E/W optional.
+// ============================================================================
+grp_req = "🎯 Confluence Requirements"
+req_V = input.bool(true,  "Require Volume Exhaustion (V)", group=grp_req,
+     tooltip="When ON, a signal only fires if volume exhaustion is confirmed by the selected method (Wave/ROC/Z-Score/OFF).\nTurn OFF to allow signals without volume confirmation — useful for testing or if volume data is unavailable.\n(Default: ON)")
+req_B = input.bool(true,  "Require BB Band-Edge (B)", group=grp_req,
+     tooltip="When ON, signals require price to be at or beyond the BB band edge within the last 2 bars.\nTurn OFF to allow signals anywhere within the bands — widens entry zone but reduces mean-reversion precision.\n(Default: ON)")
+req_S = input.bool(true,  "Require Session Window (S)", group=grp_req,
+     tooltip="When ON, signals only fire inside configured session windows.\nTurn OFF to allow signals at any time — useful for testing or running overnight sessions.\n(Default: ON)")
+req_H = input.bool(false, "Require Hpx Confluence (H)", group=grp_req,
+     tooltip="When ON, longs require close BELOW HMA (mean-reversion into bearish structure) and shorts require close ABOVE HMA.\nThis is the Hpx confluence factor — price position vs HMA, NOT the HMA Gate (HMA vs EMA 21).\nTurn ON for stricter mean-reversion entries. Keep OFF if you want signals regardless of price/HMA relationship.\n(Default: OFF)")
+req_E = input.bool(false, "Require EMA Stack (E)", group=grp_req,
+     tooltip="When ON, longs require 21>34>50 (bull stack) and shorts require 21<34<50 (bear stack).\nEnsures trades are in the direction of the trend stack. Reduces counter-trend signals but significantly reduces trade count in mixed/transitional markets.\n(Default: OFF)")
+req_W = input.bool(false, "Require Cross-Wave Ratio (W)", group=grp_req,
+     tooltip="When ON, signals require the counter-wave volume to be ≤ the configured ratio vs the dominant wave.\nEnsures only 'hollow' counter-waves qualify. Reduces trade count but increases confidence in dominant-side continuation.\nOnly active when EMAs are stacked (no stack = no cross-wave data).\n(Default: OFF)")
+
 // --- Confluence Gates ---
 bb_ok_long  = bb_ok_long_recent and not bb_is_squeezed
 bb_ok_short = bb_ok_short_recent and not bb_is_squeezed
 
-// --- Build final gate chain with individual toggles ---
-vol_gate_long  = not debug_require_vol or vol_bottom_raw
-vol_gate_short = not debug_require_vol or vol_peak_raw
+// --- Build final gate chain with individual toggles + req_* requirements ---
+vol_gate_long  = not req_V or not debug_require_vol or vol_bottom_raw
+vol_gate_short = not req_V or not debug_require_vol or vol_peak_raw
 
-bb_gate_long  = not debug_require_bb or bb_ok_long
-bb_gate_short = not debug_require_bb or bb_ok_short
+bb_gate_long  = not req_B or not debug_require_bb or bb_ok_long
+bb_gate_short = not req_B or not debug_require_bb or bb_ok_short
+
+// Session gate
+session_gate_long  = not req_S or not debug_require_session or in_session
+session_gate_short = not req_S or not debug_require_session or in_session
 
 // Trend gate (v2.0.0): HMA × EMA 21 cross
 // Longs blocked when HMA below EMA 21 (bearish momentum)
@@ -478,15 +525,29 @@ bb_gate_short = not debug_require_bb or bb_ok_short
 trend_gate_long  = not debug_require_trend or not use_trend_gate or hma_above_ema21
 trend_gate_short = not debug_require_trend or not use_trend_gate or hma_below_ema21
 
-// Session gate
-session_gate = not debug_require_session or in_session
+// Hpx gate (v2.0.3): price position relative to HMA — mean-reversion premise
+// Long: close below HMA (entering into bearish structure)
+// Short: close above HMA (entering into bullish structure)
+hpx_gate_long  = not req_H or hma_bear
+hpx_gate_short = not req_H or hma_bull
+
+// EMA stack gate (v2.0.3): requires full 21/34/50 alignment
+ema_stack_gate_long  = not req_E or ema_stacked_bull
+ema_stack_gate_short = not req_E or ema_stacked_bear
+
+// Cross-wave ratio gate (v2.0.3): requires hollow counter-wave when stacked
+xwave_gate_long  = not req_W or xwave_long_ok
+xwave_gate_short = not req_W or xwave_short_ok
 
 // Chop gate (v2.0.0)
 chop_gate = not debug_require_chop or not is_choppy
 
+// Shared session gate (backward compat — used in flatten/session checks)
+session_gate = not debug_require_session or in_session
+
 // --- Final Signals ---
-vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and session_gate and adr_ok and chop_gate)
-vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and session_gate and adr_ok and chop_gate)
+vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and session_gate_long  and adr_ok and chop_gate)
+vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and session_gate_short and adr_ok and chop_gate)
 
 // ============================================================================
 // CONFLUENCE COUNTER (7 factors — v2.0.0)
@@ -556,6 +617,12 @@ ats_flatten_payload = ats_flatten_enabled ? '{"contract": "{{ticker}}", "trade_t
 // Convert points to ticks for strategy.exit()
 tp_ticks    = math.round(tp_pts / syminfo.mintick)
 trail_ticks = math.round(trail_pts / syminfo.mintick)
+
+// Trail activation: Renko-native — N bricks must move in favor before trail begins
+// brick_safe falls back to 8 ticks on non-Renko charts
+brick_safe       = brick_size > 0 ? brick_size : syminfo.mintick * 8
+trail_act_pts    = trail_activation_bricks * brick_safe
+trail_act_ticks  = math.max(1, math.round(trail_act_pts / syminfo.mintick))
 
 // --- Track entry prices for dashboard display ---
 var float entry1_price = na
@@ -706,15 +773,15 @@ if vol_peak and daily_ok
 // EXITS — TP + Trailing Stop + Breakeven per position
 // ============================================================================
 if is_long
-    strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+    strategy.exit("XL1", from_entry="L1", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_l1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
-    strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+    strategy.exit("XL2", from_entry="L2", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_l2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
 
 if is_short
-    strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+    strategy.exit("XS1", from_entry="S1", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_s1, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be1_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
-    strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=1, trail_offset=trail_ticks,
+    strategy.exit("XS2", from_entry="S2", profit=tp_ticks, trail_points=trail_act_ticks, trail_offset=trail_ticks,
          stop=be_stop_s2, comment_profit="TP +" + str.tostring(tp_pts, "#.##"), comment_loss=be2_triggered ? "BE+" + str.tostring(be_ticks) + "t" : "TRL", alert_message=ql_exit)
 
 // --- Flatten outside session (optional) ---
@@ -746,8 +813,8 @@ candle_col = not color_candles ? na :
 barcolor(candle_col)
 
 // --- Tooltip confluence breakdown (pre-built to reduce label line length) ---
-conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗")
-conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗")
+conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗")
+conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗")
 
 // --- VOL PEAK / VOL BOTTOM Labels ---
 if show_labels and vol_bottom
@@ -907,11 +974,11 @@ if show_dash and barstate.islast
     table.cell(dash, 1, 7, bb_now_text, bgcolor=bb_conf_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 7, bb_is_squeezed ? bb_width_text : "L:" + bb_dash_gate_l + " S:" + bb_dash_gate_s, bgcolor=bg_row, text_color=bb_is_squeezed ? color.red : color.gray, text_size=size.small)
 
-    // Row 8: HMA × EMA 21 Trend Gate (v2.0.0)
+    // Row 8: HMA Gate (v2.0.0/v2.0.3)
     hma_gate_text = hma_above_ema21 ? "HMA > 21 ▲" : "HMA < 21 ▼"
     hma_gate_col  = hma_above_ema21 ? color.new(color.green, 50) : color.new(color.red, 50)
     hma_slope_text = hma_rising ? "▲ RISING" : hma_falling ? "▼ FALLING" : "— FLAT"
-    table.cell(dash, 0, 8, "Trend Gate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 8, "HMA Gate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 8, hma_gate_text, bgcolor=hma_gate_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 8, hma_slope_text, bgcolor=bg_row, text_color=hma_rising ? color.green : hma_falling ? color.red : color.gray, text_size=size.small)
 
@@ -937,8 +1004,8 @@ if show_dash and barstate.islast
 
     // Row 11: Confluence Counter (7 factors — v2.0.0)
     conf_display = math.max(conf_total_long, conf_total_short)
-    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "H" : "·") + (conf_ema_long > 0 ? "E" : "·") + (conf_xwave_long > 0 ? "W" : "·")
-    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "H" : "·") + (conf_ema_short > 0 ? "E" : "·") + (conf_xwave_short > 0 ? "W" : "·")
+    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "Hpx" : "···") + (conf_ema_long > 0 ? "E" : "·") + (conf_xwave_long > 0 ? "W" : "·")
+    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "Hpx" : "···") + (conf_ema_short > 0 ? "E" : "·") + (conf_xwave_short > 0 ? "W" : "·")
     conf_col = conf_display >= 6 ? color.new(color.green, 40) : conf_display >= 4 ? color.new(color.yellow, 50) : color.new(color.gray, 70)
     conf_dir_text = conf_total_long > conf_total_short ? "L:" + conf_detail_l : conf_total_short > conf_total_long ? "S:" + conf_detail_s : "L:" + conf_detail_l
     table.cell(dash, 0, 11, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
@@ -994,15 +1061,18 @@ if show_dash and barstate.islast
         flip_ok = flip_to_bull or flip_to_bear
         raw_flip = raw_flip_bull or raw_flip_bear
         dbg_flip = flip_ok ? "✓" : raw_flip ? "✗" + str.tostring(prev_wave_len) + "b<" + str.tostring(min_wave_len) : "·"
-        dbg_vol  = not debug_require_vol ? "OFF" : (vol_pass ? "✓" : "✗")
-        dbg_bb   = not debug_require_bb ? "OFF" : bb_is_squeezed ? "✗SQZ" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
+        dbg_vol  = not req_V or not debug_require_vol ? "OFF" : (vol_pass ? "✓" : "✗")
+        dbg_bb   = not req_B or not debug_require_bb ? "OFF" : bb_is_squeezed ? "✗SQZ" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
-        dbg_sess = not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
+        dbg_hpx  = not req_H ? "OFF" : ((hpx_gate_long and flip_to_bull) or (hpx_gate_short and flip_to_bear) ? "✓" : "✗")
+        dbg_ema  = not req_E ? "OFF" : (ema_stacked_bull or ema_stacked_bear ? "✓" : "✗")
+        dbg_xwv  = not req_W ? "OFF" : (xwave_long_ok or xwave_short_ok ? "✓" : "✗")
+        dbg_sess = not req_S or not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
         dbg_adr  = not enable_adr_filter ? "OFF" : (adr_ok ? "✓" : "✗" + str.tostring(adr_pct_used, "0") + "%")
         dbg_chop = not debug_require_chop ? "OFF" : (not is_choppy ? "✓" : "✗" + str.tostring(avg_wave_len, "0.1") + "b")
         table.cell(dash, 0, 18, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 1, 18, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 2, 18, "TR:" + dbg_trend + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 18, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 18, "Hpx:" + dbg_hpx + " E:" + dbg_ema + " W:" + dbg_xwv + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
