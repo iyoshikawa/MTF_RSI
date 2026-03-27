@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 2.0.1  
+**Version:** 2.0.2
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -159,7 +159,7 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 
 | Row | Label | Shows |
 |-----|-------|-------|
-| 0 | VES v2.0.1 | Preset, chart type, debug |
+| 0 | VES v2.0.2 | Preset, chart type, debug |
 | 1 | TP/TRAIL | TP + trail with mode (FIX/ATR/MAX) + ⚡ tighten |
 | 2 | SIGNAL | scanning / VEB / VEP + chop status + avg wave len |
 | 3 | Position | FLAT / LONG D:1/2 / SHORT D:2/2 + trail level |
@@ -233,6 +233,7 @@ Fires a redundant flatten webhook whenever the strategy transitions to fully fla
 | 1.16 | Slippage 3 ticks, ATS safety flatten, input layout |
 | **2.0** | **EMA 21/34/50 stack, HMA×EMA21 trend gate, cross-wave volume ratio, adaptive BB squeeze, chop detector, 7 confluences** |
 | 2.0.1 | Bug fixes: na protection, multi-close tracking, confluence in entry comments, squeeze release alert, HMA color input |
+| 2.0.2 | Code refinements: VER constant, explicit YM/NQ presets, entry dedup, tooltip extraction, BB TF label fix, dead code removal |
 
 ---
 
