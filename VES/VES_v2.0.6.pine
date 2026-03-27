@@ -1,7 +1,19 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.5]
+// Volume Exhaustion Strategy [VES v2.0.6]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.6 CHANGES:
+//   - BB demoted from hard gate to confluence only. bb_gate_long/short removed
+//     from final signal formula. bb_ok_long_recent/short_recent still computed
+//     and still contribute +1 to confluence score (conf_bb). req_B and
+//     debug_require_bb inputs removed — no longer meaningful as gates.
+//   - FIX: flip_to_bull/flip_to_bear added directly to final signal formula.
+//     Previously flip was only enforced inside vol_bottom_raw (V path). With
+//     V:OFF, signals fired on every bar meeting other conditions — not just
+//     flip bars. Now flip is always required regardless of V setting.
+//   - Dashboard gates row: BB removed from gate display; added to confluence
+//     detail string instead.
 // ============================================================================
 // v2.0.5 CHANGES:
 //   - FIX: Hard stop loss was missing entirely. strategy.exit() calls had no
@@ -70,7 +82,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.5"
+VER = "2.0.6"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -521,8 +533,6 @@ debug_mode = input.bool(false, "🔧 DEBUG: Bypass all gates (flip only)", group
      tooltip="When ON, signals fire on every Renko direction flip regardless of all gates. Use to verify the engine works, then turn OFF.\n(Default: false)")
 debug_require_vol = input.bool(true, "🔧 Require Volume Exhaustion", group="🔧 Debug",
      tooltip="Toggle volume exhaustion gate. Turn OFF to see if volume is blocking signals.\n(Default: true)")
-debug_require_bb  = input.bool(true, "🔧 Require BB Outside Bands", group="🔧 Debug",
-     tooltip="Toggle BB band-edge gate. Turn OFF to see if BB is blocking signals.\n(Default: true)")
 debug_require_trend = input.bool(true, "🔧 Require Trend Gate (HMA×EMA21)", group="🔧 Debug",
      tooltip="Toggle HMA×EMA21 trend warning gate. Turn OFF to allow signals regardless of HMA position relative to EMA 21.\n(Default: true)")
 debug_require_session = input.bool(true, "🔧 Require Session Filter", group="🔧 Debug",
@@ -539,8 +549,6 @@ debug_require_chop = input.bool(true, "🔧 Require Chop Detector", group="🔧 
 grp_req = "🎯 Confluence Requirements"
 req_V = input.bool(true,  "Require Volume Exhaustion (V)", group=grp_req,
      tooltip="When ON, a signal only fires if volume exhaustion is confirmed by the selected method (Wave/ROC/Z-Score/OFF).\nTurn OFF to allow signals without volume confirmation — useful for testing or if volume data is unavailable.\n(Default: ON)")
-req_B = input.bool(true,  "Require BB Band-Edge (B)", group=grp_req,
-     tooltip="When ON, signals require price to be at or beyond the BB band edge within the last 2 bars.\nTurn OFF to allow signals anywhere within the bands — widens entry zone but reduces mean-reversion precision.\n(Default: ON)")
 req_S = input.bool(true,  "Require Session Window (S)", group=grp_req,
      tooltip="When ON, signals only fire inside configured session windows.\nTurn OFF to allow signals at any time — useful for testing or running overnight sessions.\n(Default: ON)")
 req_H = input.bool(false, "Require Hpx Confluence (H)", group=grp_req,
@@ -550,16 +558,16 @@ req_E = input.bool(false, "Require EMA Stack (E)", group=grp_req,
 req_W = input.bool(false, "Require Cross-Wave Ratio (W)", group=grp_req,
      tooltip="When ON, signals require the counter-wave volume to be ≤ the configured ratio vs the dominant wave.\nEnsures only 'hollow' counter-waves qualify. Reduces trade count but increases confidence in dominant-side continuation.\nOnly active when EMAs are stacked (no stack = no cross-wave data).\n(Default: OFF)")
 
-// --- Confluence Gates ---
+// --- BB: confluence only (v2.0.6) — still computed for +1 confluence score ---
+// bb_ok_long/short retained for confluence counter; no longer used as a gate.
 bb_ok_long  = bb_ok_long_recent and not bb_is_squeezed
 bb_ok_short = bb_ok_short_recent and not bb_is_squeezed
 
 // --- Build final gate chain with individual toggles + req_* requirements ---
+// flip_to_bull/bear always required — ensures signals only fire on Renko direction
+// flips regardless of whether V gate is ON or OFF.
 vol_gate_long  = not req_V or not debug_require_vol or vol_bottom_raw
 vol_gate_short = not req_V or not debug_require_vol or vol_peak_raw
-
-bb_gate_long  = not req_B or not debug_require_bb or bb_ok_long
-bb_gate_short = not req_B or not debug_require_bb or bb_ok_short
 
 // Session gate
 session_gate_long  = not req_S or not debug_require_session or in_session
@@ -592,8 +600,10 @@ chop_gate = not debug_require_chop or not is_choppy
 session_gate = not debug_require_session or in_session
 
 // --- Final Signals ---
-vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (vol_gate_long  and bb_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and session_gate_long  and adr_ok and chop_gate)
-vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (vol_gate_short and bb_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and session_gate_short and adr_ok and chop_gate)
+// flip_to_bull/bear is always the base requirement (v2.0.6).
+// bb_gate removed — BB is now confluence only.
+vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and session_gate_long  and adr_ok and chop_gate)
+vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and session_gate_short and adr_ok and chop_gate)
 
 // ============================================================================
 // CONFLUENCE COUNTER (7 factors — v2.0.0)
@@ -1109,7 +1119,7 @@ if show_dash and barstate.islast
         raw_flip = raw_flip_bull or raw_flip_bear
         dbg_flip = flip_ok ? "✓" : raw_flip ? "✗" + str.tostring(prev_wave_len) + "b<" + str.tostring(min_wave_len) : "·"
         dbg_vol  = not req_V or not debug_require_vol ? "OFF" : (vol_pass ? "✓" : "✗")
-        dbg_bb   = not req_B or not debug_require_bb ? "OFF" : bb_is_squeezed ? "✗SQZ" : ((bb_ok_long or bb_ok_short) ? "✓" : "✗")
+        dbg_bb   = bb_is_squeezed ? "SQZ" : (bb_ok_long or bb_ok_short) ? "✓" : "✗"  // confluence status only
         dbg_trend = not debug_require_trend ? "OFF" : ((trend_gate_long or trend_gate_short) ? "✓" : "✗")
         dbg_hpx  = not req_H ? "OFF" : ((hpx_gate_long and flip_to_bull) or (hpx_gate_short and flip_to_bear) ? "✓" : "✗")
         dbg_ema  = not req_E ? "OFF" : (ema_stacked_bull or ema_stacked_bear ? "✓" : "✗")
@@ -1118,7 +1128,7 @@ if show_dash and barstate.islast
         dbg_adr  = not enable_adr_filter ? "OFF" : (adr_ok ? "✓" : "✗" + str.tostring(adr_pct_used, "0") + "%")
         dbg_chop = not debug_require_chop ? "OFF" : (not is_choppy ? "✓" : "✗" + str.tostring(avg_wave_len, "0.1") + "b")
         table.cell(dash, 0, 18, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 1, 18, "F:" + dbg_flip + " V:" + dbg_vol + " BB:" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 18, "F:" + dbg_flip + " V:" + dbg_vol + " BB(c):" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
         table.cell(dash, 2, 18, "Hpx:" + dbg_hpx + " E:" + dbg_ema + " W:" + dbg_xwv + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
