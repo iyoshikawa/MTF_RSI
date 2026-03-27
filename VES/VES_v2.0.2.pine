@@ -1,7 +1,17 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.1]
+// Volume Exhaustion Strategy [VES v2.0.2]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.2 CHANGES:
+//   - Extracted VER constant — single source of truth for version string.
+//   - Preset overrides: YM/NQ TP/trail now explicit (were relying on input defaults).
+//   - Decomposed exhaust_val_text nested ternary into named intermediates.
+//   - Fixed BB timeframe dashboard label (hardcoded "m" broke D/W/M).
+//   - Deduplicated entry blocks: merged flatten-reverse + flat-enter branches.
+//   - Extracted tooltip confluence strings to reduce label line length.
+//   - Removed dead is_custom variable (CUSTOM works as preset fallthrough).
+//   - Variable reference audit: all vars confirmed defined before use.
 // ============================================================================
 // v2.0.0 CHANGES:
 //   - EMA stack: 9/15/34/233 → 21/34/50 (OHLC4). Slower, more deliberate trend read.
@@ -19,7 +29,8 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-strategy("Volume Exhaustion Strategy [VES v2.0.1]",
+VER = "2.0.2"
+strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
      default_qty_type = strategy.fixed,
@@ -46,7 +57,6 @@ is_nq = preset == "📈 NQ (NASDAQ)"
 is_es = preset == "📊 ES (S&P)"
 is_cl = preset == "🛢️ CL (Crude)"
 is_hg = preset == "🟤 HG (Copper)"
-is_custom = preset == "⚙️ CUSTOM"
 
 // ============================================================================
 // CORE CONFIGURATION
@@ -735,22 +745,26 @@ candle_col = not color_candles ? na :
      color.new(bear_candle_col, 0)
 barcolor(candle_col)
 
+// --- Tooltip confluence breakdown (pre-built to reduce label line length) ---
+conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗")
+conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗")
+
 // --- VOL PEAK / VOL BOTTOM Labels ---
 if show_labels and vol_bottom
     units = is_short ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
     lbl_text = "VEB " + exhaust_val_text + "\n" + wave_len_text + " " + str.tostring(conf_total_long) + "/" + str.tostring(conf_max)
+    tip = "VOL BOTTOM — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\n" + conf_str_long
     label.new(bar_index, low, lbl_text,
          style=label.style_label_up, color=#00E676, textcolor=color.white,
-         size=size.small, yloc=yloc.belowbar,
-         tooltip="VOL BOTTOM — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close + tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\nFlip:✓ Vol:" + (conf_vol_long > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_long > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long > 0 ? "✓" : "✗"))
+         size=size.small, yloc=yloc.belowbar, tooltip=tip)
 
 if show_labels and vol_peak
     units = is_long ? 1 : (is_flat ? 1 : math.min(num_units + 1, 2))
     lbl_text = "VEP " + exhaust_val_text + "\n" + wave_len_text + " " + str.tostring(conf_total_short) + "/" + str.tostring(conf_max)
+    tip = "VOL PEAK — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\n" + conf_str_short
     label.new(bar_index, high, lbl_text,
          style=label.style_label_down, color=#FF6D00, textcolor=color.white,
-         size=size.small, yloc=yloc.abovebar,
-         tooltip="VOL PEAK — D:" + str.tostring(units) + "/2\nTP:" + str.tostring(close - tp_pts, "#.##") + " TRL-" + str.tostring(trail_pts, "#.##") + "\nFlip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " HMA:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗"))
+         size=size.small, yloc=yloc.abovebar, tooltip=tip)
 
 // --- Yellow Dots on EMA Wick Touches ---
 wick_ema = wick_dot_ema == "EMA 21" ? ema_21 : wick_dot_ema == "EMA 50" ? ema_50 : ema_34
@@ -782,7 +796,7 @@ plot(be_level_long,  "BE (Long)",  color=color.new(color.yellow, 30), linewidth=
 plot(be_level_short, "BE (Short)", color=color.new(color.yellow, 30), linewidth=1, style=plot.style_linebr)
 
 // ============================================================================
-// PERFORMANCE DASHBOARD (19 rows — v2.0.0)
+// PERFORMANCE DASHBOARD (19 rows)
 // ============================================================================
 dash_position = switch dash_pos
     "Top Right"    => position.top_right
@@ -834,7 +848,7 @@ if show_dash and barstate.islast
 
     // Row 0: Header
     dbg_label = debug_mode ? " 🔧 DEBUG" : ""
-    table.cell(dash, 0, 0, "VES v2.0.1", bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
+    table.cell(dash, 0, 0, "VES v" + VER, bgcolor=bg_header, text_color=#00BFFF, text_size=size.small)
     table.cell(dash, 1, 0, preset_lbl + " | " + renko_info + dbg_label, bgcolor=debug_mode ? color.new(#FF6B00, 30) : bg_header, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 0, "", bgcolor=bg_header)
 

@@ -21,7 +21,7 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 
 ---
 
-## Strategy Settings per Instrument (v2.0.1 Defaults)
+## Strategy Settings per Instrument (v2.0.2 Defaults)
 
 ### Strategy Properties
 | Setting | Full-Size | Micro |
@@ -62,7 +62,7 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 
 ## Test Procedure
 
-### Step 1: Baseline — All Protections ON (v2.0.1 defaults)
+### Step 1: Baseline — All Protections ON (v2.0.2 defaults)
 Load each instrument with settings above. Record stats.
 
 ### Step 2: Volume Method Comparison
@@ -72,7 +72,7 @@ For each instrument, switch only the Detection Method and record:
 3. Z-Score
 4. OFF (flip + BB only)
 
-### Step 3: New Feature Isolation (v2.0.1)
+### Step 3: New Feature Isolation (v2.0.2)
 Test each new feature by toggling its debug gate:
 1. **Chop Detector impact:** Toggle 🔧 Require Chop Detector ON/OFF
 2. **Trend Gate impact:** Toggle 🔧 Require Trend Gate ON/OFF
@@ -96,7 +96,7 @@ For the best volume method, test:
 
 ### [INSTRUMENT] — Renko [BRICK] / [BASE TF]
 
-**v2.0.1 Baseline:**
+**v2.0.2 Baseline:**
 
 | Config | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
 |--------|--------|-------|---------|-----|------------|---------|----------|--------|
