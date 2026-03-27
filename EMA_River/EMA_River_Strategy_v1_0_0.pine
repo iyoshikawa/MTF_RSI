@@ -1,0 +1,328 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yellow_Yoshi
+// EMA River Strategy v1.0.0
+
+//@version=6
+strategy("EMA River Strategy v1.0.0", 
+     overlay = true, 
+     margin_long = 100, 
+     margin_short = 100,
+     initial_capital = 10000,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 1,
+     pyramiding = 0,
+     calc_on_every_tick = true,
+     process_orders_on_close = false)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ INPUTS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────── Moving Averages ──────────────────────────────
+grpMA = "═══ Moving Averages ═══"
+
+ema9_len    = input.int(9, "Fast EMA Length", minval=1, group=grpMA, tooltip="Signal line EMA")
+ema9_src    = input.source(ohlc4, "Fast EMA Source", group=grpMA)
+
+ema20_len   = input.int(20, "EMA River Length", minval=1, group=grpMA, tooltip="EMA River (High/HL2/Low)")
+
+hma20_len   = input.int(20, "HMA Length", minval=1, group=grpMA)
+hma20_src   = input.source(close, "HMA Source", group=grpMA)
+
+// ─────────────────────────────── Trend Confirmation ───────────────────────────
+grpTrend = "═══ Trend Confirmation ═══"
+
+trendLookback = input.int(7, "HA Candle Lookback", minval=1, group=grpTrend, tooltip="Minimum HA candles confirming trend direction")
+
+// ─────────────────────────────── Chop Filter: Bollinger Bands ─────────────────
+grpBB = "═══ Chop Filter: Bollinger Bands ═══"
+
+useBBChop       = input.bool(true, "Enable BB Chop Filter", group=grpBB)
+bbLength        = input.int(10, "BB Length", minval=1, group=grpBB)
+bbStdDev        = input.float(1.2, "BB StdDev", minval=0.1, step=0.1, group=grpBB)
+bbTimeframe     = input.timeframe("3", "BB Timeframe", group=grpBB)
+
+// ─────────────────────────────── Chop Filter: T-Line Channel ──────────────────
+grpTLine = "═══ Chop Filter: T-Line Channel ═══"
+
+useTLineChop    = input.bool(true, "Enable T-Line Chop Filter", group=grpTLine)
+tlineLength     = input.int(55, "T-Line EMA Length", minval=1, group=grpTLine)
+tlineWidth      = input.int(34, "T-Line Channel Width (points)", minval=1, group=grpTLine)
+
+// ─────────────────────────────── Session Filters ──────────────────────────────
+grpSession = "═══ Session Filters ═══"
+
+useSessionFilter = input.bool(true, "Enable Session Filter", group=grpSession)
+sess_globex      = input.session("1801-2000", "Globex Evening", group=grpSession)
+sess_premarket   = input.session("0700-0815", "Pre-Market", group=grpSession)
+sess_ny          = input.session("0930-1600", "NY Session", group=grpSession)
+sessionTZ        = input.string("America/New_York", "Timezone", group=grpSession)
+
+// ─────────────────────────────── Position Management ──────────────────────────
+grpExit = "═══ Position Management ═══"
+
+tpPoints        = input.float(40, "Take Profit (points)", minval=1, group=grpExit)
+slPoints        = input.float(40, "Stop Loss (points)", minval=1, group=grpExit)
+trailPoints     = input.float(20, "Trail Distance (points)", minval=1, group=grpExit)
+beActivation    = input.float(75, "BE Activation (%)", minval=1, maxval=100, group=grpExit, tooltip="Move SL to BE+offset when this % of TP reached")
+beOffset        = input.float(3, "BE Offset (points)", minval=0, group=grpExit, tooltip="Points above/below entry for BE stop")
+
+// ─────────────────────────────── Display ──────────────────────────────────────
+grpDisplay = "═══ Display ═══"
+
+showEMA9        = input.bool(true, "Show 9 EMA", group=grpDisplay)
+showRiver       = input.bool(true, "Show EMA River", group=grpDisplay)
+showHMA         = input.bool(true, "Show 20 HMA", group=grpDisplay)
+showTLine       = input.bool(true, "Show T-Line Channel", group=grpDisplay)
+showSignals     = input.bool(true, "Show Entry Arrows", group=grpDisplay)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CALCULATIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────── Moving Averages ──────────────────────────────
+// 9 EMA on OHLC4
+ema9 = ta.ema(ema9_src, ema9_len)
+
+// 20 EMA River (High / HL2 / Low)
+ema20_high = ta.ema(high, ema20_len)
+ema20_hl2  = ta.ema(hl2, ema20_len)
+ema20_low  = ta.ema(low, ema20_len)
+
+// 20 HMA on Close
+f_hma(_src, _len) =>
+    _halfLen = math.floor(_len / 2)
+    _sqrtLen = math.floor(math.sqrt(_len))
+    _wma1 = ta.wma(_src, _halfLen)
+    _wma2 = ta.wma(_src, _len)
+    ta.wma(2 * _wma1 - _wma2, _sqrtLen)
+
+hma20 = f_hma(hma20_src, hma20_len)
+
+// ─────────────────────────────── Heiken Ashi ──────────────────────────────────
+haClose = (open + high + low + close) / 4
+var float haOpen = na
+haOpen := na(haOpen[1]) ? (open + close) / 2 : (haOpen[1] + haClose[1]) / 2
+haHigh = math.max(high, math.max(haOpen, haClose))
+haLow  = math.min(low, math.min(haOpen, haClose))
+
+haBullish = haClose > haOpen
+haBearish = haClose < haOpen
+
+// ─────────────────────────────── Trend Detection ──────────────────────────────
+// Count consecutive HA candles in same direction
+var int bullCount = 0
+var int bearCount = 0
+
+if haBullish
+    bullCount := bullCount + 1
+    bearCount := 0
+else if haBearish
+    bearCount := bearCount + 1
+    bullCount := 0
+else
+    bullCount := 0
+    bearCount := 0
+
+// EMA River direction confirmation
+riverBullish = ema20_low > ema20_low[1] and ema20_hl2 > ema20_hl2[1]
+riverBearish = ema20_high < ema20_high[1] and ema20_hl2 < ema20_hl2[1]
+
+// Combined trend signals
+uptrendConfirmed   = bullCount >= trendLookback and riverBullish
+downtrendConfirmed = bearCount >= trendLookback and riverBearish
+
+// Track prior trend for flip detection
+var int priorTrend = 0  // 1 = up, -1 = down, 0 = neutral
+if uptrendConfirmed
+    priorTrend := 1
+else if downtrendConfirmed
+    priorTrend := -1
+
+// ─────────────────────────────── Chop Filter: Bollinger Bands ─────────────────
+[bbMiddle, bbUpper, bbLower] = request.security(syminfo.tickerid, bbTimeframe, 
+     ta.bb(close, bbLength, bbStdDev), lookahead=barmerge.lookahead_off)
+
+insideBB = close < bbUpper and close > bbLower
+bbChopActive = useBBChop and insideBB
+
+// ─────────────────────────────── Chop Filter: T-Line Channel ──────────────────
+tlineEMA = ta.ema(close, tlineLength)
+tlineUpper = tlineEMA + tlineWidth * syminfo.mintick
+tlineLower = tlineEMA - tlineWidth * syminfo.mintick
+
+insideTLine = close < tlineUpper and close > tlineLower
+tlineChopActive = useTLineChop and insideTLine
+
+// Combined chop filter
+inChopZone = bbChopActive or tlineChopActive
+
+// ─────────────────────────────── Session Filter ───────────────────────────────
+inGlobex    = time(timeframe.period, sess_globex, sessionTZ)
+inPremarket = time(timeframe.period, sess_premarket, sessionTZ)
+inNY        = time(timeframe.period, sess_ny, sessionTZ)
+
+inTradingSession = not useSessionFilter or (inGlobex or inPremarket or inNY)
+
+// ─────────────────────────────── Entry Conditions ─────────────────────────────
+// Entry Type 1: Continuation
+// Long: Uptrend → close between HMA and 9 EMA → break above HMA
+// Short: Downtrend → close between HMA and 9 EMA → close below 9 EMA
+
+inPullbackZoneLong  = close > math.min(hma20, ema9) and close < math.max(hma20, ema9)
+inPullbackZoneShort = close > math.min(hma20, ema9) and close < math.max(hma20, ema9)
+
+// Track if we were in pullback zone
+var bool wasPullbackLong  = false
+var bool wasPullbackShort = false
+
+if uptrendConfirmed and inPullbackZoneLong
+    wasPullbackLong := true
+if downtrendConfirmed and inPullbackZoneShort
+    wasPullbackShort := true
+
+// Reset if trend changes
+if downtrendConfirmed
+    wasPullbackLong := false
+if uptrendConfirmed
+    wasPullbackShort := false
+
+// Continuation triggers
+contLongTrigger  = wasPullbackLong and close > hma20 and close > ema9
+contShortTrigger = wasPullbackShort and close < ema9 and close < hma20
+
+// Reset after trigger
+if contLongTrigger
+    wasPullbackLong := false
+if contShortTrigger
+    wasPullbackShort := false
+
+// Entry Type 2: Flip (counter-trend reversal)
+// Long Flip: Was trending DOWN → closes above BOTH HMA and 9 EMA
+// Short Flip: Was trending UP → closes below BOTH HMA and 9 EMA
+
+flipLongTrigger  = priorTrend == -1 and close > hma20 and close > ema9
+flipShortTrigger = priorTrend == 1 and close < hma20 and close < ema9
+
+// Bonus: Also outside EMA river
+flipLongBonus  = flipLongTrigger and close > ema20_high
+flipShortBonus = flipShortTrigger and close < ema20_low
+
+// ─────────────────────────────── Signal Generation ────────────────────────────
+canTrade = inTradingSession and not inChopZone and strategy.position_size == 0
+
+longContinuation  = canTrade and contLongTrigger
+shortContinuation = canTrade and contShortTrigger
+longFlip          = canTrade and flipLongTrigger and not contLongTrigger
+shortFlip         = canTrade and flipShortTrigger and not contShortTrigger
+
+longSignal  = longContinuation or longFlip
+shortSignal = shortContinuation or shortFlip
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ POSITION MANAGEMENT ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Track entry price for BE calculation
+var float entryPrice = na
+var bool beActivated = false
+
+// Entry execution
+if longSignal
+    strategy.entry("Long", strategy.long)
+    entryPrice := close
+    beActivated := false
+
+if shortSignal
+    strategy.entry("Short", strategy.short)
+    entryPrice := close
+    beActivated := false
+
+// Calculate BE activation level
+beActivationLevel = tpPoints * (beActivation / 100)
+
+// Long position management
+if strategy.position_size > 0
+    currentProfit = close - entryPrice
+    
+    // Check BE activation
+    if currentProfit >= beActivationLevel * syminfo.mintick and not beActivated
+        beActivated := true
+    
+    // Set exits
+    tpPrice = entryPrice + tpPoints * syminfo.mintick
+    slPrice = beActivated ? entryPrice + beOffset * syminfo.mintick : entryPrice - slPoints * syminfo.mintick
+    
+    strategy.exit("Long Exit", "Long", 
+         limit = tpPrice, 
+         stop = slPrice, 
+         trail_offset = trailPoints * syminfo.mintick / syminfo.mintick, 
+         trail_points = trailPoints)
+
+// Short position management
+if strategy.position_size < 0
+    currentProfit = entryPrice - close
+    
+    // Check BE activation
+    if currentProfit >= beActivationLevel * syminfo.mintick and not beActivated
+        beActivated := true
+    
+    // Set exits
+    tpPrice = entryPrice - tpPoints * syminfo.mintick
+    slPrice = beActivated ? entryPrice - beOffset * syminfo.mintick : entryPrice + slPoints * syminfo.mintick
+    
+    strategy.exit("Short Exit", "Short", 
+         limit = tpPrice, 
+         stop = slPrice, 
+         trail_offset = trailPoints * syminfo.mintick / syminfo.mintick, 
+         trail_points = trailPoints)
+
+// Flatten in chop zone (exit existing positions)
+if inChopZone and strategy.position_size != 0
+    strategy.close_all("Chop Zone Exit")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ PLOTTING ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────── Moving Averages ──────────────────────────────
+plot(showEMA9 ? ema9 : na, "9 EMA", color=color.yellow, linewidth=2)
+
+plot(showRiver ? ema20_high : na, "20 EMA High", color=color.orange, linewidth=1)
+plot(showRiver ? ema20_hl2 : na, "20 EMA HL2", color=color.red, linewidth=2)
+plot(showRiver ? ema20_low : na, "20 EMA Low", color=color.maroon, linewidth=1)
+
+plot(showHMA ? hma20 : na, "20 HMA", color=color.lime, linewidth=2)
+
+// ─────────────────────────────── T-Line Channel ───────────────────────────────
+plot(showTLine ? tlineUpper : na, "T-Line Upper", color=color.new(color.purple, 50), linewidth=1)
+plot(showTLine ? tlineEMA : na, "T-Line EMA", color=color.purple, linewidth=1)
+plot(showTLine ? tlineLower : na, "T-Line Lower", color=color.new(color.purple, 50), linewidth=1)
+
+// ─────────────────────────────── Entry Signals ────────────────────────────────
+plotshape(showSignals and longContinuation, "Long Continuation", 
+     style=shape.triangleup, location=location.belowbar, 
+     color=color.green, size=size.normal, text="LC")
+
+plotshape(showSignals and shortContinuation, "Short Continuation", 
+     style=shape.triangledown, location=location.abovebar, 
+     color=color.red, size=size.normal, text="SC")
+
+plotshape(showSignals and longFlip, "Long Flip", 
+     style=shape.triangleup, location=location.belowbar, 
+     color=color.aqua, size=size.normal, text="LF")
+
+plotshape(showSignals and shortFlip, "Short Flip", 
+     style=shape.triangledown, location=location.abovebar, 
+     color=color.fuchsia, size=size.normal, text="SF")
+
+// ─────────────────────────────── Background ───────────────────────────────────
+bgcolor(inChopZone ? color.new(color.gray, 90) : na, title="Chop Zone")
+bgcolor(not inTradingSession and useSessionFilter ? color.new(color.red, 95) : na, title="No Trade Session")
+
+// ─────────────────────────────── Alerts ───────────────────────────────────────
+alertcondition(longContinuation, "Long Continuation", "EMA River: Long Continuation Entry")
+alertcondition(shortContinuation, "Short Continuation", "EMA River: Short Continuation Entry")
+alertcondition(longFlip, "Long Flip", "EMA River: Long Flip Entry")
+alertcondition(shortFlip, "Short Flip", "EMA River: Short Flip Entry")
+alertcondition(inChopZone and strategy.position_size != 0, "Flatten Warning", "EMA River: In Chop Zone - Consider Flattening")
