@@ -306,29 +306,6 @@ price_at_upper_bb = close >= bb_upper
 price_below_mid   = close < bb_basis
 price_above_mid   = close > bb_basis
 
-// BB gate: per-wave boolean — did the PRIOR wave ever touch the band edge?
-// On Renko the flip bar is already 1 brick away from the wave extreme; a fixed
-// bar-count lookback routinely misses valid touches. Instead we track whether
-// the wave that just ended touched the band at any point during its life.
-// State vars reset on each flip; prior wave value carried into the gate.
-var bool cur_wave_lower_bb  = false
-var bool cur_wave_upper_bb  = false
-var bool prev_wave_lower_bb = false
-var bool prev_wave_upper_bb = false
-
-if raw_flip_bull or raw_flip_bear
-    prev_wave_lower_bb := cur_wave_lower_bb
-    prev_wave_upper_bb := cur_wave_upper_bb
-    cur_wave_lower_bb  := price_at_lower_bb
-    cur_wave_upper_bb  := price_at_upper_bb
-else
-    cur_wave_lower_bb  := cur_wave_lower_bb or price_at_lower_bb
-    cur_wave_upper_bb  := cur_wave_upper_bb or price_at_upper_bb
-
-// Gate passes if current flip bar is at the band OR if prior wave touched it
-bb_ok_long_recent  = price_at_lower_bb or prev_wave_lower_bb
-bb_ok_short_recent = price_at_upper_bb or prev_wave_upper_bb
-
 // BB Bandwidth — adaptive squeeze detection (v2.0.0)
 bb_width_pts = nz(bb_upper - bb_lower, 0.0)
 bb_width_avg = ta.sma(bb_width_pts, bb_squeeze_avg_len)
@@ -400,7 +377,27 @@ if raw_flip_bull or raw_flip_bear
 flip_to_bull = raw_flip_bull and prev_wave_len >= min_wave_len
 flip_to_bear = raw_flip_bear and prev_wave_len >= min_wave_len
 
-// --- Chop Detector (v2.0.0) ---
+// --- BB Per-Wave Tracker (v2.0.4) ---
+// raw_flip_* is now defined — track whether each wave EVER touched the band.
+// Placed here so raw_flip_bull/bear are available. price_at_lower/upper_bb
+// are defined above in the BB section and are always available.
+var bool cur_wave_lower_bb  = false
+var bool cur_wave_upper_bb  = false
+var bool prev_wave_lower_bb = false
+var bool prev_wave_upper_bb = false
+
+if raw_flip_bull or raw_flip_bear
+    prev_wave_lower_bb := cur_wave_lower_bb
+    prev_wave_upper_bb := cur_wave_upper_bb
+    cur_wave_lower_bb  := price_at_lower_bb
+    cur_wave_upper_bb  := price_at_upper_bb
+else
+    cur_wave_lower_bb  := cur_wave_lower_bb or price_at_lower_bb
+    cur_wave_upper_bb  := cur_wave_upper_bb or price_at_upper_bb
+
+// Gate passes if current flip bar is at the band OR if the prior wave touched it
+bb_ok_long_recent  = price_at_lower_bb or prev_wave_lower_bb
+bb_ok_short_recent = price_at_upper_bb or prev_wave_upper_bb
 // Tracks the last N completed wave lengths. If average is below threshold, market is choppy.
 var array<float> wave_len_history = array.new_float(0)
 
