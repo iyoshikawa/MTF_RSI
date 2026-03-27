@@ -1,5 +1,5 @@
 # VES Backtest Guide — Multi-Instrument Comparison
-**Version:** 1.16.0
+**Version:** 2.0.0
 
 ## ⚠️ Renko Backtest Disclaimer
 TradingView Renko backtests fill at synthetic brick prices. Results show **directional edge** but dollar amounts are inflated by 30-50%. Use for **relative comparison** between settings, not absolute performance. Forward test on SIM via QuantLynk for real data.
@@ -21,14 +21,14 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 
 ---
 
-## Strategy Settings per Instrument
+## Strategy Settings per Instrument (v2.0.0 Defaults)
 
 ### Strategy Properties
 | Setting | Full-Size | Micro |
 |---------|-----------|-------|
 | Initial Capital | $25,000 | $5,000 |
 | Commission | $2.25/ct | $0.62/ct ($1.25 MCL) |
-| Slippage | 1 tick | 1 tick |
+| Slippage | 3 ticks | 3 ticks |
 | Pyramiding | 2 | 2 |
 | Default Qty | 1 | 1 |
 
@@ -43,13 +43,17 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 | BE Bricks | 3 | 3 | 3 | 3 |
 | BE Ticks | 3 | 3 | 3 | 3 |
 | Min Wave Length | 3 | 3 | 3 | 3 |
+| EMA Stack | 21/34/50 | same | same | same |
+| HMA Length | 20 | 20 | 20 | 20 |
+| Trend Gate (HMA×EMA21) | ON | ON | ON | ON |
 | BB Length | 10 | 10 | 10 | 10 |
 | BB StdDev | 1.2 | 1.2 | 1.2 | 1.4 |
 | BB TF | 3 min | 3 min | 3 min | 5 min |
-| BB Squeeze | ON | ON | ON | ON |
+| BB Squeeze | ON (0.60 ratio) | same | same | same |
+| Chop Detector | ON (avg ≥5b) | same | same | same |
+| XWave Ratio | 0.50 | same | same | same |
 | ADR Filter | ON | ON | ON | ON |
 | Session | 0930-1145,1330-1600 | same | same | 0900-1430 |
-| Trend Filter | ON | ON | ON | ON |
 | Vol Method | Wave Compare | same | same | same |
 | DEBUG | OFF | OFF | OFF | OFF |
 | All Gates | ON | ON | ON | ON |
@@ -58,7 +62,7 @@ TradingView Renko backtests fill at synthetic brick prices. Results show **direc
 
 ## Test Procedure
 
-### Step 1: Baseline — All Protections ON
+### Step 1: Baseline — All Protections ON (v2.0.0 defaults)
 Load each instrument with settings above. Record stats.
 
 ### Step 2: Volume Method Comparison
@@ -68,7 +72,19 @@ For each instrument, switch only the Detection Method and record:
 3. Z-Score
 4. OFF (flip + BB only)
 
-### Step 3: Trail Mode Comparison (optional)
+### Step 3: New Feature Isolation (v2.0.0)
+Test each new feature by toggling its debug gate:
+1. **Chop Detector impact:** Toggle 🔧 Require Chop Detector ON/OFF
+2. **Trend Gate impact:** Toggle 🔧 Require Trend Gate ON/OFF
+3. **BB Squeeze ratio:** Compare 0.45 / 0.60 / 0.70
+
+### Step 4: Cross-Wave Volume Ratio Tuning
+Compare confluence quality at different thresholds:
+1. 0.40 (very tight — only hollow pops)
+2. 0.50 (default)
+3. 0.65 (permissive)
+
+### Step 5: Trail Mode Comparison (optional)
 For the best volume method, test:
 1. Fixed (original)
 2. ATR (1.5x multiplier)
@@ -80,6 +96,15 @@ For the best volume method, test:
 
 ### [INSTRUMENT] — Renko [BRICK] / [BASE TF]
 
+**v2.0.0 Baseline:**
+
+| Config | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
+|--------|--------|-------|---------|-----|------------|---------|----------|--------|
+| All defaults | | | | | | | | |
+| Chop OFF | | | | | | | | |
+| Trend Gate OFF | | | | | | | | |
+| Both OFF | | | | | | | | |
+
 **Volume Method Comparison:**
 
 | Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
@@ -89,64 +114,26 @@ For the best volume method, test:
 | Z-Score | | | | | | | | |
 | OFF (flip+BB) | | | | | | | | |
 
-**Trail Mode Comparison (using best vol method):**
+**XWave Ratio Comparison (note confluence counts, not P&L):**
 
-| Trail Mode | Trades | Win % | Net P&L | PF | Expectancy | Max DD |
-|------------|--------|-------|---------|-----|------------|--------|
-| Fixed 40pt | | | | | | |
-| ATR 1.5x | | | | | | |
-| Wider of Both | | | | | | |
-
----
-
-## Pre-Built Result Tables
-
-### YM1! — Renko Trad 8 / 30s
-
-| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-----|------------|---------|----------|--------|
-| Wave Compare | | | | | | | | |
-| Volume ROC | | | | | | | | |
-| Z-Score | | | | | | | | |
-| OFF (flip+BB) | | | | | | | | |
-
-### NQ1! — Renko Trad 8 / 30s
-
-| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-----|------------|---------|----------|--------|
-| Wave Compare | | | | | | | | |
-| Volume ROC | | | | | | | | |
-| Z-Score | | | | | | | | |
-| OFF (flip+BB) | | | | | | | | |
-
-### ES1! — Renko Trad 4 / 30s
-
-| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-----|------------|---------|----------|--------|
-| Wave Compare | | | | | | | | |
-| Volume ROC | | | | | | | | |
-| Z-Score | | | | | | | | |
-| OFF (flip+BB) | | | | | | | | |
-
-### CL1! — Renko Trad 0.08 / 30s
-
-| Method | Trades | Win % | Net P&L | PF | Expectancy | Avg Win | Avg Loss | Max DD |
-|--------|--------|-------|---------|-----|------------|---------|----------|--------|
-| Wave Compare | | | | | | | | |
-| Volume ROC | | | | | | | | |
-| Z-Score | | | | | | | | |
-| OFF (flip+BB) | | | | | | | | |
+| Threshold | Avg Conf Long | Avg Conf Short | Notes |
+|-----------|--------------|----------------|-------|
+| 0.40 | | | |
+| 0.50 | | | |
+| 0.65 | | | |
 
 ---
 
 ## What to Look For
 
-**Best method per instrument:** Highest profit factor at reasonable trade count.
+**Chop Detector value:** Compare trade count and PF with chop ON vs OFF. If PF improves and trade count drops, the detector is filtering real chop.
 
-**Trade frequency:** Z-Score will likely produce very few on Renko. OFF the most. Wave Compare and ROC in between.
+**Trend Gate value:** Compare with HMA×EMA21 gate ON vs OFF. Should reduce losers more than it reduces winners.
+
+**BB Squeeze adaptive:** Should auto-calibrate. If results are similar across instruments without manual width tuning, the adaptive ratio is working.
+
+**Cross-Wave Ratio:** Since it's a confluence (not gate), check if high-confluence signals (6+/7) outperform low ones (4/7). If yes, the XWave ratio adds real information.
 
 **Stability:** If results are similar across methods, the edge is in exit management (TP/Trail/BE), not entry detection. That's robust.
-
-**Protection impact:** Compare with BB Squeeze ON vs OFF, and Min Wave 3 vs 1. The protections should reduce trade count but improve PF and reduce DD.
 
 **Cross-instrument:** If one instrument consistently outperforms, prioritize SIM testing there first.

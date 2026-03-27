@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 1.16.0  
+**Version:** 2.0.0  
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -11,14 +11,30 @@ VES is a **mean-reversion strategy** that detects when buying or selling pressur
 
 ---
 
+## What Changed in v2.0.0
+
+Major overhaul of the trend, squeeze, and chop detection systems:
+
+- **EMA stack:** 9/15/34/233 → 21/34/50 (OHLC4). Slower, more deliberate — eliminates false unstacks on minor pullbacks.
+- **Removed:** Old Soft Trend Filter (EMA stack + 233 macro gate). Replaced by HMA × EMA 21 trend warning gate.
+- **HMA 20:** Source changed from `close` → `OHLC4` to match EMAs. Now plotted on chart. HMA crossing EMA 21 serves as the trend-warning gate.
+- **NEW — Cross-Wave Volume Ratio:** Compares counter-wave volume to dominant-wave volume when 21/34/50 is stacked. Weak pop/dip (≤50%) = +1 confluence confirming dominant side controls. (Confluence, not gate.)
+- **BB Squeeze:** Replaced static 2×TP threshold with adaptive ratio. Current width must be ≥60% of its own 50-bar moving average. Auto-calibrates across sessions and instruments.
+- **NEW — Chop Detector:** Averages the last 5 wave lengths. If average is below 5 bricks, market is flip-heavy chop — all signals blocked until waves lengthen.
+- **Confluence count:** 6 → 7 (added Cross-Wave Volume Ratio `W`).
+- **Dashboard:** 18 → 19 rows. Added EMA Stack, Trend Gate, XWave Ratio, Chop status rows.
+- **All new thresholds** exposed as inputs with conservative/aggressive guidance in tooltips.
+
+---
+
 ## How It Works — The Signal Chain
 
 A trade only fires when ALL required gates pass simultaneously:
 
 ```
-Min Wave → Renko Flip → Volume Exhaustion → BB Outside + No Squeeze → Trend → Session → ADR → Daily Limits
-    ↓           ↓              ↓                    ↓                   ↓        ↓        ↓         ↓
- REQUIRED    REQUIRED       REQUIRED            REQUIRED              SOFT    REQUIRED  TOGGLE    REQUIRED
+Min Wave → Renko Flip → Volume Exhaustion → BB Outside + No Squeeze → Trend Gate → Session → ADR → Chop → Daily Limits
+    ↓           ↓              ↓                    ↓                      ↓          ↓        ↓      ↓         ↓
+ REQUIRED    REQUIRED       REQUIRED            REQUIRED               GATE(HMA)   REQUIRED  TOGGLE  GATE     REQUIRED
 ```
 
 ### Gate 1: Minimum Wave Length (Required, default 3 bricks)
@@ -30,18 +46,18 @@ A new brick in the opposite direction of the prior run.
 ### Gate 3: Volume Exhaustion (Required — 3 Methods + OFF)
 **Wave Compare (Recommended for Renko):** Accumulates volume per directional wave. Fires on Wave Decline (ending wave had less volume — tiring out) or Wave Climax (blowoff — more volume but nobody left).
 
-**Volume ROC:** Compares fast volume MA (5) to slow MA (20). Fires when volume is decelerating or below average at the flip.
+**Volume ROC:** Compares fast volume MA (5) to slow MA (20). Fires when volume is decelerating or below average at the flip. Better suited for time-based/Heiken Ashi charts.
 
 **Z-Score:** Per-brick spike detection. Works poorly on Renko. Included for time-based charts.
 
 **OFF:** No volume gate. Fires on every flip that meets other conditions.
 
-### Gate 4: Bollinger Bands (Required — Includes Squeeze Filter)
+### Gate 4: Bollinger Bands (Required — Includes Adaptive Squeeze)
 1. **Band Position:** Price at/beyond BB edge within last 2 bars.
-2. **Squeeze Filter (v1.15.0):** BB width must be ≥ 2× TP distance. If TP=40pt but bands are 30pt wide, TP is unreachable — all signals blocked until bands expand.
+2. **Adaptive Squeeze Filter (v2.0.0):** BB width must be ≥ 60% of its own 50-bar moving average. Auto-calibrates — no manual adjustment needed between sessions or instruments. When squeezed, all signals blocked until bands expand.
 
-### Gate 5: Trend Filter (Soft — Toggleable)
-Blocks longs in strong downtrends (EMAs stacked bearish + below 233). Blocks shorts in strong uptrends.
+### Gate 5: Trend Warning Gate — HMA × EMA 21 (v2.0.0, Toggleable)
+HMA 20 (OHLC4) crossing through EMA 21 (OHLC4) signals a momentum shift. When HMA drops below EMA 21, longs are blocked (bearish momentum). When HMA rises above EMA 21, shorts are blocked (bullish momentum). Replaces the old 9/15/34 + 233 soft trend filter with a cleaner momentum-based read.
 
 ### Gate 6: Session Window (Required)
 Default: 0930-1145, 1330-1600 ET. CL uses 0900-1430.
@@ -49,12 +65,15 @@ Default: 0930-1145, 1330-1600 ET. CL uses 0900-1430.
 ### Gate 7: ADR Exhaustion Filter (Toggleable, default ON)
 80% of ADR consumed → new entries suppressed. 70% → trail tightens 30%.
 
-### Gate 8: Daily Limits (Required)
+### Gate 8: Chop Detector (v2.0.0, Toggleable)
+Averages the length of the last 5 completed waves. If the average is below 5 bricks, the market is flipping back and forth without follow-through. All signals blocked until the average rises above the threshold.
+
+### Gate 9: Daily Limits (Required)
 DD limit ($3,000) and profit target (disabled by default). Flattens and blocks when hit.
 
 ---
 
-## The 6 Confluences
+## The 7 Confluences (v2.0.0)
 
 Informational score on each signal label and dashboard. Does NOT gate entries.
 
@@ -65,9 +84,10 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 | 3 | B | BB Outside Bands | At/below lower BB (2-bar) | At/above upper BB (2-bar) |
 | 4 | S | Session Active | In trading window | In trading window |
 | 5 | H | HMA Position | Price < HMA 20 | Price > HMA 20 |
-| 6 | E | EMA Alignment | 9 > 15 > 34 stacked | 9 < 15 < 34 stacked |
+| 6 | E | EMA Alignment | 21 > 34 > 50 stacked | 21 < 34 < 50 stacked |
+| 7 | W | Cross-Wave Vol Ratio | Dip vol ≤50% of push vol (bull stack) | Pop vol ≤50% of push vol (bear stack) |
 
-**Label example:** `VEB WvDecl 5b 4/6` = VOL BOTTOM, Wave Decline, 5-brick wave, 4/6 confluences.
+**Label example:** `VEB WvDecl 5b 5/7` = VOL BOTTOM, Wave Decline, 5-brick wave, 5/7 confluences.
 
 ---
 
@@ -80,36 +100,40 @@ Informational score on each signal label and dashboard. Does NOT gate entries.
 
 ---
 
-## ATR Adaptive Trail (v1.13.0)
+## New v2.0.0 Settings — Defaults and Tuning Ranges
 
-| Mode | Behavior |
-|------|----------|
-| Fixed (default) | Original 40pt trail. Consistent. |
-| ATR | Trail = ATR × multiplier (default 1.5). Adapts to volatility. |
-| Wider of Both | MAX(fixed, ATR). Fixed floor + ATR room. |
+### Adaptive BB Squeeze Filter
 
----
+| Setting | Default | Conservative | Aggressive |
+|---------|---------|-------------|------------|
+| Squeeze Ratio | 0.60 | 0.70 | 0.45 |
+| Avg Lookback | 50 bars | 75 bars | 30 bars |
 
-## ADR Exhaustion Filter (v1.13.0)
+### Chop Detector
 
-| Threshold | Default | Action |
-|-----------|---------|--------|
-| Tighten | 70% ADR | Trail reduced 30% |
-| Suppress | 80% ADR | New entries blocked |
+| Setting | Default | Conservative | Aggressive |
+|---------|---------|-------------|------------|
+| Waves to Average | 5 | 7 | 3 |
+| Min Avg Length | 5.0 bricks | 6.0 | 4.0 |
 
-Dashboard: `62% of 285pt ✓ OK` / `78% ⚡ TIGHTENED` / `85% ⛔ EXHAUSTED`
+### Cross-Wave Volume Ratio
 
----
+| Setting | Default | Conservative | Aggressive |
+|---------|---------|-------------|------------|
+| Max Counter-Wave Ratio | 0.50 | 0.40 | 0.65 |
 
-## BB Squeeze Filter (v1.15.0)
+### EMA Stack
 
-Auto: min width = 2× TP. Manual: set fixed points. Dashboard: `⛔ SQUEEZE | 45/80pt`
+| Setting | Default | Conservative | Aggressive |
+|---------|---------|-------------|------------|
+| EMA Fast | 21 | 21 | 18 |
+| EMA Slow | 50 | 50 | 44 |
 
----
+### HMA Trend Gate
 
-## Min Wave Length (v1.14.0)
-
-Default 3 bricks. Labels show `5b`. Debug shows `F:✗2b<3` when rejected.
+| Setting | Default | Conservative | Aggressive |
+|---------|---------|-------------|------------|
+| HMA Length | 20 | 24 | 16 |
 
 ---
 
@@ -118,40 +142,42 @@ Default 3 bricks. Labels show `5b`. Debug shows `F:✗2b<3` when rejected.
 | Feature | Prevents | Default |
 |---------|----------|---------|
 | Min Wave Length | Whipsaw chains on chop | 3 bricks |
-| BB Squeeze Filter | Entries where TP unreachable | ON (2× TP) |
+| Adaptive BB Squeeze | Entries in compression | ON (60% ratio) |
+| Chop Detector | Trading flip-heavy markets | ON (avg ≥5b) |
 | ADR Exhaustion | Late entries, range spent | ON (80%) |
 | ADR Trail Tighten | Giving back profits | ON (70%) |
-| Trend Filter | Catching falling knives | ON (soft) |
+| HMA × EMA 21 Gate | Momentum shift trades | ON |
 | Breakeven Stop | Winners turning to losers | ON (BE+3 after 3b) |
 | Daily DD Limit | Blowing up on bad day | $3,000 |
 | Daily PT Target | Overtrading winning day | Disabled |
-| Slippage (v1.16.0) | Unrealistic backtest P&L | 3 ticks |
-| Safety Flatten (v1.16.0) | Broker position desync | Disabled |
+| Slippage | Unrealistic backtest P&L | 3 ticks |
+| Safety Flatten | Broker position desync | Disabled |
 
 ---
 
-## Dashboard Reference (18 rows)
+## Dashboard Reference (19 rows)
 
 | Row | Label | Shows |
 |-----|-------|-------|
-| 0 | VES v1.16.0 | Preset, chart type, debug |
+| 0 | VES v2.0.0 | Preset, chart type, debug |
 | 1 | TP/TRAIL | TP + trail with mode (FIX/ATR/MAX) + ⚡ tighten |
-| 2 | SIGNAL | scanning / VEB / VEP + Z-score |
+| 2 | SIGNAL | scanning / VEB / VEP + chop status + avg wave len |
 | 3 | Position | FLAT / LONG D:1/2 / SHORT D:2/2 + trail level |
 | 4 | Session | Active / Outside |
 | 5 | Daily P&L | P&L, trades W/L, DD/PT limits |
 | 6 | ADR | % used, OK / TIGHTENED / EXHAUSTED |
-| 7 | BB | Position + squeeze status + width |
-| 8 | HMA 20 ℹ | Price vs HMA, slope (info only) |
-| 9 | Confluence | X/6 with FVBSHE breakdown |
-| 10 | Win Rate | Win % + closed trades |
-| 11 | Net P&L | All-time P&L + max DD |
-| 12 | Prof Factor | PF + W/L count |
-| 13 | Expectancy | $/trade |
-| 14 | Avg W/L | Avg win $ / avg loss $ |
-| 15 | Trend | EMA stacking |
-| 16 | Vol [METHOD] | Exhaustion status + method stats |
-| 17 | 🔧 GATES | F V BB TR SS ADR pass/fail |
+| 7 | BB | Position + squeeze status + width vs threshold |
+| 8 | Trend Gate | HMA vs EMA 21 position + HMA slope |
+| 9 | EMA Stack | 21/34/50 alignment (BULL / BEAR / MIXED) |
+| 10 | XWave Ratio | Cross-wave volume comparison + ratio % |
+| 11 | Confluence | X/7 with FVBSHEW breakdown |
+| 12 | Win Rate | Win % + closed trades |
+| 13 | Net P&L | All-time P&L + max DD |
+| 14 | Prof Factor | PF + W/L count |
+| 15 | Expectancy | $/trade |
+| 16 | Avg W/L | Avg win $ / avg loss $ |
+| 17 | Vol [METHOD] | Exhaustion status + method stats |
+| 18 | 🔧 GATES | F V BB CH TR SS ADR pass/fail |
 
 ---
 
@@ -166,7 +192,7 @@ Default 3 bricks. Labels show `5b`. Debug shows `F:✗2b<3` when rejected.
 | 🟤 HG | 0.005 | 0.005 | 0930-1145,1330-1600 | 1.2 | 3m | $3K |
 | ⚙️ CUSTOM | Manual | Manual | Manual | Manual | Manual | Manual |
 
-All tooltips show `(Default: X)` for recovery if saved over.
+All tooltips show `(Default: X)` and conservative/aggressive ranges for recovery and tuning.
 
 ---
 
@@ -204,7 +230,8 @@ Fires a redundant flatten webhook whenever the strategy transitions to fully fla
 | 1.13 | ATR adaptive trail + ADR exhaustion filter |
 | 1.14 | Min wave length filter |
 | 1.15 | BB squeeze filter |
-| 1.16 | Slippage 3 ticks, ATS safety flatten, input layout (QZeus style) |
+| 1.16 | Slippage 3 ticks, ATS safety flatten, input layout |
+| **2.0** | **EMA 21/34/50 stack, HMA×EMA21 trend gate, cross-wave volume ratio, adaptive BB squeeze, chop detector, 7 confluences** |
 
 ---
 
@@ -214,7 +241,9 @@ Fires a redundant flatten webhook whenever the strategy transitions to fully fla
 2. Select instrument preset
 3. Detection Method → "Wave Compare"
 4. Min Wave Length → 3
-5. BB Squeeze → ON
-6. Debug OFF, all gates ON
-7. Check GATES row if no signals appear
-8. Wire QuantLynk to SIM for real fills
+5. BB Squeeze → ON (adaptive — no tuning needed)
+6. Chop Detector → ON
+7. Trend Gate → ON
+8. Debug OFF, all gates ON
+9. Check GATES row if no signals appear
+10. Wire QuantLynk to SIM for real fills
