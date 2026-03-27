@@ -1,0 +1,170 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © iyoshikawa - Adapted from GJBI concept by @Geo-TX
+
+//@version=6
+indicator("GJBIHMACrossRibbon - HMA Crossover Ribbon", "GJBI HMA Ribbon", overlay=true, max_bars_back=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DESCRIPTION
+// ══════════════════════════════════════════════════════════════════════════════
+// Ribbon indicator that visualizes the interaction between fast and slow HMA
+// - Uses 6 HMA (fast) and 21 HMA (slow) by default
+// - Bullish ribbon when fast HMA > slow HMA
+// - Bearish ribbon when fast HMA < slow HMA
+// - Real-time updates on price change (before bar closes)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// --- HMA Settings ---
+grpHMA = "HMA Settings"
+fastHmaLen  = input.int(6,  "Fast HMA Length", minval=1, group=grpHMA, tooltip="Fast HMA period (default 6)")
+slowHmaLen  = input.int(21, "Slow HMA Length", minval=1, group=grpHMA, tooltip="Slow HMA period (default 21)")
+hmaSource   = input.source(close, "HMA Source", group=grpHMA, tooltip="Price source for HMA calculation")
+
+// --- Ribbon Colors ---
+grpRibbon = "Ribbon Colors"
+bullRibbonColor = input.color(color.new(color.green, 60), "Bullish Ribbon", group=grpRibbon, tooltip="Color when Fast HMA > Slow HMA")
+bearRibbonColor = input.color(color.new(color.red, 60),   "Bearish Ribbon", group=grpRibbon, tooltip="Color when Fast HMA < Slow HMA")
+showRibbon      = input.bool(true, "Show Ribbon Fill", group=grpRibbon)
+
+// --- HMA Line Display ---
+grpLines = "HMA Lines"
+showFastHma     = input.bool(true, "Show Fast HMA Line", group=grpLines)
+showSlowHma     = input.bool(true, "Show Slow HMA Line", group=grpLines)
+fastHmaColor    = input.color(color.lime, "Fast HMA Color", group=grpLines)
+slowHmaColor    = input.color(color.red,  "Slow HMA Color", group=grpLines)
+fastHmaWidth    = input.int(2, "Fast HMA Width", minval=1, maxval=5, group=grpLines)
+slowHmaWidth    = input.int(2, "Slow HMA Width", minval=1, maxval=5, group=grpLines)
+
+// --- Crossover Markers ---
+grpCross = "Crossover Markers"
+showCrossovers  = input.bool(true, "Show Crossover Markers", group=grpCross)
+bullCrossColor  = input.color(color.green, "Bullish Cross Color", group=grpCross)
+bearCrossColor  = input.color(color.red,   "Bearish Cross Color", group=grpCross)
+crossMarkerSize = input.string("small", "Marker Size", options=["tiny", "small", "normal", "large"], group=grpCross)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HMA CALCULATION FUNCTION
+// ══════════════════════════════════════════════════════════════════════════════
+// HMA = WMA(2*WMA(n/2) − WMA(n)), sqrt(n))
+
+hma(src, length) =>
+    halfLen = math.floor(length / 2)
+    sqrtLen = math.floor(math.sqrt(length))
+    wma1 = ta.wma(src, halfLen)
+    wma2 = ta.wma(src, length)
+    ta.wma(2 * wma1 - wma2, sqrtLen)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Calculate HMAs
+fastHma = hma(hmaSource, fastHmaLen)
+slowHma = hma(hmaSource, slowHmaLen)
+
+// Trend Direction
+isBullish = fastHma > slowHma
+isBearish = fastHma < slowHma
+
+// HMA Momentum (rising/falling)
+fastHmaRising  = fastHma > fastHma[1]
+fastHmaFalling = fastHma < fastHma[1]
+slowHmaRising  = slowHma > slowHma[1]
+slowHmaFalling = slowHma < slowHma[1]
+
+// Crossovers
+bullishCross = ta.crossover(fastHma, slowHma)
+bearishCross = ta.crossunder(fastHma, slowHma)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Get marker size
+markerSize = switch crossMarkerSize
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    "large"  => size.large
+
+// Ribbon color based on trend
+ribbonColor = isBullish ? bullRibbonColor : isBearish ? bearRibbonColor : na
+
+// Plot HMA Lines
+p_fastHma = plot(showFastHma ? fastHma : na, "Fast HMA", color=fastHmaColor, linewidth=fastHmaWidth)
+p_slowHma = plot(showSlowHma ? slowHma : na, "Slow HMA", color=slowHmaColor, linewidth=slowHmaWidth)
+
+// Ribbon Fill
+fill(p_fastHma, p_slowHma, color=showRibbon ? ribbonColor : na, title="HMA Ribbon")
+
+// Crossover Markers
+plotshape(showCrossovers and bullishCross, title="Bullish Cross", style=shape.triangleup, location=location.belowbar, color=bullCrossColor, size=markerSize)
+plotshape(showCrossovers and bearishCross, title="Bearish Cross", style=shape.triangledown, location=location.abovebar, color=bearCrossColor, size=markerSize)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(bullishCross, title="Bullish HMA Cross", message="Fast HMA crossed above Slow HMA - Bullish Signal")
+alertcondition(bearishCross, title="Bearish HMA Cross", message="Fast HMA crossed below Slow HMA - Bearish Signal")
+
+// Trend change with momentum confirmation
+bullishWithMomentum = bullishCross and fastHmaRising
+bearishWithMomentum = bearishCross and fastHmaFalling
+
+alertcondition(bullishWithMomentum, title="Bullish Cross + Momentum", message="Bullish HMA cross with rising momentum")
+alertcondition(bearishWithMomentum, title="Bearish Cross + Momentum", message="Bearish HMA cross with falling momentum")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE (Dashboard)
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpTable = "Dashboard"
+showTable = input.bool(true, "Show Info Table", group=grpTable)
+tablePos  = input.string("Top Right", "Table Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group=grpTable)
+
+tablePosition = switch tablePos
+    "Top Left"     => position.top_left
+    "Top Right"    => position.top_right
+    "Bottom Left"  => position.bottom_left
+    "Bottom Right" => position.bottom_right
+
+var table infoTable = table.new(tablePosition, 2, 6, bgcolor=color.new(color.black, 80), frame_color=color.gray, frame_width=1, border_color=color.gray, border_width=1)
+
+if showTable and barstate.islast
+    trend = isBullish ? "BULLISH" : isBearish ? "BEARISH" : "NEUTRAL"
+    trendColor = isBullish ? color.green : isBearish ? color.red : color.gray
+    
+    fastMomentum = fastHmaRising ? "▲ RISING" : fastHmaFalling ? "▼ FALLING" : "— FLAT"
+    fastMomColor = fastHmaRising ? color.green : fastHmaFalling ? color.red : color.gray
+    
+    hmaSpread = fastHma - slowHma
+    spreadColor = hmaSpread > 0 ? color.green : hmaSpread < 0 ? color.red : color.gray
+    
+    table.cell(infoTable, 0, 0, "GJBI HMA Ribbon", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "", text_color=color.white)
+    table.cell(infoTable, 0, 1, "Trend:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, trend, text_color=trendColor, text_size=size.tiny)
+    table.cell(infoTable, 0, 2, "Fast HMA:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(fastHma, "#.##"), text_color=fastHmaColor, text_size=size.tiny)
+    table.cell(infoTable, 0, 3, "Slow HMA:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(slowHma, "#.##"), text_color=slowHmaColor, text_size=size.tiny)
+    table.cell(infoTable, 0, 4, "Momentum:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, fastMomentum, text_color=fastMomColor, text_size=size.tiny)
+    table.cell(infoTable, 0, 5, "Spread:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 5, str.tostring(hmaSpread, "#.##"), text_color=spreadColor, text_size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BARCOLOR OPTION (Optional)
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpBarColor = "Bar Coloring"
+colorBars = input.bool(false, "Color Bars by Trend", group=grpBarColor, tooltip="Color price bars based on HMA ribbon trend")
+bullBarColor = input.color(color.green, "Bullish Bar Color", group=grpBarColor)
+bearBarColor = input.color(color.red,   "Bearish Bar Color", group=grpBarColor)
+
+barcolor(colorBars ? (isBullish ? bullBarColor : isBearish ? bearBarColor : na) : na, title="Trend Bar Color")

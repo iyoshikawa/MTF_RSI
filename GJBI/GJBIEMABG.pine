@@ -1,0 +1,133 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © iyoshikawa - Adapted from GJBI concept by @Geo-TX
+
+//@version=6
+indicator("GJBIEMABG - EMA Background & River", "GJBIEMABG", overlay=true, max_bars_back=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DESCRIPTION
+// ══════════════════════════════════════════════════════════════════════════════
+// Chart background indicator used to highlight trend direction
+// - Background color based on price position relative to 50 EMA
+// - "River" visualization: 20 EMA applied to Low, Close, and High
+// - Real-time updates on price change (before bar closes)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// --- EMA Settings ---
+grpEMA = "EMA Settings"
+trendEmaLen     = input.int(50,  "Trend EMA Length",     minval=1, group=grpEMA, tooltip="EMA used for trend direction (background color)")
+riverEmaLen     = input.int(20,  "River EMA Length",     minval=1, group=grpEMA, tooltip="EMA length for the River (applied to H/L/C)")
+
+// --- Background Colors ---
+grpBG = "Background Colors"
+bullBgColor     = input.color(color.new(color.green, 90), "Bullish Background", group=grpBG, tooltip="Background color when price > Trend EMA")
+bearBgColor     = input.color(color.new(color.red, 90),   "Bearish Background", group=grpBG, tooltip="Background color when price < Trend EMA")
+showBackground  = input.bool(true, "Show Background", group=grpBG)
+
+// --- River Colors ---
+grpRiver = "River Settings"
+riverHighColor  = input.color(color.new(color.blue, 50),   "River High EMA",  group=grpRiver)
+riverCloseColor = input.color(color.new(color.purple, 50), "River Close EMA", group=grpRiver)
+riverLowColor   = input.color(color.new(color.blue, 50),   "River Low EMA",   group=grpRiver)
+riverFillColor  = input.color(color.new(color.blue, 85),   "River Fill",      group=grpRiver, tooltip="Fill color between River High and Low")
+showRiver       = input.bool(true, "Show River", group=grpRiver)
+riverLineWidth  = input.int(2, "River Line Width", minval=1, maxval=5, group=grpRiver)
+
+// --- Trend EMA Display ---
+grpTrend = "Trend EMA Display"
+showTrendEma    = input.bool(true, "Show Trend EMA Line", group=grpTrend)
+trendEmaColor   = input.color(color.orange, "Trend EMA Color", group=grpTrend)
+trendEmaWidth   = input.int(2, "Trend EMA Width", minval=1, maxval=5, group=grpTrend)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Trend EMA (50 period by default)
+trendEma = ta.ema(close, trendEmaLen)
+
+// River EMAs (20 period by default, applied to High, Close, Low)
+riverHigh  = ta.ema(high, riverEmaLen)
+riverClose = ta.ema(close, riverEmaLen)
+riverLow   = ta.ema(low, riverEmaLen)
+
+// Trend Direction
+isBullish = close > trendEma
+isBearish = close < trendEma
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Background Color
+bgColor = showBackground ? (isBullish ? bullBgColor : isBearish ? bearBgColor : na) : na
+bgcolor(bgColor, title="Trend Background")
+
+// Trend EMA Line
+plot(showTrendEma ? trendEma : na, "Trend EMA", color=trendEmaColor, linewidth=trendEmaWidth)
+
+// River Lines
+p_riverHigh  = plot(showRiver ? riverHigh : na,  "River High (20 EMA of High)",   color=riverHighColor,  linewidth=riverLineWidth)
+p_riverClose = plot(showRiver ? riverClose : na, "River Close (20 EMA of Close)", color=riverCloseColor, linewidth=1, style=plot.style_line)
+p_riverLow   = plot(showRiver ? riverLow : na,   "River Low (20 EMA of Low)",     color=riverLowColor,   linewidth=riverLineWidth)
+
+// River Fill
+fill(p_riverHigh, p_riverLow, color=showRiver ? riverFillColor : na, title="River Fill")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS (Optional - for strategy integration)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Trend change alerts
+bullishCross = ta.crossover(close, trendEma)
+bearishCross = ta.crossunder(close, trendEma)
+
+// Price entering river from below (bullish setup per PDF)
+priceEnteringRiverFromBelow = ta.crossover(close, riverLow) and close < riverHigh
+// Price entering river from above (bearish setup)
+priceEnteringRiverFromAbove = ta.crossunder(close, riverHigh) and close > riverLow
+
+// Price inside river
+priceInRiver = close >= riverLow and close <= riverHigh
+
+alertcondition(bullishCross, title="Bullish Trend", message="Price crossed above Trend EMA - Bullish")
+alertcondition(bearishCross, title="Bearish Trend", message="Price crossed below Trend EMA - Bearish")
+alertcondition(priceEnteringRiverFromBelow, title="Entering River from Below", message="Price entering River from below - Potential bullish setup")
+alertcondition(priceEnteringRiverFromAbove, title="Entering River from Above", message="Price entering River from above - Potential bearish setup")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE (Optional Dashboard)
+// ══════════════════════════════════════════════════════════════════════════════
+
+grpTable = "Dashboard"
+showTable = input.bool(true, "Show Info Table", group=grpTable)
+tablePos  = input.string("Top Right", "Table Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group=grpTable)
+
+tablePosition = switch tablePos
+    "Top Left"     => position.top_left
+    "Top Right"    => position.top_right
+    "Bottom Left"  => position.bottom_left
+    "Bottom Right" => position.bottom_right
+
+var table infoTable = table.new(tablePosition, 2, 5, bgcolor=color.new(color.black, 80), frame_color=color.gray, frame_width=1, border_color=color.gray, border_width=1)
+
+if showTable and barstate.islast
+    trend = isBullish ? "BULLISH" : isBearish ? "BEARISH" : "NEUTRAL"
+    trendColor = isBullish ? color.green : isBearish ? color.red : color.gray
+    riverStatus = priceInRiver ? "IN RIVER" : close > riverHigh ? "ABOVE" : "BELOW"
+    riverStatusColor = priceInRiver ? color.blue : close > riverHigh ? color.green : color.red
+    
+    table.cell(infoTable, 0, 0, "GJBIEMABG", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "", text_color=color.white)
+    table.cell(infoTable, 0, 1, "Trend:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, trend, text_color=trendColor, text_size=size.tiny)
+    table.cell(infoTable, 0, 2, "River:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, riverStatus, text_color=riverStatusColor, text_size=size.tiny)
+    table.cell(infoTable, 0, 3, str.tostring(trendEmaLen) + " EMA:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(trendEma, "#.##"), text_color=color.orange, text_size=size.tiny)
+    table.cell(infoTable, 0, 4, "River Mid:", text_color=color.white, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, str.tostring(riverClose, "#.##"), text_color=color.purple, text_size=size.tiny)
