@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.2
+// EMA River Strategy v1.0.3
 
 //@version=6
-strategy("EMA River Strategy v1.0.2", 
+strategy("EMA River Strategy v1.0.3", 
      overlay = true, 
      margin_long = 100, 
      margin_short = 100,
@@ -48,6 +48,8 @@ grpTLine = "═══ Chop Filter: T-Line Channel ═══"
 useTLineChop    = input.bool(true, "Enable T-Line Chop Filter", group=grpTLine)
 tlineLength     = input.int(55, "T-Line EMA Length", minval=1, group=grpTLine)
 tlineWidth      = input.int(34, "T-Line Channel Width (points)", minval=1, group=grpTLine)
+tlineCooldownBars = input.int(10, "Cooldown Bars After Exit", minval=1, group=grpTLine, tooltip="Suppress signals for X bars after leaving T-Line chop zone")
+tlineCooldownPts  = input.float(20, "Cooldown Distance (points)", minval=1, group=grpTLine, tooltip="OR allow signals if price moves this far from chop zone boundary")
 
 // ─────────────────────────────── Session Filters ──────────────────────────────
 grpSession = "═══ Session Filters ═══"
@@ -154,8 +156,28 @@ tlineLower = tlineEMA - tlineWidth * syminfo.mintick
 insideTLine = close < tlineUpper and close > tlineLower
 tlineChopActive = useTLineChop and insideTLine
 
+// T-Line cooldown after exiting chop zone
+var int barsSinceTLineExit = 999
+justExitedTLine = insideTLine[1] and not insideTLine
+
+if insideTLine
+    barsSinceTLineExit := 0
+else if justExitedTLine
+    barsSinceTLineExit := 1
+else
+    barsSinceTLineExit := barsSinceTLineExit + 1
+
+// Distance from nearest T-Line boundary
+distFromTLineUpper = close - tlineUpper
+distFromTLineLower = tlineLower - close
+distFromTLine = close > tlineUpper ? distFromTLineUpper : (close < tlineLower ? distFromTLineLower : 0)
+distFromTLinePts = distFromTLine / syminfo.mintick
+
+// Cooldown active: suppress signals until bars OR distance threshold met
+tlineCooldownActive = useTLineChop and (barsSinceTLineExit < tlineCooldownBars) and (distFromTLinePts < tlineCooldownPts)
+
 // Combined chop filter
-inChopZone = bbChopActive or tlineChopActive
+inChopZone = bbChopActive or tlineChopActive or tlineCooldownActive
 
 // ─────────────────────────────── Session Filter ───────────────────────────────
 inGlobex    = not na(time(timeframe.period, sess_globex, sessionTZ))

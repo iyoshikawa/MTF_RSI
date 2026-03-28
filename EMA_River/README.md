@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.2
+- **Current**: v1.0.3
 
 ## Core Components
 
@@ -63,6 +63,12 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.3
+- Added T-Line cooldown after exiting chop zone
+  - Cooldown Bars: suppress signals for X bars after leaving (default 10)
+  - Cooldown Distance: OR allow signals if price moves X points from boundary (default 20)
+  - Both conditions must be false for cooldown to end (bars elapsed OR distance exceeded)
 
 ### v1.0.2
 - Fixed session filter type error: `time()` returns int, converted to bool with `not na()`
