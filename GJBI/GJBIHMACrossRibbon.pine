@@ -47,7 +47,6 @@ grpCross = "Crossover Markers"
 showCrossovers  = input.bool(true, "Show Crossover Markers", group=grpCross)
 bullCrossColor  = input.color(color.green, "Bullish Cross Color", group=grpCross)
 bearCrossColor  = input.color(color.red,   "Bearish Cross Color", group=grpCross)
-crossMarkerSize = input.string("small", "Marker Size", options=["tiny", "small", "normal", "large"], group=grpCross)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HMA CALCULATION FUNCTION
@@ -87,13 +86,6 @@ bearishCross = ta.crossunder(fastHma, slowHma)
 // VISUALIZATION
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Get marker size
-markerSize = switch crossMarkerSize
-    "tiny"   => size.tiny
-    "small"  => size.small
-    "normal" => size.normal
-    "large"  => size.large
-
 // Dynamic line colors based on price position
 fastHmaColor = close > fastHma ? priceAboveColor : priceBelowColor
 slowHmaColor = close > slowHma ? priceAboveColor : priceBelowColor
@@ -109,8 +101,8 @@ p_slowHma = plot(showSlowHma ? slowHma : na, "Slow HMA", color=slowHmaColor, lin
 fill(p_fastHma, p_slowHma, color=showRibbon ? ribbonColor : na, title="HMA Ribbon")
 
 // Crossover Markers
-plotshape(showCrossovers and bullishCross, title="Bullish Cross", style=shape.triangleup, location=location.belowbar, color=bullCrossColor, size=markerSize)
-plotshape(showCrossovers and bearishCross, title="Bearish Cross", style=shape.triangledown, location=location.abovebar, color=bearCrossColor, size=markerSize)
+plotshape(showCrossovers and bullishCross, title="Bullish Cross", style=shape.triangleup, location=location.belowbar, color=bullCrossColor, size=size.small)
+plotshape(showCrossovers and bearishCross, title="Bearish Cross", style=shape.triangledown, location=location.abovebar, color=bearCrossColor, size=size.small)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ALERTS
