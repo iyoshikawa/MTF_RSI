@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.0
+- **Current**: v1.0.1
 
 ## Core Components
 
@@ -63,6 +63,9 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.1
+- Dynamic MA colors: all MAs now change color based on price position (lime above, red below)
 
 ### v1.0.0
 - Initial release
