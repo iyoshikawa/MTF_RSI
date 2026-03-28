@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.6
+// EMA River Strategy v1.0.7
 
 //@version=6
-strategy("EMA River Strategy v1.0.6", 
+strategy("EMA River Strategy v1.0.7", 
      overlay = true, 
      initial_capital = 10000,
      default_qty_type = strategy.fixed,
@@ -77,6 +77,7 @@ showHMA         = input.bool(true, "Show 20 HMA", group=grpDisplay)
 showTLine       = input.bool(true, "Show T-Line Channel", group=grpDisplay)
 showSignals     = input.bool(true, "Show Entry Arrows", group=grpDisplay)
 showDebug       = input.bool(true, "Show Debug Table", group=grpDisplay)
+testMode        = input.bool(false, "⚠️ TEST MODE (bypass all filters)", group=grpDisplay, tooltip="Enable to test if entries work at all - enters on simple EMA cross")
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CALCULATIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -250,19 +251,32 @@ tpTicks = tpPoints / syminfo.mintick
 slTicks = slPoints / syminfo.mintick
 trailTicks = trailPoints / syminfo.mintick
 
-// Entry execution
-if longSignal
+// ─────────────────────────────── TEST MODE ────────────────────────────────────
+// Simple EMA cross entries to verify strategy can execute trades
+testLong  = testMode and ta.crossover(ema9, hma20) and strategy.position_size == 0
+testShort = testMode and ta.crossunder(ema9, hma20) and strategy.position_size == 0
+
+if testLong
+    strategy.entry("Test Long", strategy.long)
+
+if testShort
+    strategy.entry("Test Short", strategy.short)
+
+// ─────────────────────────────── NORMAL ENTRIES ───────────────────────────────
+if not testMode and longSignal
     strategy.entry("Long", strategy.long)
 
-if shortSignal
+if not testMode and shortSignal
     strategy.entry("Short", strategy.short)
 
 // Exit with simple TP/SL/Trail
 strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
 strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
+strategy.exit("Test Long Exit", "Test Long", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
+strategy.exit("Test Short Exit", "Test Short", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
 
-// Flatten in chop zone (exit existing positions)
-if inChopZone and strategy.position_size != 0
+// Flatten in chop zone (exit existing positions) - disabled in test mode
+if not testMode and inChopZone and strategy.position_size != 0
     strategy.close_all("Chop Zone Exit")
 
 // ══════════════════════════════════════════════════════════════════════════════
