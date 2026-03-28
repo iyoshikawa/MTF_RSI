@@ -1,7 +1,22 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.6]
+// Volume Exhaustion Strategy [VES v2.0.7]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.7 CHANGES:
+//   - NEW: Wave Compare debug labels. When debug mode is ON, visual labels show
+//     raw Wave Compare triggers (exhaustion/climax) BEFORE gates filter them.
+//     Labels display wave volumes (prev vs prev2) and trigger type (EXH/CLX).
+//     Helps diagnose why Wave Compare fires or doesn't fire.
+//   - NEW Wave Compare inputs in grp_vol:
+//     • wave_use_exhaustion (ON) — toggle exhaustion detection (declining volume)
+//     • wave_use_climax (ON) — toggle climax detection (blowoff/spike volume)
+//     • wave_climax_mult (1.2) — minimum multiplier for climax vs prior wave
+//     • wave_min_volume (0) — minimum cumulative wave volume to qualify
+//   - NEW Debug input: debug_show_wave_labels (ON) — toggle Wave Compare labels
+//     independently from full debug mode.
+//   - Wave Compare logic updated to respect new toggles. Allows tuning which
+//     pattern types (exhaustion vs climax) fire signals.
 // ============================================================================
 // v2.0.6 CHANGES:
 //   - BB demoted from hard gate to confluence only. bb_gate_long/short removed
@@ -82,7 +97,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.6"
+VER = "2.0.7"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -169,6 +184,16 @@ vol_roc_len = input.int(5, "ROC Smoothing (bars)", group=grp_vol, minval=2, maxv
      tooltip="For Volume ROC: SMA smoothing on volume rate-of-change. Lower = more responsive.\n(Default: 5)")
 z_threshold = input.float(0.3, "Z-Score Threshold", group=grp_vol, minval=0.1, maxval=4.0, step=0.1,
      tooltip="For Z-Score method only. 0.3 = permissive, 1.5 = selective.\n(Default: 0.3)")
+
+// --- Wave Compare Fine-Tuning (v2.0.7) ---
+wave_use_exhaustion = input.bool(true, "Wave: Enable Exhaustion Detection", group=grp_vol,
+     tooltip="Exhaustion = ending wave has LESS volume than prior same-direction wave. Indicates sellers/buyers are tiring out.\nTurn OFF to ignore declining-volume patterns.\n(Default: ON)")
+wave_use_climax = input.bool(true, "Wave: Enable Climax Detection", group=grp_vol,
+     tooltip="Climax = ending wave has MORE volume than prior same-direction wave (blowoff/spike). Can indicate capitulation or exhaustion via excess.\nTurn OFF to ignore high-volume spike patterns.\n(Default: ON)")
+wave_climax_mult = input.float(1.2, "Wave: Climax Multiplier", group=grp_vol, minval=1.0, maxval=3.0, step=0.1,
+     tooltip="For climax detection: ending wave volume must be ≥ this × prior same-direction wave. 1.0 = any increase counts as climax. 1.5 = must be 50% higher. 2.0 = must be double.\nConservative: 1.5+ (only clear blowoffs). Aggressive: 1.0–1.2 (most increases qualify).\n(Default: 1.2)")
+wave_min_volume = input.float(0.0, "Wave: Min Wave Volume (0=off)", group=grp_vol, minval=0.0, maxval=100000.0, step=100.0,
+     tooltip="Minimum cumulative volume a wave must have to qualify for exhaustion/climax detection. Filters out low-volume noise waves.\n0 = no filter (all waves qualify). For YM/NQ, try 500–2000 depending on session.\n(Default: 0)")
 
 grp_ema = "📈 Moving Averages (OHLC4)"
 ema_fast_len  = input.int(21,  "EMA Fast (21)",  group=grp_ema, tooltip="Fast EMA on OHLC4 source. Part of the 21/34/50 trend stack. HMA 20 crossing this EMA triggers the trend-warning gate.\nConservative: 21 (standard). Aggressive: 18 (faster response).\n(Default: 21)")
@@ -462,15 +487,27 @@ else
 // Warmup fix: when prev2 is still 0 (only 1 prior wave observed), allow the signal
 // if prev_wave > 0 — we saw selling/buying pressure end and flip, which is sufficient.
 // Prevents permanent block after gaps, rollovers, or one-sided morning sessions.
+// v2.0.7: Added wave_min_volume filter and wave_use_exhaustion toggle.
 wave_decline_thresh = 1.0 - (wave_decline_pct / 100.0)
-wave_bear_exhausted = (prev2_bear_wave == 0 and prev_bear_wave > 0) or
-                      (prev2_bear_wave > 0 and prev_bear_wave < (prev2_bear_wave * wave_decline_thresh))
-wave_bull_exhausted = (prev2_bull_wave == 0 and prev_bull_wave > 0) or
-                      (prev2_bull_wave > 0 and prev_bull_wave < (prev2_bull_wave * wave_decline_thresh))
 
-// Also detect climactic volume (blowoff top/bottom)
-wave_bear_climax = prev_bear_wave > prev2_bear_wave and prev2_bear_wave > 0
-wave_bull_climax = prev_bull_wave > prev2_bull_wave and prev2_bull_wave > 0
+// Min volume filter — wave must have enough volume to be meaningful
+wave_bear_vol_ok = prev_bear_wave >= wave_min_volume
+wave_bull_vol_ok = prev_bull_wave >= wave_min_volume
+
+// Exhaustion detection (declining volume) — toggled by wave_use_exhaustion
+wave_bear_exhausted_raw = (prev2_bear_wave == 0 and prev_bear_wave > 0) or
+                          (prev2_bear_wave > 0 and prev_bear_wave < (prev2_bear_wave * wave_decline_thresh))
+wave_bull_exhausted_raw = (prev2_bull_wave == 0 and prev_bull_wave > 0) or
+                          (prev2_bull_wave > 0 and prev_bull_wave < (prev2_bull_wave * wave_decline_thresh))
+wave_bear_exhausted = wave_use_exhaustion and wave_bear_vol_ok and wave_bear_exhausted_raw
+wave_bull_exhausted = wave_use_exhaustion and wave_bull_vol_ok and wave_bull_exhausted_raw
+
+// Climax detection (blowoff volume) — v2.0.7: uses wave_climax_mult and wave_use_climax toggle
+// prev_wave must be ≥ climax_mult × prev2_wave to qualify as a climax
+wave_bear_climax_raw = prev2_bear_wave > 0 and prev_bear_wave >= (prev2_bear_wave * wave_climax_mult)
+wave_bull_climax_raw = prev2_bull_wave > 0 and prev_bull_wave >= (prev2_bull_wave * wave_climax_mult)
+wave_bear_climax = wave_use_climax and wave_bear_vol_ok and wave_bear_climax_raw
+wave_bull_climax = wave_use_climax and wave_bull_vol_ok and wave_bull_climax_raw
 
 wave_vol_bottom = flip_to_bull and has_vol and (wave_bear_exhausted or wave_bear_climax)
 wave_vol_peak   = flip_to_bear and has_vol and (wave_bull_exhausted or wave_bull_climax)
@@ -539,6 +576,8 @@ debug_require_session = input.bool(true, "🔧 Require Session Filter", group="�
      tooltip="Toggle session time filter. Turn OFF to allow signals outside trading hours.\n(Default: true)")
 debug_require_chop = input.bool(true, "🔧 Require Chop Detector", group="🔧 Debug",
      tooltip="Toggle chop detector. Turn OFF to allow signals during choppy wave patterns.\n(Default: true)")
+debug_show_wave_labels = input.bool(true, "🔧 Show Wave Compare Labels", group="🔧 Debug",
+     tooltip="When ON (and Debug Mode is ON), displays visual labels showing raw Wave Compare triggers BEFORE gates filter them.\nShows exhaustion (EXH) and climax (CLX) detections with wave volumes.\nHelps diagnose why Wave Compare is or isn't firing.\n(Default: true)")
 
 // ============================================================================
 // CONFLUENCE REQUIREMENTS
@@ -901,6 +940,91 @@ if show_wick_dots and wick_touch_bull and in_session
 if show_wick_dots and wick_touch_bear and in_session
     label.new(bar_index, high, "•", style=label.style_none, textcolor=color.yellow, size=size.small, yloc=yloc.abovebar)
 
+// ============================================================================
+// WAVE COMPARE DEBUG LABELS (v2.0.7)
+// ============================================================================
+// Shows raw Wave Compare triggers BEFORE gates filter them.
+// Only visible when debug_mode AND debug_show_wave_labels are both ON.
+// Labels appear on flip bars showing:
+//   - Trigger type: EXH (exhaustion) or CLX (climax) or NONE
+//   - Wave volumes: prev vs prev2 for the relevant direction
+//   - Pass/fail status for each detection type
+// ============================================================================
+if debug_mode and debug_show_wave_labels and use_wave
+    // Build diagnostic info for bullish flip (checking bear wave exhaustion/climax)
+    if raw_flip_bull
+        // Determine what triggered (or didn't)
+        bear_exh_status = not wave_use_exhaustion ? "OFF" : not wave_bear_vol_ok ? "MINVOL" : wave_bear_exhausted_raw ? "✓" : "✗"
+        bear_clx_status = not wave_use_climax ? "OFF" : not wave_bear_vol_ok ? "MINVOL" : wave_bear_climax_raw ? "✓" : "✗"
+        
+        trigger_type = wave_bear_exhausted ? "EXH" : wave_bear_climax ? "CLX" : "NONE"
+        trigger_col = wave_bear_exhausted or wave_bear_climax ? color.new(#00BCD4, 20) : color.new(#9E9E9E, 40)
+        
+        // Wave volume comparison
+        wave_pct = prev2_bear_wave > 0 ? (prev_bear_wave / prev2_bear_wave) * 100 : 0.0
+        wave_ratio_text = prev2_bear_wave > 0 ? str.tostring(wave_pct, "0") + "%" : "1st"
+        
+        // Flip qualification
+        flip_status = flip_to_bull ? "✓" : "✗" + str.tostring(prev_wave_len) + "b"
+        
+        lbl_text = "🔍 WAVE\n" + trigger_type
+        tip = "Wave Compare Debug (Bull Flip)\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "Flip OK: " + flip_status + " (min " + str.tostring(min_wave_len) + "b)\n" +
+              "Has Vol: " + (has_vol ? "✓" : "✗") + "\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "BEAR WAVE (just ended):\n" +
+              "  Vol: " + str.tostring(prev_bear_wave, "#,##0") + "\n" +
+              "  Prev2: " + str.tostring(prev2_bear_wave, "#,##0") + "\n" +
+              "  Ratio: " + wave_ratio_text + "\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "Exhaustion: " + bear_exh_status + " (decline ≥" + str.tostring(wave_decline_pct, "0") + "%)\n" +
+              "Climax: " + bear_clx_status + " (mult ≥" + str.tostring(wave_climax_mult, "0.0") + "x)\n" +
+              "Min Vol: " + str.tostring(wave_min_volume, "#,##0") + "\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "RESULT: " + (wave_vol_bottom ? "✓ VOL BOTTOM" : "✗ NO TRIGGER")
+        
+        label.new(bar_index, low, lbl_text,
+             style=label.style_label_up, color=trigger_col, textcolor=color.white,
+             size=size.tiny, yloc=yloc.belowbar, tooltip=tip)
+    
+    // Build diagnostic info for bearish flip (checking bull wave exhaustion/climax)
+    if raw_flip_bear
+        // Determine what triggered (or didn't)
+        bull_exh_status = not wave_use_exhaustion ? "OFF" : not wave_bull_vol_ok ? "MINVOL" : wave_bull_exhausted_raw ? "✓" : "✗"
+        bull_clx_status = not wave_use_climax ? "OFF" : not wave_bull_vol_ok ? "MINVOL" : wave_bull_climax_raw ? "✓" : "✗"
+        
+        trigger_type = wave_bull_exhausted ? "EXH" : wave_bull_climax ? "CLX" : "NONE"
+        trigger_col = wave_bull_exhausted or wave_bull_climax ? color.new(#FF9800, 20) : color.new(#9E9E9E, 40)
+        
+        // Wave volume comparison
+        wave_pct = prev2_bull_wave > 0 ? (prev_bull_wave / prev2_bull_wave) * 100 : 0.0
+        wave_ratio_text = prev2_bull_wave > 0 ? str.tostring(wave_pct, "0") + "%" : "1st"
+        
+        // Flip qualification
+        flip_status = flip_to_bear ? "✓" : "✗" + str.tostring(prev_wave_len) + "b"
+        
+        lbl_text = "🔍 WAVE\n" + trigger_type
+        tip = "Wave Compare Debug (Bear Flip)\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "Flip OK: " + flip_status + " (min " + str.tostring(min_wave_len) + "b)\n" +
+              "Has Vol: " + (has_vol ? "✓" : "✗") + "\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "BULL WAVE (just ended):\n" +
+              "  Vol: " + str.tostring(prev_bull_wave, "#,##0") + "\n" +
+              "  Prev2: " + str.tostring(prev2_bull_wave, "#,##0") + "\n" +
+              "  Ratio: " + wave_ratio_text + "\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "Exhaustion: " + bull_exh_status + " (decline ≥" + str.tostring(wave_decline_pct, "0") + "%)\n" +
+              "Climax: " + bull_clx_status + " (mult ≥" + str.tostring(wave_climax_mult, "0.0") + "x)\n" +
+              "Min Vol: " + str.tostring(wave_min_volume, "#,##0") + "\n" +
+              "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+              "RESULT: " + (wave_vol_peak ? "✓ VOL PEAK" : "✗ NO TRIGGER")
+        
+        label.new(bar_index, high, lbl_text,
+             style=label.style_label_down, color=trigger_col, textcolor=color.white,
+             size=size.tiny, yloc=yloc.abovebar, tooltip=tip)
+
 // --- Trail Level Display ---
 trail_level_long  = is_long  and not na(highest_since) ? highest_since - trail_pts : na
 trail_level_short = is_short and not na(lowest_since)  ? lowest_since  + trail_pts : na
@@ -1098,14 +1222,17 @@ if show_dash and barstate.islast
     table.cell(dash, 1, 16, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
     table.cell(dash, 2, 16, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
 
-    // Row 17: Volume Method + Stats
-    wave_info = use_wave ? "B:" + str.tostring(prev_bull_wave, "#,##0") + " S:" + str.tostring(prev_bear_wave, "#,##0") : ""
+    // Row 17: Volume Method + Stats (v2.0.7: enhanced for Wave Compare)
+    wave_exh_clx = (wave_use_exhaustion ? "E" : "·") + (wave_use_climax ? "C" : "·")
+    wave_trigger = use_wave ? (wave_bear_exhausted or wave_bull_exhausted ? "EXH" : wave_bear_climax or wave_bull_climax ? "CLX" : "—") : ""
+    wave_info = use_wave ? wave_trigger + " B:" + str.tostring(prev_bull_wave, "#,##0") + " S:" + str.tostring(prev_bear_wave, "#,##0") : ""
     roc_info  = use_roc ? "ROC:" + str.tostring(vol_roc_val, "0.0") + "%" : ""
     z_info    = use_z ? "Z:" + str.tostring(vol_z, "0.1") : ""
     method_info = use_wave ? wave_info : use_roc ? roc_info : use_z ? z_info : "—"
     vol_pass = vol_bottom_raw or vol_peak_raw
     vol_col  = vol_pass ? color.new(color.green, 50) : color.new(color.gray, 70)
-    table.cell(dash, 0, 17, "Vol " + vol_method_label, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    vol_method_detail = use_wave ? vol_method_label + " [" + wave_exh_clx + "]" : vol_method_label
+    table.cell(dash, 0, 17, "Vol " + vol_method_detail, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 17, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 17, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 

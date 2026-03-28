@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 2.0.3
+**Version:** 2.0.7
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -8,6 +8,50 @@
 ## What This Strategy Does
 
 VES is a **mean-reversion strategy** that detects when buying or selling pressure has exhausted at a swing extreme, then enters the reversal. It fires **VOL BOTTOM** (long) signals at swing lows and **VOL PEAK** (short) signals at swing highs. It manages two independent positions with take-profit, trailing stop, and breakeven stop exits.
+
+---
+
+## What Changed in v2.0.7
+
+Enhanced Wave Compare diagnostics and fine-tuning controls:
+
+- **NEW: Wave Compare Debug Labels** — When Debug Mode is ON, visual labels appear on every flip bar showing raw Wave Compare triggers BEFORE gates filter them. Labels display:
+  - Trigger type: EXH (exhaustion), CLX (climax), or NONE
+  - Wave volumes (prev vs prev2) for the relevant direction
+  - Pass/fail status for each detection type
+  - Detailed tooltip with all thresholds and calculations
+  - Helps diagnose exactly why Wave Compare is or isn't firing
+
+- **NEW Wave Compare Inputs** (📊 Volume Exhaustion Detection group):
+  - `Wave: Enable Exhaustion Detection` (ON) — Toggle declining-volume detection
+  - `Wave: Enable Climax Detection` (ON) — Toggle blowoff/spike detection
+  - `Wave: Climax Multiplier` (1.2) — Min multiplier for climax vs prior wave. 1.0 = any increase, 1.5 = 50% higher, 2.0 = double
+  - `Wave: Min Wave Volume` (0) — Filter out low-volume noise waves. For YM/NQ, try 500–2000 to exclude thin waves
+
+- **NEW Debug Input:** `🔧 Show Wave Compare Labels` (ON) — Toggle Wave Compare labels independently. Only visible when Debug Mode is also ON.
+
+- **Dashboard Vol WAVE row enhanced** — Now shows [EC] indicator for which triggers are enabled (E=Exhaustion, C=Climax), plus trigger type (EXH/CLX) when firing.
+
+---
+
+## What Changed in v2.0.6
+
+- **BB demoted from gate to confluence** — BB band-edge no longer blocks signals. Still computed and contributes +1 to confluence score. Removes over-filtering in trending markets where price doesn't return to bands.
+- **FIX: flip_to_bull/flip_to_bear now always required** — Previously with V:OFF, signals fired on every bar meeting other conditions. Now flip is enforced regardless of volume method.
+
+---
+
+## What Changed in v2.0.5
+
+- **FIX: Hard stop loss added** — `strategy.exit()` calls were missing `loss=` parameter entirely. If price went straight against entry, there was no stop. Added `sl_pts` input (default 40pt) and `loss=sl_ticks` to all four exit calls.
+
+---
+
+## What Changed in v2.0.4
+
+- **FIX: BB gate lookback** — Upgraded from fixed 2-bar to per-wave boolean. Tracks whether the prior wave EVER touched the BB edge during its entire duration.
+- **FIX: Wave Compare warmup** — First wave in a direction now passes automatically. Prevents permanent block after gaps or one-sided sessions.
+- **FIX: Chop gate bootstrap** — Blocks entries until N waves measured. Previously first 4 waves had zero chop protection.
 
 ---
 
@@ -62,7 +106,16 @@ The prior directional wave must be at least N bricks long. Prevents whipsaw chai
 A new brick in the opposite direction of the prior run.
 
 ### Gate 3: Volume Exhaustion (req_V — default ON)
-**Wave Compare (Recommended for Renko):** Accumulates volume per directional wave. Fires on Wave Decline (ending wave had less volume — tiring out) or Wave Climax (blowoff — more volume but nobody left).
+**Wave Compare (Recommended for Renko):** Accumulates volume per directional wave. Two detection modes (both ON by default, independently toggleable):
+
+- **Exhaustion** — Ending wave had LESS volume than prior same-direction wave. Sellers/buyers tiring out.
+- **Climax** — Ending wave had MORE volume than prior (blowoff). Configurable multiplier (default 1.2x = 20% higher).
+
+**Wave Compare Settings (v2.0.7):**
+- `Wave: Enable Exhaustion Detection` — Toggle declining-volume triggers
+- `Wave: Enable Climax Detection` — Toggle blowoff/spike triggers  
+- `Wave: Climax Multiplier` — Min ratio for climax (1.0 = any increase, 1.5 = 50% higher)
+- `Wave: Min Wave Volume` — Filter out thin waves. Try 500–2000 for YM/NQ to exclude noise.
 
 **Volume ROC:** Compares fast volume MA (5) to slow MA (20). Better suited for time-based/Heiken Ashi charts.
 
@@ -70,9 +123,8 @@ A new brick in the opposite direction of the prior run.
 
 **OFF:** No volume gate. Fires on every flip that meets other conditions.
 
-### Gate 4: Bollinger Bands (req_B — default ON, includes Adaptive Squeeze)
-1. **Band Position:** Price at/beyond BB edge within last 2 bars.
-2. **Adaptive Squeeze Filter:** BB width must be ≥ 60% of its own 50-bar MA. Auto-calibrates across sessions and instruments. When squeezed, all signals blocked until bands expand.
+### Gate 4: Bollinger Bands (Confluence Only as of v2.0.6)
+BB band-edge is now a confluence factor (+1), not a gate. Still contributes to confluence score but doesn't block signals. Squeeze filter remains active — when BB width < 60% of its 50-bar MA, all signals are blocked until bands expand.
 
 ### Gate 5: HMA Gate — HMA × EMA 21 (Toggleable via Trend Filter group)
 HMA 20 (OHLC4) crossing through EMA 21 signals a momentum shift. HMA below EMA 21 → longs blocked. HMA above EMA 21 → shorts blocked. This is a separate, always-evaluated gate — independent from the Hpx confluence factor.
