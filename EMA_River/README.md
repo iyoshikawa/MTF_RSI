@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.4
+- **Current**: v1.0.5
 
 ## Core Components
 
@@ -63,6 +63,9 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.5
+- Added entry attempt labels ("ENTRY LONG" / "ENTRY SHORT") to debug why trades aren't executing
 
 ### v1.0.4
 - Added debug table (toggle in Display settings) to diagnose entry conditions
