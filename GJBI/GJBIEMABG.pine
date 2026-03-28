@@ -28,11 +28,8 @@ bullBgColor     = input.color(color.new(color.green, 90), "Bullish Background", 
 bearBgColor     = input.color(color.new(color.red, 90),   "Bearish Background", group=grpBG, tooltip="Background color when price < Trend EMA")
 showBackground  = input.bool(true, "Show Background", group=grpBG)
 
-// --- River Colors ---
+// --- River Settings ---
 grpRiver = "River Settings"
-riverHighColor  = input.color(color.new(color.blue, 50),   "River High EMA",  group=grpRiver)
-riverCloseColor = input.color(color.new(color.purple, 50), "River Close EMA", group=grpRiver)
-riverLowColor   = input.color(color.new(color.blue, 50),   "River Low EMA",   group=grpRiver)
 riverFillColor  = input.color(color.new(color.blue, 85),   "River Fill",      group=grpRiver, tooltip="Fill color between River High and Low")
 showRiver       = input.bool(true, "Show River", group=grpRiver)
 riverLineWidth  = input.int(2, "River Line Width", minval=1, maxval=5, group=grpRiver)
@@ -40,8 +37,12 @@ riverLineWidth  = input.int(2, "River Line Width", minval=1, maxval=5, group=grp
 // --- Trend EMA Display ---
 grpTrend = "Trend EMA Display"
 showTrendEma    = input.bool(true, "Show Trend EMA Line", group=grpTrend)
-trendEmaColor   = input.color(color.orange, "Trend EMA Color", group=grpTrend)
 trendEmaWidth   = input.int(2, "Trend EMA Width", minval=1, maxval=5, group=grpTrend)
+
+// --- Dynamic Line Colors ---
+grpDynamic = "Dynamic Line Colors"
+priceAboveColor = input.color(color.green, "Price Above Line", group=grpDynamic, tooltip="Color when price is above the MA line")
+priceBelowColor = input.color(color.red,   "Price Below Line", group=grpDynamic, tooltip="Color when price is below the MA line")
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CALCULATIONS
@@ -62,6 +63,12 @@ isBearish = close < trendEma
 // ══════════════════════════════════════════════════════════════════════════════
 // VISUALIZATION
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Dynamic line colors based on price position
+trendEmaColor  = close > trendEma  ? priceAboveColor : priceBelowColor
+riverHighColor  = close > riverHigh  ? priceAboveColor : priceBelowColor
+riverCloseColor = close > riverClose ? priceAboveColor : priceBelowColor
+riverLowColor   = close > riverLow   ? priceAboveColor : priceBelowColor
 
 // Background Color
 bgColor = showBackground ? (isBullish ? bullBgColor : isBearish ? bearBgColor : na) : na

@@ -34,10 +34,13 @@ showRibbon      = input.bool(true, "Show Ribbon Fill", group=grpRibbon)
 grpLines = "HMA Lines"
 showFastHma     = input.bool(true, "Show Fast HMA Line", group=grpLines)
 showSlowHma     = input.bool(true, "Show Slow HMA Line", group=grpLines)
-fastHmaColor    = input.color(color.lime, "Fast HMA Color", group=grpLines)
-slowHmaColor    = input.color(color.red,  "Slow HMA Color", group=grpLines)
 fastHmaWidth    = input.int(2, "Fast HMA Width", minval=1, maxval=5, group=grpLines)
 slowHmaWidth    = input.int(2, "Slow HMA Width", minval=1, maxval=5, group=grpLines)
+
+// --- Dynamic Line Colors ---
+grpDynamic = "Dynamic Line Colors"
+priceAboveColor = input.color(color.green, "Price Above Line", group=grpDynamic, tooltip="Color when price is above the MA line")
+priceBelowColor = input.color(color.red,   "Price Below Line", group=grpDynamic, tooltip="Color when price is below the MA line")
 
 // --- Crossover Markers ---
 grpCross = "Crossover Markers"
@@ -90,6 +93,10 @@ markerSize = switch crossMarkerSize
     "small"  => size.small
     "normal" => size.normal
     "large"  => size.large
+
+// Dynamic line colors based on price position
+fastHmaColor = close > fastHma ? priceAboveColor : priceBelowColor
+slowHmaColor = close > slowHma ? priceAboveColor : priceBelowColor
 
 // Ribbon color based on trend
 ribbonColor = isBullish ? bullRibbonColor : isBearish ? bearRibbonColor : na
