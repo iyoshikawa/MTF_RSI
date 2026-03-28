@@ -1,18 +1,17 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.5
+// EMA River Strategy v1.0.6
 
 //@version=6
-strategy("EMA River Strategy v1.0.5", 
+strategy("EMA River Strategy v1.0.6", 
      overlay = true, 
-     margin_long = 100, 
-     margin_short = 100,
      initial_capital = 10000,
      default_qty_type = strategy.fixed,
      default_qty_value = 1,
      pyramiding = 0,
-     calc_on_every_tick = true,
-     process_orders_on_close = false)
+     calc_on_every_tick = false,
+     process_orders_on_close = true,
+     fill_orders_on_standard_ohlc = true)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ INPUTS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -246,61 +245,21 @@ shortSignal = shortContinuation or shortFlip
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ POSITION MANAGEMENT ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Track entry price for BE calculation
-var float entryPrice = na
-var bool beActivated = false
+// Convert points to ticks
+tpTicks = tpPoints / syminfo.mintick
+slTicks = slPoints / syminfo.mintick
+trailTicks = trailPoints / syminfo.mintick
 
 // Entry execution
 if longSignal
     strategy.entry("Long", strategy.long)
-    entryPrice := close
-    beActivated := false
-    label.new(bar_index, low, "ENTRY LONG", color=color.green, style=label.style_label_up, textcolor=color.white, size=size.tiny)
 
 if shortSignal
     strategy.entry("Short", strategy.short)
-    entryPrice := close
-    beActivated := false
-    label.new(bar_index, high, "ENTRY SHORT", color=color.red, style=label.style_label_down, textcolor=color.white, size=size.tiny)
 
-// Calculate BE activation level
-beActivationLevel = tpPoints * (beActivation / 100)
-
-// Long position management
-if strategy.position_size > 0
-    currentProfit = close - entryPrice
-    
-    // Check BE activation
-    if currentProfit >= beActivationLevel * syminfo.mintick and not beActivated
-        beActivated := true
-    
-    // Set exits
-    tpPrice = entryPrice + tpPoints * syminfo.mintick
-    slPrice = beActivated ? entryPrice + beOffset * syminfo.mintick : entryPrice - slPoints * syminfo.mintick
-    
-    strategy.exit("Long Exit", "Long", 
-         limit = tpPrice, 
-         stop = slPrice, 
-         trail_offset = trailPoints * syminfo.mintick / syminfo.mintick, 
-         trail_points = trailPoints)
-
-// Short position management
-if strategy.position_size < 0
-    currentProfit = entryPrice - close
-    
-    // Check BE activation
-    if currentProfit >= beActivationLevel * syminfo.mintick and not beActivated
-        beActivated := true
-    
-    // Set exits
-    tpPrice = entryPrice - tpPoints * syminfo.mintick
-    slPrice = beActivated ? entryPrice - beOffset * syminfo.mintick : entryPrice + slPoints * syminfo.mintick
-    
-    strategy.exit("Short Exit", "Short", 
-         limit = tpPrice, 
-         stop = slPrice, 
-         trail_offset = trailPoints * syminfo.mintick / syminfo.mintick, 
-         trail_points = trailPoints)
+// Exit with simple TP/SL/Trail
+strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
+strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
 
 // Flatten in chop zone (exit existing positions)
 if inChopZone and strategy.position_size != 0
