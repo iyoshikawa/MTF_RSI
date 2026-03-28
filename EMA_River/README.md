@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.8
+- **Current**: v1.0.9
 
 ## Core Components
 
@@ -63,6 +63,14 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.9
+- Added **Double Stochastic** signals (DS▲/DS▼ markers on crossovers)
+- Added **RSI Momentum Ribbon** background (bull=green, bear=red, neutral=gray)
+- Added **Consolidation Detection** (grays out ribbon in tight ranges)
+- Added **DStoch + RSI Confluence** brightening (transparency -20 when aligned)
+- Made **Chop Zone** and **No-Trade Session** backgrounds toggleable
+- Expanded debug table with DStoch, RSI Ribbon, and Confluence status
 
 ### v1.0.8
 - Fixed strategy settings preventing trade execution on futures

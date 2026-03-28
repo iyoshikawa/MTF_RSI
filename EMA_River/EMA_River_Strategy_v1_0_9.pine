@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.8
+// EMA River Strategy v1.0.9
 
 //@version=6
-strategy("EMA River Strategy v1.0.8", 
+strategy("EMA River Strategy v1.0.9", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -80,6 +80,43 @@ showSignals     = input.bool(true, "Show Entry Arrows", group=grpDisplay)
 showDebug       = input.bool(true, "Show Debug Table", group=grpDisplay)
 testMode        = input.bool(false, "⚠️ TEST MODE (bypass all filters)", group=grpDisplay, tooltip="Enable to test if entries work at all - enters on simple EMA cross")
 
+// ─────────────────────────────── Background Shading ───────────────────────────
+grpBG = "═══ Background Shading ═══"
+
+showChopBG      = input.bool(true, "Show Chop Zone Background", group=grpBG, tooltip="Gray background when in chop zone")
+showSessionBG   = input.bool(true, "Show No-Trade Session Background", group=grpBG, tooltip="Red tint when outside trading session")
+
+// ─────────────────────────────── Double Stochastic ────────────────────────────
+grpDStoch = "═══ Double Stochastic ═══"
+
+useDStoch       = input.bool(true, "Enable DStoch Signals", group=grpDStoch)
+stochLen        = input.int(10, "DStoch Period", minval=1, group=grpDStoch, tooltip="Lookback period for Double Stochastic")
+stochSmth       = input.int(3, "DStoch Smoothing", minval=1, group=grpDStoch, tooltip="Double-EMA smoothing")
+stoch_sell_level = input.float(85, "Sell Signal Level", minval=50, maxval=100, group=grpDStoch, tooltip="DStoch crosses DOWN through this = sell signal")
+stoch_buy_level  = input.float(12, "Buy Signal Level", minval=0, maxval=50, group=grpDStoch, tooltip="DStoch crosses UP through this = buy signal")
+
+// ─────────────────────────────── RSI Ribbon ───────────────────────────────────
+grpRibbon = "═══ RSI Momentum Ribbon ═══"
+
+useRSIRibbon        = input.bool(true, "Enable RSI Ribbon Background", group=grpRibbon)
+rsi_short_len       = input.int(5, "Short RSI Period", minval=1, group=grpRibbon)
+rsi_long_len        = input.int(13, "Long RSI Period", minval=1, group=grpRibbon)
+rsi_short_smooth    = input.int(2, "Short RSI Smoothing", minval=1, group=grpRibbon)
+rsi_long_smooth     = input.int(3, "Long RSI Smoothing", minval=1, group=grpRibbon)
+rsi_threshold       = input.float(1.0, "RSI Neutral Zone", minval=0.1, step=0.1, group=grpRibbon, tooltip="Min RSI diff to register direction")
+ribbon_bull_color   = input.color(#00ffbb, "Ribbon Bullish Color", group=grpRibbon)
+ribbon_bear_color   = input.color(#ff0055, "Ribbon Bearish Color", group=grpRibbon)
+ribbon_consol_color = input.color(#000000, "Ribbon Consolidation Color", group=grpRibbon)
+ribbon_transparency = input.int(85, "Ribbon Transparency", minval=0, maxval=95, step=5, group=grpRibbon)
+brighten_on_confluence = input.bool(true, "Brighten When DStoch + RSI Align", group=grpRibbon, tooltip="Reduce transparency by 20 when both agree")
+
+// ─────────────────────────────── Consolidation Filter ─────────────────────────
+grpConsol = "═══ Consolidation Detection ═══"
+
+enable_consol_filter = input.bool(false, "Gray Ribbon During Consolidation", group=grpConsol)
+consol_range_pts     = input.float(10.0, "Consolidation Range (pts)", minval=1, group=grpConsol, tooltip="If range < this over lookback, price is consolidating")
+consol_bars          = input.int(20, "Consolidation Lookback (bars)", minval=5, group=grpConsol)
+
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CALCULATIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 // ══════════════════════════════════════════════════════════════════════════════
@@ -102,6 +139,33 @@ f_hma(_src, _len) =>
     ta.wma(2 * _wma1 - _wma2, _sqrtLen)
 
 hma20 = f_hma(hma20_src, hma20_len)
+
+// ─────────────────────────────── Double Stochastic ────────────────────────────
+f_double_stoch(_len, _smooth) =>
+    raw_stoch = ta.stoch(close, high, low, _len)
+    ta.ema(ta.ema(raw_stoch, _smooth), _smooth)
+
+db_stoch = f_double_stoch(stochLen, stochSmth)
+
+stoch_momentum_bull = db_stoch > 50
+stoch_momentum_bear = db_stoch < 50
+
+stoch_sell_signal = ta.crossunder(db_stoch, stoch_sell_level)
+stoch_buy_signal  = ta.crossover(db_stoch, stoch_buy_level)
+
+stoch_signal_dir = stoch_sell_signal ? -1 : stoch_buy_signal ? 1 : 0
+
+// ─────────────────────────────── RSI Momentum ─────────────────────────────────
+f_double_rsi(_src, _short_len, _long_len, _short_smooth, _long_smooth) =>
+    rsiS = ta.ema(ta.rsi(_src, _short_len), _short_smooth)
+    rsiL = ta.ema(ta.rsi(_src, _long_len), _long_smooth)
+    rsiS - rsiL
+
+rsi_diff = f_double_rsi(close, rsi_short_len, rsi_long_len, rsi_short_smooth, rsi_long_smooth)
+rsi_dir = rsi_diff > rsi_threshold ? 1 : rsi_diff < -rsi_threshold ? -1 : 0
+
+// DStoch + RSI confluence
+dstoch_rsi_confluence = (stoch_signal_dir == 1 and rsi_dir == 1) or (stoch_signal_dir == -1 and rsi_dir == -1)
 
 // ─────────────────────────────── Heiken Ashi ──────────────────────────────────
 haClose = (open + high + low + close) / 4
@@ -323,8 +387,65 @@ plotshape(showSignals and shortFlip, "Short Flip",
      color=color.fuchsia, size=size.normal, text="SF")
 
 // ─────────────────────────────── Background ───────────────────────────────────
-bgcolor(inChopZone ? color.new(color.gray, 90) : na, title="Chop Zone")
-bgcolor(not inTradingSession and useSessionFilter ? color.new(color.red, 95) : na, title="No Trade Session")
+// Consolidation detection
+var int consol_count = 0
+var float consol_hi = na
+var float consol_lo = na
+var int breakout_count = 0
+
+if consol_count == 0 or na(consol_hi)
+    consol_hi := high
+    consol_lo := low
+    consol_count := 1
+    breakout_count := 0
+else
+    new_hi = math.max(consol_hi, high)
+    new_lo = math.min(consol_lo, low)
+    new_range = new_hi - new_lo
+    if new_range >= consol_range_pts
+        breakout_count := breakout_count + 1
+        if breakout_count >= 4
+            consol_hi := high
+            consol_lo := low
+            consol_count := 1
+            breakout_count := 0
+        else
+            consol_hi := new_hi
+            consol_lo := new_lo
+            consol_count := consol_count + 1
+    else
+        breakout_count := 0
+        consol_hi := new_hi
+        consol_lo := new_lo
+        consol_count := consol_count + 1
+
+is_consolidating = enable_consol_filter and consol_count >= consol_bars
+
+// RSI Ribbon background
+bg_transparency = (brighten_on_confluence and dstoch_rsi_confluence) ? math.max(0, ribbon_transparency - 20) : ribbon_transparency
+
+ribbon_bg_color = not useRSIRibbon ? na : 
+     is_consolidating ? color.new(ribbon_consol_color, 90) : 
+     rsi_diff > rsi_threshold ? color.new(ribbon_bull_color, bg_transparency) : 
+     rsi_diff < -rsi_threshold ? color.new(ribbon_bear_color, bg_transparency) : 
+     color.new(color.gray, 90)
+
+bgcolor(ribbon_bg_color, title="RSI Momentum Ribbon")
+
+// Chop zone background (toggleable)
+bgcolor(showChopBG and inChopZone ? color.new(color.gray, 90) : na, title="Chop Zone")
+
+// No-trade session background (toggleable)
+bgcolor(showSessionBG and not inTradingSession and useSessionFilter ? color.new(color.red, 95) : na, title="No Trade Session")
+
+// ─────────────────────────────── DStoch Crossover Signals ─────────────────────
+plotshape(useDStoch and stoch_buy_signal and inTradingSession, "DStoch BUY", 
+     shape.labelup, location.belowbar, color.new(color.aqua, 0), 
+     size=size.tiny, text="DS▲", textcolor=color.white)
+
+plotshape(useDStoch and stoch_sell_signal and inTradingSession, "DStoch SELL", 
+     shape.labeldown, location.abovebar, color.new(color.fuchsia, 0), 
+     size=size.tiny, text="DS▼", textcolor=color.white)
 
 // ─────────────────────────────── Alerts ───────────────────────────────────────
 alertcondition(longContinuation, "Long Continuation", "EMA River: Long Continuation Entry")
@@ -334,7 +455,7 @@ alertcondition(shortFlip, "Short Flip", "EMA River: Short Flip Entry")
 alertcondition(inChopZone and strategy.position_size != 0, "Flatten Warning", "EMA River: In Chop Zone - Consider Flattening")
 
 // ─────────────────────────────── Debug Table ──────────────────────────────────
-var table debugTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
+var table debugTable = table.new(position.top_right, 2, 15, bgcolor=color.new(color.black, 80), border_width=1)
 
 if showDebug and barstate.islast
     table.cell(debugTable, 0, 0, "Condition", text_color=color.white, text_size=size.small)
@@ -372,3 +493,19 @@ if showDebug and barstate.islast
     
     table.cell(debugTable, 0, 11, "Long/Short Signal", text_color=color.white, text_size=size.small)
     table.cell(debugTable, 1, 11, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
+    
+    // DStoch info
+    dstoch_status = stoch_momentum_bull ? "BULL" : stoch_momentum_bear ? "BEAR" : "NEUTRAL"
+    dstoch_col = stoch_momentum_bull ? color.lime : stoch_momentum_bear ? color.red : color.gray
+    table.cell(debugTable, 0, 12, "DStoch", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 12, str.tostring(db_stoch, "0.0") + " " + dstoch_status, text_color=dstoch_col, text_size=size.small)
+    
+    // RSI Ribbon info
+    rsi_status = rsi_dir == 1 ? "BULL" : rsi_dir == -1 ? "BEAR" : "NEUTRAL"
+    rsi_col = rsi_dir == 1 ? color.lime : rsi_dir == -1 ? color.red : color.gray
+    table.cell(debugTable, 0, 13, "RSI Ribbon", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 13, str.tostring(rsi_diff, "0.00") + " " + rsi_status, text_color=rsi_col, text_size=size.small)
+    
+    // Confluence
+    table.cell(debugTable, 0, 14, "DStoch+RSI", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 14, dstoch_rsi_confluence ? "✓ ALIGNED" : "✗ NO", text_color=dstoch_rsi_confluence ? color.lime : color.gray, text_size=size.small)
