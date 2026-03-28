@@ -1,17 +1,18 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.7
+// EMA River Strategy v1.0.8
 
 //@version=6
-strategy("EMA River Strategy v1.0.7", 
-     overlay = true, 
-     initial_capital = 10000,
-     default_qty_type = strategy.fixed,
-     default_qty_value = 1,
-     pyramiding = 0,
-     calc_on_every_tick = false,
-     process_orders_on_close = true,
-     fill_orders_on_standard_ohlc = true)
+strategy("EMA River Strategy v1.0.8", 
+     overlay=true, 
+     initial_capital=1000000,
+     currency=currency.USD,
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1,
+     pyramiding=0,
+     calc_on_order_fills=true,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ INPUTS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
