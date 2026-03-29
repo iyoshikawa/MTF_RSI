@@ -1,10 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.1.0
-// MAJOR REWRITE: Simplified entry logic based on RSI + MA confluence
+// EMA River Strategy v1.1.1
 
 //@version=6
-strategy("EMA River Strategy v1.1.0", 
+strategy("EMA River Strategy v1.1.1", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -63,9 +62,8 @@ bbTimeframe = input.timeframe("3", "BB Timeframe", group=grpBB)
 grpSession = "═══ Session Filters ═══"
 
 useSessionFilter = input.bool(true, "Enable Session Filter", group=grpSession)
-sess_globex      = input.session("1801-2000", "Globex Evening", group=grpSession)
-sess_premarket   = input.session("0700-0815", "Pre-Market", group=grpSession)
-sess_ny          = input.session("0930-1600", "NY Session", group=grpSession)
+sessionConfig    = input.string("1801-1940,0700-0815,0930-1100,1545-1600:23456", "Session Windows", group=grpSession, 
+     tooltip="Format: TIME1,TIME2,TIME3:DAYS\nTimes in 24hr format (HHMM-HHMM)\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri 7=Sat\nExample: 0930-1100,1330-1600:23456 = Mon-Fri 9:30-11:00 and 1:30-4:00")
 sessionTZ        = input.string("America/New_York", "Timezone", group=grpSession)
 
 // ─────────────────────────────── Position Management ──────────────────────────
@@ -164,11 +162,25 @@ insideBB = close < bbUpper and close > bbLower
 bbChopActive = useBBChop and insideBB
 
 // ─────────────────────────────── Session Filter ───────────────────────────────
-inGlobex    = not na(time(timeframe.period, sess_globex, sessionTZ))
-inPremarket = not na(time(timeframe.period, sess_premarket, sessionTZ))
-inNY        = not na(time(timeframe.period, sess_ny, sessionTZ))
+// Parse session config string: "TIME1,TIME2,TIME3:DAYS"
+config_parts = str.split(sessionConfig, ":")
+times_str = array.get(config_parts, 0)
+days_str = array.size(config_parts) > 1 ? array.get(config_parts, 1) : "23456"
 
-inTradingSession = not useSessionFilter or (inGlobex or inPremarket or inNY)
+time_windows = str.split(times_str, ",")
+num_windows = array.size(time_windows)
+day_suffix = ":" + days_str
+
+// Check each time window (up to 6)
+in_w1 = num_windows >= 1 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 0)) + day_suffix, sessionTZ)) : false
+in_w2 = num_windows >= 2 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 1)) + day_suffix, sessionTZ)) : false
+in_w3 = num_windows >= 3 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 2)) + day_suffix, sessionTZ)) : false
+in_w4 = num_windows >= 4 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 3)) + day_suffix, sessionTZ)) : false
+in_w5 = num_windows >= 5 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 4)) + day_suffix, sessionTZ)) : false
+in_w6 = num_windows >= 6 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 5)) + day_suffix, sessionTZ)) : false
+
+inAnyWindow = in_w1 or in_w2 or in_w3 or in_w4 or in_w5 or in_w6
+inTradingSession = not useSessionFilter or inAnyWindow
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ENTRY CONDITIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░

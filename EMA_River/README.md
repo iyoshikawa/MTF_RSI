@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.1.0
+- **Current**: v1.1.1
 
 ## Strategy Overview
 
@@ -39,13 +39,20 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 | 20 HMA | Close |
 | RSI Ribbon | 5/13 RSI diff |
 
-## Session Windows (EST)
+## Session Windows
 
-| Session | Hours |
-|---------|-------|
-| Globex Evening | 18:01–20:00 |
+Single string input format: `TIME1,TIME2,TIME3:DAYS`
+
+**Default**: `1801-1940,0700-0815,0930-1100,1545-1600:23456`
+
+| Window | Time (ET) |
+|--------|-----------|
+| Globex Evening | 18:01–19:40 |
 | Pre-Market | 07:00–08:15 |
-| NY Session | 09:30–16:00 |
+| NY AM | 09:30–11:00 |
+| NY Close | 15:45–16:00 |
+
+Days: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
 
 ## Position Management (Multi-Contract)
 
@@ -79,6 +86,13 @@ Toggle `Trade 2 Contracts` to enable/disable second contract.
 | DS▼ | Fuchsia | DStoch Sell Signal |
 
 ## Changelog
+
+### v1.1.1
+- **Session filter now uses single string input**
+- Format: `TIME1,TIME2,TIME3:DAYS`
+- Example: `1801-1940,0700-0815,0930-1100,1545-1600:23456`
+- Days: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+- Supports up to 6 time windows
 
 ### v1.1.0 — MAJOR REWRITE
 - **Simplified entry logic**: RSI + 9 EMA + 20 HMA + 20 EMA confluence
