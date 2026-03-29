@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.1.2
+- **Current**: v1.1.3
 
 ## Strategy Overview
 
@@ -28,6 +28,7 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ### Filters
 - **BB Chop Filter**: No trades when price inside BB bands (3min MTF)
+- **T-Line Channel**: No trades when price inside 20 EMA ± 34 points, 15s cooldown after exit
 - **Session Filter**: Trade only during configured sessions
 
 ## Core Components
@@ -39,6 +40,7 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 | 20 HMA | Close |
 | RSI Ribbon | 5/13 RSI diff |
 | HMA Exit Ribbon | 6 HMA / 21 HMA |
+| T-Line Channel | 20 EMA ± 34 pts |
 
 ## Session Windows
 
@@ -87,6 +89,14 @@ Toggle `Trade 2 Contracts` to enable/disable second contract.
 | DS▼ | Fuchsia | DStoch Sell Signal |
 
 ## Changelog
+
+### v1.1.3
+- **T-Line Channel Chop Filter** — No entries when price inside 20 EMA ± 34 points
+- Configurable: MA period, type (EMA/SMA/VWMA/WMA), source, channel width
+- 15-second cooldown after price exits channel before allowing new entries
+- Yellow channel fill visualization
+- Debug table shows T-Line status: INSIDE / COOLDOWN / OK
+- Existing trades still use HMA cross exit (not affected by T-Line)
 
 ### v1.1.2
 - **HMA Cross Exit**: Exit signals now based on 6/21 HMA crossover (faster exit on reversals)
