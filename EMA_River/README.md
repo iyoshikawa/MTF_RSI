@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.9
+- **Current**: v1.0.10
 
 ## Core Components
 
@@ -63,6 +63,10 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.10
+- Chop zone exit now only triggers if position is **in a loss**
+- Profitable positions are allowed to continue running through chop zone
 
 ### v1.0.9
 - Added **Double Stochastic** signals (DS▲/DS▼ markers on crossovers)
