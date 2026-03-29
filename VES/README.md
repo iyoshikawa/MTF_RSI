@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 2.0.7
+**Version:** 2.0.8
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -8,6 +8,12 @@
 ## What This Strategy Does
 
 VES is a **mean-reversion strategy** that detects when buying or selling pressure has exhausted at a swing extreme, then enters the reversal. It fires **VOL BOTTOM** (long) signals at swing lows and **VOL PEAK** (short) signals at swing highs. It manages two independent positions with take-profit, trailing stop, and breakeven stop exits.
+
+---
+
+## What Changed in v2.0.8
+
+- **FIX: Debug Mode now truly bypasses ALL gates** — Previously, debug mode still enforced `session_gate`, so signals wouldn't fire outside trading hours even with "ALL GATES BYPASSED" showing in the dashboard. Now debug mode fires on flip only — no session, no ADR, no chop, nothing else checked.
 
 ---
 

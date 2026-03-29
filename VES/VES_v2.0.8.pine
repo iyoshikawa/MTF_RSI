@@ -1,7 +1,14 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.7]
+// Volume Exhaustion Strategy [VES v2.0.8]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.8 CHANGES:
+//   - FIX: Debug Mode now truly bypasses ALL gates including session.
+//     Previously, debug mode still enforced session_gate — signals wouldn't
+//     fire outside trading hours even with "ALL GATES BYPASSED" showing.
+//     Now debug mode = flip_to_bull/bear only, no other gates checked.
+//   - Dashboard debug row text updated to clarify behavior.
 // ============================================================================
 // v2.0.7 CHANGES:
 //   - NEW: Wave Compare debug labels. When debug mode is ON, visual labels show
@@ -97,7 +104,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.7"
+VER = "2.0.8"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -641,8 +648,9 @@ session_gate = not debug_require_session or in_session
 // --- Final Signals ---
 // flip_to_bull/bear is always the base requirement (v2.0.6).
 // bb_gate removed — BB is now confluence only.
-vol_bottom = debug_mode ? (flip_to_bull and session_gate) : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and session_gate_long  and adr_ok and chop_gate)
-vol_peak   = debug_mode ? (flip_to_bear and session_gate) : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and session_gate_short and adr_ok and chop_gate)
+// v2.0.8: Debug mode now truly bypasses ALL gates — flip only, no session check.
+vol_bottom = debug_mode ? flip_to_bull : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and session_gate_long  and adr_ok and chop_gate)
+vol_peak   = debug_mode ? flip_to_bear : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and session_gate_short and adr_ok and chop_gate)
 
 // ============================================================================
 // CONFLUENCE COUNTER (7 factors — v2.0.0)
