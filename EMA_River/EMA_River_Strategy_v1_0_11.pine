@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.10
+// EMA River Strategy v1.0.11
 
 //@version=6
-strategy("EMA River Strategy v1.0.10", 
+strategy("EMA River Strategy v1.0.11", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -25,6 +25,7 @@ ema9_len    = input.int(9, "Fast EMA Length", minval=1, group=grpMA, tooltip="Si
 ema9_src    = input.source(ohlc4, "Fast EMA Source", group=grpMA)
 
 ema20_len   = input.int(20, "EMA River Length", minval=1, group=grpMA, tooltip="EMA River (High/HL2/Low)")
+riverMinSpread = input.float(15, "Min River Spread (points)", minval=1, group=grpMA, tooltip="EMA River must be at least this wide. Below = squeeze/consolidation, no trades allowed.")
 
 hma20_len   = input.int(20, "HMA Length", minval=1, group=grpMA)
 hma20_src   = input.source(close, "HMA Source", group=grpMA)
@@ -129,6 +130,10 @@ ema9 = ta.ema(ema9_src, ema9_len)
 ema20_high = ta.ema(high, ema20_len)
 ema20_hl2  = ta.ema(hl2, ema20_len)
 ema20_low  = ta.ema(low, ema20_len)
+
+// River Squeeze Detection
+riverSpreadPts = (ema20_high - ema20_low) / syminfo.mintick
+riverSqueeze = riverSpreadPts < riverMinSpread
 
 // 20 HMA on Close
 f_hma(_src, _len) =>
@@ -242,8 +247,8 @@ distFromTLinePts = distFromTLine / syminfo.mintick
 // Cooldown active: suppress signals until bars OR distance threshold met
 tlineCooldownActive = useTLineChop and (barsSinceTLineExit < tlineCooldownBars) and (distFromTLinePts < tlineCooldownPts)
 
-// Combined chop filter
-inChopZone = bbChopActive or tlineChopActive or tlineCooldownActive
+// Combined chop filter (includes river squeeze)
+inChopZone = bbChopActive or tlineChopActive or tlineCooldownActive or riverSqueeze
 
 // ─────────────────────────────── Session Filter ───────────────────────────────
 inGlobex    = not na(time(timeframe.period, sess_globex, sessionTZ))
@@ -340,9 +345,13 @@ strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, trail_points=
 strategy.exit("Test Long Exit", "Test Long", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
 strategy.exit("Test Short Exit", "Test Short", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
 
-// Flatten in chop zone ONLY if losing - let winners run
-// strategy.openprofit < 0 means we're in a loss
-if not testMode and inChopZone and strategy.position_size != 0 and strategy.openprofit < 0
+// River Squeeze: Exit ALL positions immediately (no edge in consolidation)
+if not testMode and riverSqueeze and strategy.position_size != 0
+    strategy.close_all("River Squeeze Exit")
+
+// Other chop zones: Only exit if losing, let winners run
+chop_no_squeeze = (bbChopActive or tlineChopActive or tlineCooldownActive) and not riverSqueeze
+if not testMode and chop_no_squeeze and strategy.position_size != 0 and strategy.openprofit < 0
     strategy.close_all("Chop Zone Exit")
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -456,7 +465,7 @@ alertcondition(shortFlip, "Short Flip", "EMA River: Short Flip Entry")
 alertcondition(inChopZone and strategy.position_size != 0, "Flatten Warning", "EMA River: In Chop Zone - Consider Flattening")
 
 // ─────────────────────────────── Debug Table ──────────────────────────────────
-var table debugTable = table.new(position.top_right, 2, 15, bgcolor=color.new(color.black, 80), border_width=1)
+var table debugTable = table.new(position.top_right, 2, 16, bgcolor=color.new(color.black, 80), border_width=1)
 
 if showDebug and barstate.islast
     table.cell(debugTable, 0, 0, "Condition", text_color=color.white, text_size=size.small)
@@ -474,39 +483,43 @@ if showDebug and barstate.islast
     table.cell(debugTable, 0, 4, "T-Line Cooldown", text_color=color.white, text_size=size.small)
     table.cell(debugTable, 1, 4, str.tostring(tlineCooldownActive), text_color=tlineCooldownActive ? color.red : color.lime, text_size=size.small)
     
-    table.cell(debugTable, 0, 5, "In Chop Zone", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 5, str.tostring(inChopZone), text_color=inChopZone ? color.red : color.lime, text_size=size.small)
+    // River Squeeze with spread value
+    table.cell(debugTable, 0, 5, "River Squeeze", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 5, str.tostring(riverSpreadPts, "0.0") + "pts " + (riverSqueeze ? "⚠ SQUEEZE" : "✓ OK"), text_color=riverSqueeze ? color.red : color.lime, text_size=size.small)
     
-    table.cell(debugTable, 0, 6, "Position Size", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 6, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 6, "In Chop Zone", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 6, str.tostring(inChopZone), text_color=inChopZone ? color.red : color.lime, text_size=size.small)
     
-    table.cell(debugTable, 0, 7, "Can Trade", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 7, str.tostring(canTrade), text_color=canTrade ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 7, "Position Size", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 7, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
     
-    table.cell(debugTable, 0, 8, "Bull Count", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 8, str.tostring(bullCount), text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 8, "Can Trade", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 8, str.tostring(canTrade), text_color=canTrade ? color.lime : color.red, text_size=size.small)
     
-    table.cell(debugTable, 0, 9, "Bear Count", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 9, str.tostring(bearCount), text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 9, "Bull Count", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 9, str.tostring(bullCount), text_color=color.white, text_size=size.small)
     
-    table.cell(debugTable, 0, 10, "Prior Trend", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 10, str.tostring(priorTrend), text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 10, "Bear Count", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 10, str.tostring(bearCount), text_color=color.white, text_size=size.small)
     
-    table.cell(debugTable, 0, 11, "Long/Short Signal", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 11, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
+    table.cell(debugTable, 0, 11, "Prior Trend", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 11, str.tostring(priorTrend), text_color=color.white, text_size=size.small)
+    
+    table.cell(debugTable, 0, 12, "Long/Short Signal", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 12, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
     
     // DStoch info
     dstoch_status = stoch_momentum_bull ? "BULL" : stoch_momentum_bear ? "BEAR" : "NEUTRAL"
     dstoch_col = stoch_momentum_bull ? color.lime : stoch_momentum_bear ? color.red : color.gray
-    table.cell(debugTable, 0, 12, "DStoch", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 12, str.tostring(db_stoch, "0.0") + " " + dstoch_status, text_color=dstoch_col, text_size=size.small)
+    table.cell(debugTable, 0, 13, "DStoch", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 13, str.tostring(db_stoch, "0.0") + " " + dstoch_status, text_color=dstoch_col, text_size=size.small)
     
     // RSI Ribbon info
     rsi_status = rsi_dir == 1 ? "BULL" : rsi_dir == -1 ? "BEAR" : "NEUTRAL"
     rsi_col = rsi_dir == 1 ? color.lime : rsi_dir == -1 ? color.red : color.gray
-    table.cell(debugTable, 0, 13, "RSI Ribbon", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 13, str.tostring(rsi_diff, "0.00") + " " + rsi_status, text_color=rsi_col, text_size=size.small)
+    table.cell(debugTable, 0, 14, "RSI Ribbon", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 14, str.tostring(rsi_diff, "0.00") + " " + rsi_status, text_color=rsi_col, text_size=size.small)
     
     // Confluence
-    table.cell(debugTable, 0, 14, "DStoch+RSI", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 14, dstoch_rsi_confluence ? "✓ ALIGNED" : "✗ NO", text_color=dstoch_rsi_confluence ? color.lime : color.gray, text_size=size.small)
+    table.cell(debugTable, 0, 15, "DStoch+RSI", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 15, dstoch_rsi_confluence ? "✓ ALIGNED" : "✗ NO", text_color=dstoch_rsi_confluence ? color.lime : color.gray, text_size=size.small)

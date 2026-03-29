@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.10
+- **Current**: v1.0.11
 
 ## Core Components
 
@@ -63,6 +63,11 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.11
+- Added **EMA River Squeeze Filter** — no trades when river spread < threshold (default 15pts)
+- River squeeze exits ALL positions immediately (unlike other chop filters which let winners run)
+- Debug table now shows river spread in points and squeeze status
 
 ### v1.0.10
 - Chop zone exit now only triggers if position is **in a loss**
