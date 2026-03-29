@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.1.1
+// EMA River Strategy v1.1.2
 
 //@version=6
-strategy("EMA River Strategy v1.1.1", 
+strategy("EMA River Strategy v1.1.2", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -28,6 +28,14 @@ ema20_len   = input.int(20, "20 EMA River Length", minval=1, group=grpMA)
 
 hma20_len   = input.int(20, "20 HMA Length", minval=1, group=grpMA)
 hma20_src   = input.source(close, "20 HMA Source", group=grpMA)
+
+// ─────────────────────────────── HMA Exit Ribbon ──────────────────────────────
+grpHMAExit = "═══ HMA Exit Ribbon ═══"
+
+hmaFast_len = input.int(6, "Fast HMA Length", minval=1, group=grpHMAExit, tooltip="Fast HMA for exit signal (default 6)")
+hmaSlow_len = input.int(21, "Slow HMA Length", minval=1, group=grpHMAExit, tooltip="Slow HMA for exit signal (default 21)")
+hmaExit_src = input.source(close, "HMA Exit Source", group=grpHMAExit)
+showHMAExit = input.bool(true, "Show HMA Exit Lines", group=grpHMAExit)
 
 // ─────────────────────────────── RSI Ribbon ───────────────────────────────────
 grpRibbon = "═══ RSI Momentum Ribbon ═══"
@@ -123,6 +131,14 @@ f_hma(_src, _len) =>
 
 hma20 = f_hma(hma20_src, hma20_len)
 
+// ─────────────────────────────── HMA Exit Ribbon ──────────────────────────────
+hmaFast = f_hma(hmaExit_src, hmaFast_len)
+hmaSlow = f_hma(hmaExit_src, hmaSlow_len)
+
+// HMA Cross signals for exits
+hmaBullishCross = ta.crossover(hmaFast, hmaSlow)   // Fast crosses above Slow = exit shorts
+hmaBearishCross = ta.crossunder(hmaFast, hmaSlow)  // Fast crosses below Slow = exit longs
+
 // ─────────────────────────────── RSI Momentum ─────────────────────────────────
 f_double_rsi(_src, _short_len, _long_len, _short_smooth, _long_smooth) =>
     rsiS = ta.ema(ta.rsi(_src, _short_len), _short_smooth)
@@ -202,10 +218,10 @@ shortSignal = canTrade and shortConditions
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ EXIT CONDITIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// LONG Exit: Close below 20 EMA HL2
-// SHORT Exit: Close above 20 EMA HL2
-longExitSignal  = close < ema20_hl2
-shortExitSignal = close > ema20_hl2
+// LONG Exit: Fast HMA crosses below Slow HMA (bearish cross)
+// SHORT Exit: Fast HMA crosses above Slow HMA (bullish cross)
+longExitSignal  = hmaBearishCross
+shortExitSignal = hmaBullishCross
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ POSITION MANAGEMENT ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -320,13 +336,13 @@ if useSecondContract and short2_open
         strategy.exit("Short2 Exit", "Short2", profit=c2_tp_ticks, loss=c2_sl_ticks)
 
 // ─────────────────────────────── SIGNAL-BASED EXITS ───────────────────────────
-// Long exit: Close below 20 EMA HL2
+// Long exit: Fast HMA crosses below Slow HMA
 if strategy.position_size > 0 and longExitSignal
-    strategy.close_all("EMA HL2 Exit")
+    strategy.close_all("HMA Cross Exit")
 
-// Short exit: Close above 20 EMA HL2
+// Short exit: Fast HMA crosses above Slow HMA
 if strategy.position_size < 0 and shortExitSignal
-    strategy.close_all("EMA HL2 Exit")
+    strategy.close_all("HMA Cross Exit")
 
 // ─────────────────────────────── RESET ON CLOSE ───────────────────────────────
 if strategy.position_size == 0
@@ -361,6 +377,15 @@ plot(showRiver ? ema20_hl2 : na, "20 EMA HL2", color=ema20_hl2_color, linewidth=
 plot(showRiver ? ema20_low : na, "20 EMA Low", color=ema20_low_color, linewidth=1)
 
 plot(showHMA ? hma20 : na, "20 HMA", color=hma20_color, linewidth=2)
+
+// ─────────────────────────────── HMA Exit Ribbon ──────────────────────────────
+hmaFast_color = close > hmaFast ? color.lime : color.red
+hmaSlow_color = close > hmaSlow ? color.lime : color.red
+hmaRibbon_color = hmaFast > hmaSlow ? color.new(color.green, 70) : color.new(color.red, 70)
+
+p_hmaFast = plot(showHMAExit ? hmaFast : na, "Fast HMA (Exit)", color=hmaFast_color, linewidth=1)
+p_hmaSlow = plot(showHMAExit ? hmaSlow : na, "Slow HMA (Exit)", color=hmaSlow_color, linewidth=1)
+fill(p_hmaFast, p_hmaSlow, color=showHMAExit ? hmaRibbon_color : na, title="HMA Exit Ribbon")
 
 // ─────────────────────────────── Entry Signals ────────────────────────────────
 plotshape(showSignals and longSignal, "Long Entry", 
@@ -397,11 +422,11 @@ plotshape(showDStochSignals and stoch_sell_signal and inTradingSession, "DStoch 
 // ─────────────────────────────── Alerts ───────────────────────────────────────
 alertcondition(longSignal, "Long Entry", "EMA River: Long Entry Signal")
 alertcondition(shortSignal, "Short Entry", "EMA River: Short Entry Signal")
-alertcondition(longExitSignal and strategy.position_size > 0, "Long Exit", "EMA River: Long Exit - Below EMA HL2")
-alertcondition(shortExitSignal and strategy.position_size < 0, "Short Exit", "EMA River: Short Exit - Above EMA HL2")
+alertcondition(longExitSignal and strategy.position_size > 0, "Long Exit", "EMA River: Long Exit - HMA Bearish Cross")
+alertcondition(shortExitSignal and strategy.position_size < 0, "Short Exit", "EMA River: Short Exit - HMA Bullish Cross")
 
 // ─────────────────────────────── Debug Table ──────────────────────────────────
-var table debugTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
+var table debugTable = table.new(position.top_right, 2, 13, bgcolor=color.new(color.black, 80), border_width=1)
 
 if showDebug and barstate.islast
     table.cell(debugTable, 0, 0, "Condition", text_color=color.white, text_size=size.small)
@@ -423,20 +448,24 @@ if showDebug and barstate.islast
     table.cell(debugTable, 0, 5, "20 EMA Low", text_color=color.white, text_size=size.small)
     table.cell(debugTable, 1, 5, ema20_low_bearish ? "BEAR" : "BULL", text_color=ema20_low_bearish ? color.red : color.lime, text_size=size.small)
     
-    table.cell(debugTable, 0, 6, "BB Chop", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 6, bbChopActive ? "CHOP" : "OK", text_color=bbChopActive ? color.red : color.lime, text_size=size.small)
+    table.cell(debugTable, 0, 6, "HMA Exit", text_color=color.white, text_size=size.small)
+    hma_exit_status = hmaFast > hmaSlow ? "BULL" : "BEAR"
+    table.cell(debugTable, 1, 6, hma_exit_status, text_color=hmaFast > hmaSlow ? color.lime : color.red, text_size=size.small)
     
-    table.cell(debugTable, 0, 7, "In Session", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 7, inTradingSession ? "YES" : "NO", text_color=inTradingSession ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 7, "BB Chop", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 7, bbChopActive ? "CHOP" : "OK", text_color=bbChopActive ? color.red : color.lime, text_size=size.small)
     
-    table.cell(debugTable, 0, 8, "Can Trade", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 8, canTrade ? "YES" : "NO", text_color=canTrade ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 8, "In Session", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 8, inTradingSession ? "YES" : "NO", text_color=inTradingSession ? color.lime : color.red, text_size=size.small)
     
-    table.cell(debugTable, 0, 9, "Position", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 9, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 9, "Can Trade", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 9, canTrade ? "YES" : "NO", text_color=canTrade ? color.lime : color.red, text_size=size.small)
     
-    table.cell(debugTable, 0, 10, "Signal", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 10, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
+    table.cell(debugTable, 0, 10, "Position", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 10, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
     
-    table.cell(debugTable, 0, 11, "DStoch", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 11, str.tostring(db_stoch, "0.0"), text_color=db_stoch > 50 ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 11, "Signal", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 11, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
+    
+    table.cell(debugTable, 0, 12, "DStoch", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 12, str.tostring(db_stoch, "0.0"), text_color=db_stoch > 50 ? color.lime : color.red, text_size=size.small)

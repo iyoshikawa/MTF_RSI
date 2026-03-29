@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.1.1
+- **Current**: v1.1.2
 
 ## Strategy Overview
 
@@ -22,8 +22,8 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 - 20 EMA Low = Bearish (price below)
 
 ### Exit Conditions
-- **Long Exit**: Candle closes below 20 EMA HL2
-- **Short Exit**: Candle closes above 20 EMA HL2
+- **Long Exit**: Fast HMA (6) crosses below Slow HMA (21)
+- **Short Exit**: Fast HMA (6) crosses above Slow HMA (21)
 - Plus TP/SL/BE/Trail per contract settings
 
 ### Filters
@@ -38,6 +38,7 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 | 20 EMA River | High / HL2 / Low |
 | 20 HMA | Close |
 | RSI Ribbon | 5/13 RSI diff |
+| HMA Exit Ribbon | 6 HMA / 21 HMA |
 
 ## Session Windows
 
@@ -86,6 +87,13 @@ Toggle `Trade 2 Contracts` to enable/disable second contract.
 | DS▼ | Fuchsia | DStoch Sell Signal |
 
 ## Changelog
+
+### v1.1.2
+- **HMA Cross Exit**: Exit signals now based on 6/21 HMA crossover (faster exit on reversals)
+- Long exit: Fast HMA crosses below Slow HMA
+- Short exit: Fast HMA crosses above Slow HMA
+- HMA Exit Ribbon visual with fill between fast/slow HMA
+- Debug table shows HMA Exit status
 
 ### v1.1.1
 - **Session filter now uses single string input**
