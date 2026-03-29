@@ -1,15 +1,15 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.0.11
+// EMA River Strategy v1.0.12
 
 //@version=6
-strategy("EMA River Strategy v1.0.11", 
+strategy("EMA River Strategy v1.0.12", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
      default_qty_type=strategy.fixed, 
      default_qty_value=1,
-     pyramiding=0,
+     pyramiding=2,
      calc_on_order_fills=true,
      calc_on_every_tick=false,
      process_orders_on_close=true)
@@ -64,11 +64,27 @@ sessionTZ        = input.string("America/New_York", "Timezone", group=grpSession
 // ─────────────────────────────── Position Management ──────────────────────────
 grpExit = "═══ Position Management ═══"
 
-tpPoints        = input.float(40, "Take Profit (points)", minval=1, group=grpExit)
-slPoints        = input.float(40, "Stop Loss (points)", minval=1, group=grpExit)
-trailPoints     = input.float(20, "Trail Distance (points)", minval=1, group=grpExit)
-beActivation    = input.float(75, "BE Activation (%)", minval=1, maxval=100, group=grpExit, tooltip="Move SL to BE+offset when this % of TP reached")
-beOffset        = input.float(3, "BE Offset (points)", minval=0, group=grpExit, tooltip="Points above/below entry for BE stop")
+useSecondContract = input.bool(true, "Trade 2 Contracts", group=grpExit, tooltip="Enable for scaled exits. Disable to trade single contract using Contract 1 settings.")
+
+// Contract 1 (Scalp)
+grpC1 = "═══ Contract 1 (Scalp) ═══"
+c1_tp_ticks     = input.int(50, "C1 Take Profit (ticks)", minval=1, group=grpC1)
+c1_sl_ticks     = input.int(40, "C1 Stop Loss (ticks)", minval=1, group=grpC1)
+c1_be_trigger   = input.int(30, "C1 BE Trigger (ticks profit)", minval=1, group=grpC1, tooltip="Move stop to BE when this profit reached")
+c1_be_offset    = input.int(10, "C1 BE Offset (ticks)", minval=0, group=grpC1, tooltip="Ticks above/below entry for BE stop")
+c1_use_trail    = input.bool(false, "C1 Use Trail", group=grpC1)
+c1_trail_stop   = input.int(20, "C1 Trail Stop (ticks)", minval=1, group=grpC1)
+c1_trail_trigger = input.int(30, "C1 Trail Trigger (ticks profit)", minval=1, group=grpC1)
+
+// Contract 2 (Runner)
+grpC2 = "═══ Contract 2 (Runner) ═══"
+c2_tp_ticks     = input.int(125, "C2 Take Profit (ticks)", minval=1, group=grpC2)
+c2_sl_ticks     = input.int(40, "C2 Stop Loss (ticks)", minval=1, group=grpC2)
+c2_be_trigger   = input.int(30, "C2 BE Trigger (ticks profit)", minval=1, group=grpC2, tooltip="Move stop to BE when this profit reached")
+c2_be_offset    = input.int(10, "C2 BE Offset (ticks)", minval=0, group=grpC2, tooltip="Ticks above/below entry for BE stop")
+c2_use_trail    = input.bool(true, "C2 Use Trail", group=grpC2)
+c2_trail_stop   = input.int(20, "C2 Trail Stop (ticks)", minval=1, group=grpC2)
+c2_trail_trigger = input.int(30, "C2 Trail Trigger (ticks profit)", minval=1, group=grpC2)
 
 // ─────────────────────────────── Display ──────────────────────────────────────
 grpDisplay = "═══ Display ═══"
@@ -316,13 +332,29 @@ shortSignal = shortContinuation or shortFlip
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ POSITION MANAGEMENT ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Convert points to ticks
-tpTicks = tpPoints / syminfo.mintick
-slTicks = slPoints / syminfo.mintick
-trailTicks = trailPoints / syminfo.mintick
+// Track entry prices and BE activation for each contract
+var float long1_entry = na
+var float long2_entry = na
+var float short1_entry = na
+var float short2_entry = na
+
+var bool long1_be_active = false
+var bool long2_be_active = false
+var bool short1_be_active = false
+var bool short2_be_active = false
+
+var bool long1_trail_active = false
+var bool long2_trail_active = false
+var bool short1_trail_active = false
+var bool short2_trail_active = false
+
+// Check if contracts are open (by checking if entry price is set and position exists)
+long1_open = not na(long1_entry) and strategy.position_size > 0
+long2_open = not na(long2_entry) and strategy.position_size > 0
+short1_open = not na(short1_entry) and strategy.position_size < 0
+short2_open = not na(short2_entry) and strategy.position_size < 0
 
 // ─────────────────────────────── TEST MODE ────────────────────────────────────
-// Simple EMA cross entries to verify strategy can execute trades
 testLong  = testMode and ta.crossover(ema9, hma20) and strategy.position_size == 0
 testShort = testMode and ta.crossunder(ema9, hma20) and strategy.position_size == 0
 
@@ -332,19 +364,125 @@ if testLong
 if testShort
     strategy.entry("Test Short", strategy.short)
 
+// Test mode exits (simple)
+strategy.exit("Test Long Exit", "Test Long", profit=c1_tp_ticks, loss=c1_sl_ticks)
+strategy.exit("Test Short Exit", "Test Short", profit=c1_tp_ticks, loss=c1_sl_ticks)
+
 // ─────────────────────────────── NORMAL ENTRIES ───────────────────────────────
 if not testMode and longSignal
-    strategy.entry("Long", strategy.long)
+    // Contract 1 (always)
+    strategy.entry("Long1", strategy.long)
+    long1_entry := close
+    long1_be_active := false
+    long1_trail_active := false
+    
+    // Contract 2 (if enabled)
+    if useSecondContract
+        strategy.entry("Long2", strategy.long)
+        long2_entry := close
+        long2_be_active := false
+        long2_trail_active := false
 
 if not testMode and shortSignal
-    strategy.entry("Short", strategy.short)
+    // Contract 1 (always)
+    strategy.entry("Short1", strategy.short)
+    short1_entry := close
+    short1_be_active := false
+    short1_trail_active := false
+    
+    // Contract 2 (if enabled)
+    if useSecondContract
+        strategy.entry("Short2", strategy.short)
+        short2_entry := close
+        short2_be_active := false
+        short2_trail_active := false
 
-// Exit with simple TP/SL/Trail
-strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
-strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
-strategy.exit("Test Long Exit", "Test Long", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
-strategy.exit("Test Short Exit", "Test Short", profit=tpTicks, loss=slTicks, trail_points=tpTicks * 0.5, trail_offset=trailTicks)
+// ─────────────────────────────── EXIT MANAGEMENT ──────────────────────────────
+// Calculate current profit in ticks for each contract
+long1_profit_ticks = long1_open ? (close - long1_entry) / syminfo.mintick : 0
+long2_profit_ticks = long2_open ? (close - long2_entry) / syminfo.mintick : 0
+short1_profit_ticks = short1_open ? (short1_entry - close) / syminfo.mintick : 0
+short2_profit_ticks = short2_open ? (short2_entry - close) / syminfo.mintick : 0
 
+// BE activation checks
+if long1_open and long1_profit_ticks >= c1_be_trigger
+    long1_be_active := true
+if long2_open and long2_profit_ticks >= c2_be_trigger
+    long2_be_active := true
+if short1_open and short1_profit_ticks >= c1_be_trigger
+    short1_be_active := true
+if short2_open and short2_profit_ticks >= c2_be_trigger
+    short2_be_active := true
+
+// Trail activation checks
+if c1_use_trail and long1_open and long1_profit_ticks >= c1_trail_trigger
+    long1_trail_active := true
+if c2_use_trail and long2_open and long2_profit_ticks >= c2_trail_trigger
+    long2_trail_active := true
+if c1_use_trail and short1_open and short1_profit_ticks >= c1_trail_trigger
+    short1_trail_active := true
+if c2_use_trail and short2_open and short2_profit_ticks >= c2_trail_trigger
+    short2_trail_active := true
+
+// ─────────────────────────────── CONTRACT 1 EXITS ─────────────────────────────
+// Long1 exit
+if long1_open
+    if long1_trail_active
+        // Trailing stop active
+        strategy.exit("Long1 Exit", "Long1", profit=c1_tp_ticks, trail_points=c1_trail_trigger, trail_offset=c1_trail_stop)
+    else if long1_be_active
+        // BE active - stop at entry + offset
+        be_stop_ticks = c1_be_offset
+        strategy.exit("Long1 Exit", "Long1", profit=c1_tp_ticks, stop=long1_entry + c1_be_offset * syminfo.mintick)
+    else
+        // Initial stop
+        strategy.exit("Long1 Exit", "Long1", profit=c1_tp_ticks, loss=c1_sl_ticks)
+
+// Short1 exit
+if short1_open
+    if short1_trail_active
+        strategy.exit("Short1 Exit", "Short1", profit=c1_tp_ticks, trail_points=c1_trail_trigger, trail_offset=c1_trail_stop)
+    else if short1_be_active
+        strategy.exit("Short1 Exit", "Short1", profit=c1_tp_ticks, stop=short1_entry - c1_be_offset * syminfo.mintick)
+    else
+        strategy.exit("Short1 Exit", "Short1", profit=c1_tp_ticks, loss=c1_sl_ticks)
+
+// ─────────────────────────────── CONTRACT 2 EXITS ─────────────────────────────
+// Long2 exit
+if useSecondContract and long2_open
+    if long2_trail_active
+        strategy.exit("Long2 Exit", "Long2", profit=c2_tp_ticks, trail_points=c2_trail_trigger, trail_offset=c2_trail_stop)
+    else if long2_be_active
+        strategy.exit("Long2 Exit", "Long2", profit=c2_tp_ticks, stop=long2_entry + c2_be_offset * syminfo.mintick)
+    else
+        strategy.exit("Long2 Exit", "Long2", profit=c2_tp_ticks, loss=c2_sl_ticks)
+
+// Short2 exit
+if useSecondContract and short2_open
+    if short2_trail_active
+        strategy.exit("Short2 Exit", "Short2", profit=c2_tp_ticks, trail_points=c2_trail_trigger, trail_offset=c2_trail_stop)
+    else if short2_be_active
+        strategy.exit("Short2 Exit", "Short2", profit=c2_tp_ticks, stop=short2_entry - c2_be_offset * syminfo.mintick)
+    else
+        strategy.exit("Short2 Exit", "Short2", profit=c2_tp_ticks, loss=c2_sl_ticks)
+
+// ─────────────────────────────── RESET ON CLOSE ───────────────────────────────
+// Reset entry prices when position closes
+if strategy.position_size == 0
+    long1_entry := na
+    long2_entry := na
+    short1_entry := na
+    short2_entry := na
+    long1_be_active := false
+    long2_be_active := false
+    short1_be_active := false
+    short2_be_active := false
+    long1_trail_active := false
+    long2_trail_active := false
+    short1_trail_active := false
+    short2_trail_active := false
+
+// ─────────────────────────────── CHOP ZONE EXITS ──────────────────────────────
 // River Squeeze: Exit ALL positions immediately (no edge in consolidation)
 if not testMode and riverSqueeze and strategy.position_size != 0
     strategy.close_all("River Squeeze Exit")

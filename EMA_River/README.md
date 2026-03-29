@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG on time-based charts (30s).
 
 ## Version
-- **Current**: v1.0.11
+- **Current**: v1.0.12
 
 ## Core Components
 
@@ -63,6 +63,13 @@ When price is inside either filter zone:
 | SF | Fuchsia | Short Flip |
 
 ## Changelog
+
+### v1.0.12
+- **Multi-contract scaled exits** — Trade 1 or 2 contracts with independent exit rules
+- Contract 1 (Scalp): 50 tick TP, 40 tick SL, BE at 30 profit (+10 offset), optional trail
+- Contract 2 (Runner): 125 tick TP, 40 tick SL, BE at 30 profit (+10 offset), trail enabled (20 tick stop after 30 profit)
+- Toggle `Trade 2 Contracts` to use single or dual contract mode
+- Full BE and trailing stop management per contract
 
 ### v1.0.11
 - Added **EMA River Squeeze Filter** — no trades when river spread < threshold (default 15pts)
