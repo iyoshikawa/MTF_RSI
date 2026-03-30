@@ -1,54 +1,72 @@
 # EMA River Strategy
 
-A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
+A GJBI-style futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.1.5
+- **Current**: v1.2.0
 
 ## Strategy Overview
+
+This strategy combines two GJBI indicators:
+- **GJBIEMABG**: Background color based on price vs 50 EMA
+- **GJBIHMACrossRibbon**: 6/21 HMA crossover ribbon
+
+Background is only painted when **BOTH** indicators agree on direction.
 
 ### Entry Conditions
 
 **LONG Entry** (all must be true):
-- RSI Ribbon = Bullish (green)
-- 9 EMA = Bullish (price above)
-- 20 HMA = Bullish (price above)
-- 20 EMA High = Bullish (price above)
+- Price ABOVE 50 EMA (background bullish)
+- 6 HMA > 21 HMA (ribbon bullish)
+- River crossing condition met (Strict or Loose)
+- In trading session
+- Not in chop zone
 
 **SHORT Entry** (all must be true):
-- RSI Ribbon = Bearish (red)
-- 9 EMA = Bearish (price below)
-- 20 HMA = Bearish (price below)
-- 20 EMA Low = Bearish (price below)
+- Price BELOW 50 EMA (background bearish)
+- 6 HMA < 21 HMA (ribbon bearish)
+- River crossing condition met (Strict or Loose)
+- In trading session
+- Not in chop zone
 
-### Exit Conditions
-- **Long Exit**: Fast HMA (6) crosses below Slow HMA (21)
-- **Short Exit**: Fast HMA (6) crosses above Slow HMA (21)
-- Plus TP/SL/BE/Trail per contract settings
+### River Entry Modes
 
-### Filters
-- **BB Chop Filter**: No trades when price inside BB bands (3min MTF)
-- **T-Line 1**: No trades inside 20 EMA ± 34pts, 15s cooldown, 10pt clearance, 30s re-entry lockout
-- **T-Line 2**: No trades inside 50 EMA ± 80pts, 15s cooldown, 15pt clearance, 30s re-entry lockout
-- **Session Filter**: Trade only during configured sessions
+| Mode | Logic | Best For |
+|------|-------|----------|
+| **Strict** | Price must cross FROM outside INTO river | Catching fresh momentum after pullback |
+| **Loose** | Price just needs to be in or past river | More signals, may enter mid-move |
+
+**Strict Math (Long):** `close > river_low AND close[1] <= river_low[1]`
+**Loose Math (Long):** `close > river_low`
+
+### Exit Modes
+
+| Mode | Logic |
+|------|-------|
+| **Previous Bar HL** | Stop at previous bar low (longs) or high (shorts) |
+| **HMA Cross** | Exit when 6/21 HMA crosses against position |
+| **Both** | Exit on whichever happens first |
 
 ## Core Components
 
-| Component | Setting |
-|-----------|---------|
-| 9 EMA | OHLC4 |
-| 20 EMA River | High / HL2 / Low |
-| 20 HMA | Close |
-| RSI Ribbon | 5/13 RSI diff |
-| HMA Exit Ribbon | 6 HMA / 21 HMA |
-| T-Line 1 | 20 EMA ± 34 pts |
-| T-Line 2 | 50 EMA ± 80 pts |
+| Component | Setting | Purpose |
+|-----------|---------|---------|
+| 50 EMA | Close | Background trend (GJBIEMABG) |
+| 20 EMA River | High / HL2 / Low | Entry zone |
+| 6 HMA | Close | Fast ribbon (GJBIHMACrossRibbon) |
+| 21 HMA | Close | Slow ribbon (GJBIHMACrossRibbon) |
+
+## Filters
+
+| Filter | Default | Purpose |
+|--------|---------|---------|
+| Session | ON | Trade only during configured windows |
+| BB Chop | OFF | Block entries inside BB bands |
+| T-Line | OFF | Block entries inside T-Line channel |
 
 ## Session Windows
 
-Single string input format: `TIME1,TIME2,TIME3:DAYS`
-
-**Default**: `1801-1940,0700-0815,0930-1100,1545-1600:23456`
+Default: `1801-1940,0700-0815,0930-1100,1545-1600:23456`
 
 | Window | Time (ET) |
 |--------|-----------|
@@ -57,84 +75,25 @@ Single string input format: `TIME1,TIME2,TIME3:DAYS`
 | NY AM | 09:30–11:00 |
 | NY Close | 15:45–16:00 |
 
-Days: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+## Position Management
 
-## Position Management (Multi-Contract)
-
-### Contract 1 (Scalp)
-| Parameter | Default |
-|-----------|---------|
-| Take Profit | 50 ticks |
-| Stop Loss | 40 ticks |
-| BE Trigger | 30 ticks profit |
-| BE Offset | +10 ticks |
-| Trail | OFF |
-
-### Contract 2 (Runner)
-| Parameter | Default |
-|-----------|---------|
-| Take Profit | 125 ticks |
-| Stop Loss | 40 ticks |
-| BE Trigger | 30 ticks profit |
-| BE Offset | +10 ticks |
-| Trail | ON (20 tick stop after 30 profit) |
-
-Toggle `Trade 2 Contracts` to enable/disable second contract.
-
-## Signal Arrows
-
-| Arrow | Color | Meaning |
-|-------|-------|---------|
-| L | Lime | Long Entry |
-| S | Red | Short Entry |
-| DS▲ | Aqua | DStoch Buy Signal |
-| DS▼ | Fuchsia | DStoch Sell Signal |
+Single contract with configurable TP/SL:
+- Take Profit: 50 ticks (default)
+- Stop Loss: 40 ticks (default)
 
 ## Changelog
 
-### v1.1.5
-- **Distance Gate**: Price must move X points AWAY from channel edge before entry allowed
-  - T-Line 1: 10 points clearance (default)
-  - T-Line 2: 15 points clearance (default)
-  - Prevents entries right at the edge where pullback would re-enter channel
-- **Re-entry Lockout**: If price re-enters channel within X seconds of exiting, reset cooldown
-  - Default: 30 seconds for both T-Lines
-  - Prevents whipsaw: exit → wait cooldown → enter → immediately re-enter chop
-- Debug table now shows "TOO CLOSE" (orange) when outside channel but clearance not met
-- Both features help avoid back-to-back losing trades from "pop out and back in" price action
+### v1.2.0 — MAJOR SIMPLIFICATION
+- **GJBI-style strategy** based on Geo-TX methodology
+- **Combined background**: Only paints when 50 EMA AND HMA ribbon agree
+- **River entry modes**: Strict (crossover) or Loose (in river) dropdown
+- **Exit modes**: Previous Bar HL, HMA Cross, or Both dropdown
+- **Single contract**: Removed multi-contract complexity
+- **Filters simplified**: BB and T-Line OFF by default, Session ON
+- Removed RSI Ribbon, Double Stochastic, and other complexity
 
-### v1.1.4
-- **Comprehensive tooltips** on all inputs explaining purpose and default values
-- **Section header tooltips** explaining what each group of settings does
-- **Full style customization** for all chart elements:
-  - Colors (bullish/bearish) for all MAs and channels
-  - Line widths (1-5) for all plotted lines
-  - Line styles (Solid/Dashed/Dotted) where applicable
-  - Fill colors for ribbons and channels
-- **Second T-Line Channel** (50 EMA / 80pt width) for broader consolidation filtering
-- T-Line 1 (20/34) now uses yellow color scheme
-- T-Line 2 (50/80) uses orange color scheme for differentiation
-- Entry signal arrow colors now customizable
-- DStoch marker colors now customizable
-
-### v1.1.3
-- T-Line Channel Chop Filter — No entries when price inside 20 EMA ± 34 points
-- 15-second cooldown after price exits channel
-- Yellow channel fill visualization
-- Debug table shows T-Line status
-
-### v1.1.2
-- HMA Cross Exit: Exit signals based on 6/21 HMA crossover
-- HMA Exit Ribbon visual with fill
-
-### v1.1.1
-- Session filter changed to single string input
-- Supports up to 6 time windows
-
-### v1.1.0 — MAJOR REWRITE
-- Simplified entry logic: RSI + 9 EMA + 20 HMA + 20 EMA confluence
-- New exit condition: Close vs 20 EMA HL2
-- Removed legacy complexity
+### v1.1.x
+- Previous iterative development (see git history)
 
 ### v1.0.x
-- Initial development and debugging
+- Initial development

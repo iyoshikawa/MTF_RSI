@@ -1,0 +1,402 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yellow_Yoshi
+// EMA River Strategy v1.2.0
+// GJBI-style: Background + HMA Ribbon confluence entry
+
+//@version=6
+strategy("EMA River Strategy v1.2.0", 
+     overlay=true, 
+     initial_capital=1000000,
+     currency=currency.USD,
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1,
+     pyramiding=1,
+     calc_on_order_fills=true,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ INPUTS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────── GJBIEMABG (Background) ──────────────────────
+grpBG = "═══ GJBIEMABG Background ═══"
+
+bg_ema_len = input.int(50, "Trend EMA Length", minval=1, group=grpBG, 
+     tooltip="BACKGROUND TREND INDICATOR\nPaints background based on price vs this EMA.\n\nBullish (green): Price ABOVE this EMA\nBearish (red): Price BELOW this EMA\n\nDefault: 50")
+bg_bull_color = input.color(color.new(#00ffbb, 85), "Bullish Background", group=grpBG, 
+     tooltip="Background color when price > EMA. Default: Cyan-green 85% transparent")
+bg_bear_color = input.color(color.new(#ff0055, 85), "Bearish Background", group=grpBG, 
+     tooltip="Background color when price < EMA. Default: Pink-red 85% transparent")
+bg_neutral_color = input.color(color.new(color.gray, 95), "Neutral Background", group=grpBG, 
+     tooltip="Background when indicators disagree. Default: Gray 95% transparent")
+
+// ─────────────────────────────── 20 EMA River ────────────────────────────────
+grpRiver = "═══ 20 EMA River ═══"
+
+river_len = input.int(20, "River EMA Length", minval=1, group=grpRiver, 
+     tooltip="EMA RIVER (Entry Zone)\nThe river is formed by High/HL2/Low of this EMA.\nEntry signals require price to cross into the river.\n\nDefault: 20")
+show_river = input.bool(true, "Show River", group=grpRiver, 
+     tooltip="Display the EMA River lines on chart. Default: true")
+river_bull_color = input.color(color.lime, "River Bullish", group=grpRiver, 
+     tooltip="River line color when price above. Default: Lime")
+river_bear_color = input.color(color.red, "River Bearish", group=grpRiver, 
+     tooltip="River line color when price below. Default: Red")
+river_width = input.int(1, "River Line Width", minval=1, maxval=5, group=grpRiver, 
+     tooltip="River line thickness. Default: 1")
+
+// ─────────────────────────────── GJBIHMACrossRibbon ──────────────────────────
+grpHMA = "═══ HMA Cross Ribbon ═══"
+
+hma_fast_len = input.int(6, "Fast HMA Length", minval=1, group=grpHMA, 
+     tooltip="HMA CROSS RIBBON\nBullish: Fast HMA > Slow HMA\nBearish: Fast HMA < Slow HMA\n\nFast HMA period. Default: 6")
+hma_slow_len = input.int(21, "Slow HMA Length", minval=1, group=grpHMA, 
+     tooltip="Slow HMA period. Default: 21")
+show_hma_ribbon = input.bool(true, "Show HMA Ribbon", group=grpHMA, 
+     tooltip="Display the HMA ribbon on chart. Default: true")
+hma_bull_color = input.color(color.lime, "HMA Bullish", group=grpHMA, 
+     tooltip="HMA line color when price above. Default: Lime")
+hma_bear_color = input.color(color.red, "HMA Bearish", group=grpHMA, 
+     tooltip="HMA line color when price below. Default: Red")
+hma_ribbon_bull = input.color(color.new(color.green, 70), "Ribbon Bullish Fill", group=grpHMA, 
+     tooltip="Ribbon fill when Fast > Slow. Default: Green 70%")
+hma_ribbon_bear = input.color(color.new(color.red, 70), "Ribbon Bearish Fill", group=grpHMA, 
+     tooltip="Ribbon fill when Fast < Slow. Default: Red 70%")
+hma_width = input.int(1, "HMA Line Width", minval=1, maxval=5, group=grpHMA, 
+     tooltip="HMA line thickness. Default: 1")
+
+// ─────────────────────────────── Entry Settings ──────────────────────────────
+grpEntry = "═══ Entry Settings ═══"
+
+entry_mode = input.string("Strict", "River Entry Mode", options=["Strict", "Loose"], group=grpEntry, 
+     tooltip="RIVER CROSSING ENTRY MODE\n\nSTRICT: Price must cross FROM outside the river INTO the river.\nMath: close > river_low AND close[1] <= river_low[1] (for longs)\nBest for: Catching fresh momentum after pullback\n\nLOOSE: Price just needs to be inside river with background agreement.\nMath: close > river_low AND close < river_high (for longs)\nBest for: More signals, but may enter mid-move\n\nDefault: Strict")
+
+// ─────────────────────────────── Exit Settings ───────────────────────────────
+grpExit = "═══ Exit Settings ═══"
+
+exit_mode = input.string("Previous Bar HL", "Exit Mode", options=["Previous Bar HL", "HMA Cross", "Both"], group=grpExit, 
+     tooltip="EXIT MODE OPTIONS\n\nPREVIOUS BAR HL: Stop at previous bar high (shorts) or low (longs).\nClassic price action exit.\n\nHMA CROSS: Exit when 6/21 HMA crosses against position.\nMomentum-based exit.\n\nBOTH: Exit on whichever happens first.\n\nDefault: Previous Bar HL")
+use_tp = input.bool(true, "Use Take Profit", group=grpExit, 
+     tooltip="Enable fixed take profit. Default: true")
+tp_ticks = input.int(50, "Take Profit (ticks)", minval=1, group=grpExit, 
+     tooltip="Take profit distance in ticks. Default: 50")
+use_sl = input.bool(true, "Use Stop Loss", group=grpExit, 
+     tooltip="Enable fixed stop loss (backup). Default: true")
+sl_ticks = input.int(40, "Stop Loss (ticks)", minval=1, group=grpExit, 
+     tooltip="Stop loss distance in ticks. Default: 40")
+
+// ─────────────────────────────── Session Filter ──────────────────────────────
+grpSession = "═══ Session Filter ═══"
+
+useSessionFilter = input.bool(true, "Enable Session Filter", group=grpSession, 
+     tooltip="SESSION TIME FILTER\nOnly allow entries during specified trading windows.\n\nDefault: true (ON)")
+sessionConfig = input.string("1801-1940,0700-0815,0930-1100,1545-1600:23456", "Session Windows", group=grpSession, 
+     tooltip="Format: TIME1,TIME2,TIME3:DAYS\nTimes in 24hr format (HHMM-HHMM)\nDays: 1=Sun 2=Mon 3=Tue 4=Wed 5=Thu 6=Fri 7=Sat\n\nDefault: Globex evening, pre-market, NY AM, NY close on Mon-Fri")
+sessionTZ = input.string("America/New_York", "Timezone", group=grpSession, 
+     tooltip="Timezone for session times. Default: America/New_York")
+
+// ─────────────────────────────── BB Chop Filter (OFF) ────────────────────────
+grpBB = "═══ BB Chop Filter ═══"
+
+useBBChop = input.bool(false, "Enable BB Chop Filter", group=grpBB, 
+     tooltip="BOLLINGER BAND CHOP FILTER\nBlocks entries when price is inside BB bands.\n\nDefault: false (OFF)")
+bbLength = input.int(10, "BB Length", minval=1, group=grpBB, 
+     tooltip="Bollinger Band period. Default: 10")
+bbStdDev = input.float(1.2, "BB StdDev", minval=0.1, step=0.1, group=grpBB, 
+     tooltip="Standard deviation multiplier. Default: 1.2")
+bbTimeframe = input.timeframe("3", "BB Timeframe", group=grpBB, 
+     tooltip="Timeframe for BB calculation. Default: 3 minutes")
+
+// ─────────────────────────────── T-Line Filter (OFF) ─────────────────────────
+grpTLine = "═══ T-Line Filter ═══"
+
+useTLine = input.bool(false, "Enable T-Line Filter", group=grpTLine, 
+     tooltip="T-LINE CHANNEL FILTER\nBlocks entries when price inside channel.\n\nDefault: false (OFF)")
+tline_period = input.int(20, "Period", minval=1, group=grpTLine, 
+     tooltip="MA period. Default: 20")
+tline_width = input.int(34, "Channel Width (points)", minval=1, group=grpTLine, 
+     tooltip="Points above/below MA. Default: 34")
+tline_cooldown = input.int(15, "Cooldown (seconds)", minval=0, group=grpTLine, 
+     tooltip="Wait after exiting channel. Default: 15")
+tline_clearance = input.int(10, "Distance Clearance (points)", minval=0, group=grpTLine, 
+     tooltip="Points away from edge before entry. Default: 10")
+
+// ─────────────────────────────── Display ─────────────────────────────────────
+grpDisplay = "═══ Display ═══"
+
+showSignals = input.bool(true, "Show Entry Arrows", group=grpDisplay, 
+     tooltip="Show entry signal arrows. Default: true")
+showDebug = input.bool(true, "Show Debug Table", group=grpDisplay, 
+     tooltip="Show debug info table. Default: true")
+long_color = input.color(color.lime, "Long Signal Color", group=grpDisplay, 
+     tooltip="Long entry arrow color. Default: Lime")
+short_color = input.color(color.red, "Short Signal Color", group=grpDisplay, 
+     tooltip="Short entry arrow color. Default: Red")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ FUNCTIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// HMA calculation
+f_hma(_src, _len) =>
+    _halfLen = math.floor(_len / 2)
+    _sqrtLen = math.floor(math.sqrt(_len))
+    _wma1 = ta.wma(_src, _halfLen)
+    _wma2 = ta.wma(_src, _len)
+    ta.wma(2 * _wma1 - _wma2, _sqrtLen)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CALCULATIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────── GJBIEMABG: 50 EMA Background ────────────────
+bg_ema = ta.ema(close, bg_ema_len)
+bg_bullish = close > bg_ema
+bg_bearish = close < bg_ema
+
+// ─────────────────────────────── 20 EMA River ────────────────────────────────
+river_high = ta.ema(high, river_len)
+river_hl2 = ta.ema(hl2, river_len)
+river_low = ta.ema(low, river_len)
+
+// Price position relative to river
+above_river = close > river_high
+below_river = close < river_low
+in_river = close >= river_low and close <= river_high
+
+// ─────────────────────────────── GJBIHMACrossRibbon: 6/21 HMA ────────────────
+hma_fast = f_hma(close, hma_fast_len)
+hma_slow = f_hma(close, hma_slow_len)
+
+hma_bullish = hma_fast > hma_slow
+hma_bearish = hma_fast < hma_slow
+
+hma_bull_cross = ta.crossover(hma_fast, hma_slow)
+hma_bear_cross = ta.crossunder(hma_fast, hma_slow)
+
+// ─────────────────────────────── Combined Background ─────────────────────────
+// Only paint when BOTH indicators agree
+both_bullish = bg_bullish and hma_bullish
+both_bearish = bg_bearish and hma_bearish
+
+// ─────────────────────────────── River Entry Conditions ──────────────────────
+// STRICT: Must cross FROM outside INTO river
+strict_long_cross = close > river_low and close[1] <= river_low[1]  // Crossed up into river from below
+strict_short_cross = close < river_high and close[1] >= river_high[1]  // Crossed down into river from above
+
+// LOOSE: Just needs to be in river
+loose_long_in = in_river or above_river  // In or above river
+loose_short_in = in_river or below_river  // In or below river
+
+// Select based on mode
+river_long_ok = entry_mode == "Strict" ? strict_long_cross : loose_long_in
+river_short_ok = entry_mode == "Strict" ? strict_short_cross : loose_short_in
+
+// ─────────────────────────────── Session Filter ──────────────────────────────
+config_parts = str.split(sessionConfig, ":")
+times_str = array.get(config_parts, 0)
+days_str = array.size(config_parts) > 1 ? array.get(config_parts, 1) : "23456"
+
+time_windows = str.split(times_str, ",")
+num_windows = array.size(time_windows)
+day_suffix = ":" + days_str
+
+in_w1 = num_windows >= 1 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 0)) + day_suffix, sessionTZ)) : false
+in_w2 = num_windows >= 2 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 1)) + day_suffix, sessionTZ)) : false
+in_w3 = num_windows >= 3 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 2)) + day_suffix, sessionTZ)) : false
+in_w4 = num_windows >= 4 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 3)) + day_suffix, sessionTZ)) : false
+in_w5 = num_windows >= 5 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 4)) + day_suffix, sessionTZ)) : false
+in_w6 = num_windows >= 6 ? not na(time(timeframe.period, str.trim(array.get(time_windows, 5)) + day_suffix, sessionTZ)) : false
+
+inAnyWindow = in_w1 or in_w2 or in_w3 or in_w4 or in_w5 or in_w6
+inTradingSession = not useSessionFilter or inAnyWindow
+
+// ─────────────────────────────── BB Chop Filter ──────────────────────────────
+[bbMiddle, bbUpper, bbLower] = request.security(syminfo.tickerid, bbTimeframe, 
+     ta.bb(close, bbLength, bbStdDev), lookahead=barmerge.lookahead_off)
+
+insideBB = close < bbUpper and close > bbLower
+bbChopActive = useBBChop and insideBB
+
+// ─────────────────────────────── T-Line Filter ───────────────────────────────
+tline_ma = ta.ema(close, tline_period)
+tline_widthPrice = tline_width * syminfo.mintick
+tline_upper = tline_ma + tline_widthPrice
+tline_lower = tline_ma - tline_widthPrice
+insideTLine = close < tline_upper and close > tline_lower
+
+tline_dist_above = (close - tline_upper) / syminfo.mintick
+tline_dist_below = (tline_lower - close) / syminfo.mintick
+tline_clearance_met = tline_dist_above >= tline_clearance or tline_dist_below >= tline_clearance
+
+var int tline_exitTime = 0
+tline_cooldownMs = tline_cooldown * 1000
+
+if insideTLine[1] and not insideTLine
+    tline_exitTime := time
+
+tline_timeSinceExit = time - tline_exitTime
+tline_cooldownActive = tline_exitTime > 0 and tline_timeSinceExit < tline_cooldownMs
+tlineChopActive = useTLine and (insideTLine or tline_cooldownActive or (not insideTLine and not tline_clearance_met))
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ENTRY CONDITIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Entry requires:
+// 1. Both indicators agree (background)
+// 2. River crossing condition met
+// 3. Session filter passed
+// 4. Not in chop zones
+// 5. No existing position
+
+canTrade = inTradingSession and not bbChopActive and not tlineChopActive and strategy.position_size == 0
+
+longSignal = canTrade and both_bullish and river_long_ok
+shortSignal = canTrade and both_bearish and river_short_ok
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ POSITION MANAGEMENT ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float entry_price = na
+
+// ─────────────────────────────── ENTRIES ──────────────────────────────────────
+if longSignal
+    strategy.entry("Long", strategy.long)
+    entry_price := close
+
+if shortSignal
+    strategy.entry("Short", strategy.short)
+    entry_price := close
+
+// ─────────────────────────────── EXIT CONDITIONS ─────────────────────────────
+// Previous bar high/low exit
+prev_bar_long_stop = low[1]
+prev_bar_short_stop = high[1]
+
+// HMA cross exit
+hma_long_exit = hma_bear_cross
+hma_short_exit = hma_bull_cross
+
+// Apply exit based on mode
+if strategy.position_size > 0  // Long position
+    if exit_mode == "Previous Bar HL"
+        strategy.exit("Long Exit", "Long", stop=prev_bar_long_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
+    else if exit_mode == "HMA Cross"
+        if hma_long_exit
+            strategy.close("Long", comment="HMA Cross Exit")
+        if use_tp or use_sl
+            strategy.exit("Long Exit", "Long", profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
+    else  // Both
+        strategy.exit("Long Exit", "Long", stop=prev_bar_long_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
+        if hma_long_exit
+            strategy.close("Long", comment="HMA Cross Exit")
+
+if strategy.position_size < 0  // Short position
+    if exit_mode == "Previous Bar HL"
+        strategy.exit("Short Exit", "Short", stop=prev_bar_short_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
+    else if exit_mode == "HMA Cross"
+        if hma_short_exit
+            strategy.close("Short", comment="HMA Cross Exit")
+        if use_tp or use_sl
+            strategy.exit("Short Exit", "Short", profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
+    else  // Both
+        strategy.exit("Short Exit", "Short", stop=prev_bar_short_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
+        if hma_short_exit
+            strategy.close("Short", comment="HMA Cross Exit")
+
+// ─────────────────────────────── RESET ON CLOSE ──────────────────────────────
+if strategy.position_size == 0
+    entry_price := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ PLOTTING ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────── Combined Background ─────────────────────────
+// Only paint when both GJBIEMABG and HMA ribbon agree
+combined_bg = both_bullish ? bg_bull_color : both_bearish ? bg_bear_color : bg_neutral_color
+bgcolor(combined_bg, title="GJBI Combined Background")
+
+// ─────────────────────────────── 50 EMA (Background reference) ───────────────
+plot(bg_ema, "50 EMA", color=close > bg_ema ? color.lime : color.red, linewidth=2)
+
+// ─────────────────────────────── 20 EMA River ────────────────────────────────
+river_high_col = close > river_high ? river_bull_color : river_bear_color
+river_hl2_col = close > river_hl2 ? river_bull_color : river_bear_color
+river_low_col = close > river_low ? river_bull_color : river_bear_color
+
+plot(show_river ? river_high : na, "River High", color=river_high_col, linewidth=river_width)
+plot(show_river ? river_hl2 : na, "River HL2", color=river_hl2_col, linewidth=river_width + 1)
+plot(show_river ? river_low : na, "River Low", color=river_low_col, linewidth=river_width)
+
+// ─────────────────────────────── HMA Cross Ribbon ────────────────────────────
+hma_fast_col = close > hma_fast ? hma_bull_color : hma_bear_color
+hma_slow_col = close > hma_slow ? hma_bull_color : hma_bear_color
+hma_ribbon_col = hma_bullish ? hma_ribbon_bull : hma_ribbon_bear
+
+p_hma_fast = plot(show_hma_ribbon ? hma_fast : na, "Fast HMA", color=hma_fast_col, linewidth=hma_width)
+p_hma_slow = plot(show_hma_ribbon ? hma_slow : na, "Slow HMA", color=hma_slow_col, linewidth=hma_width)
+fill(p_hma_fast, p_hma_slow, color=show_hma_ribbon ? hma_ribbon_col : na, title="HMA Ribbon")
+
+// ─────────────────────────────── Entry Signals ───────────────────────────────
+plotshape(showSignals and longSignal, "Long Entry", 
+     style=shape.triangleup, location=location.belowbar, 
+     color=long_color, size=size.normal, text="L")
+
+plotshape(showSignals and shortSignal, "Short Entry", 
+     style=shape.triangledown, location=location.abovebar, 
+     color=short_color, size=size.normal, text="S")
+
+// ─────────────────────────────── No-trade session background ─────────────────
+bgcolor(not inTradingSession and useSessionFilter ? color.new(color.red, 95) : na, title="No Trade Session")
+
+// ─────────────────────────────── Debug Table ─────────────────────────────────
+var table debugTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
+
+if showDebug and barstate.islast
+    table.cell(debugTable, 0, 0, "Condition", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 0, "Status", text_color=color.white, text_size=size.small)
+    
+    table.cell(debugTable, 0, 1, "50 EMA (BG)", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 1, bg_bullish ? "BULL" : "BEAR", text_color=bg_bullish ? color.lime : color.red, text_size=size.small)
+    
+    table.cell(debugTable, 0, 2, "HMA Ribbon", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 2, hma_bullish ? "BULL" : "BEAR", text_color=hma_bullish ? color.lime : color.red, text_size=size.small)
+    
+    table.cell(debugTable, 0, 3, "Both Agree", text_color=color.white, text_size=size.small)
+    agree_status = both_bullish ? "BULL" : both_bearish ? "BEAR" : "NO"
+    agree_col = both_bullish ? color.lime : both_bearish ? color.red : color.gray
+    table.cell(debugTable, 1, 3, agree_status, text_color=agree_col, text_size=size.small)
+    
+    table.cell(debugTable, 0, 4, "River Position", text_color=color.white, text_size=size.small)
+    river_status = above_river ? "ABOVE" : below_river ? "BELOW" : "IN RIVER"
+    river_col = above_river ? color.lime : below_river ? color.red : color.yellow
+    table.cell(debugTable, 1, 4, river_status, text_color=river_col, text_size=size.small)
+    
+    table.cell(debugTable, 0, 5, "River Entry", text_color=color.white, text_size=size.small)
+    river_entry_ok = (both_bullish and river_long_ok) or (both_bearish and river_short_ok)
+    table.cell(debugTable, 1, 5, river_entry_ok ? "OK" : "NO", text_color=river_entry_ok ? color.lime : color.gray, text_size=size.small)
+    
+    table.cell(debugTable, 0, 6, "In Session", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 6, inTradingSession ? "YES" : "NO", text_color=inTradingSession ? color.lime : color.red, text_size=size.small)
+    
+    table.cell(debugTable, 0, 7, "BB Chop", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 7, useBBChop ? (bbChopActive ? "CHOP" : "OK") : "OFF", text_color=useBBChop ? (bbChopActive ? color.red : color.lime) : color.gray, text_size=size.small)
+    
+    table.cell(debugTable, 0, 8, "T-Line", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 8, useTLine ? (tlineChopActive ? "CHOP" : "OK") : "OFF", text_color=useTLine ? (tlineChopActive ? color.red : color.lime) : color.gray, text_size=size.small)
+    
+    table.cell(debugTable, 0, 9, "Can Trade", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 9, canTrade ? "YES" : "NO", text_color=canTrade ? color.lime : color.red, text_size=size.small)
+    
+    table.cell(debugTable, 0, 10, "Position", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 10, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
+    
+    table.cell(debugTable, 0, 11, "Signal", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 11, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
+
+// ─────────────────────────────── Alerts ──────────────────────────────────────
+alertcondition(longSignal, "Long Entry", "GJBI River: Long Entry Signal")
+alertcondition(shortSignal, "Short Entry", "GJBI River: Short Entry Signal")
