@@ -3,27 +3,35 @@
 A GJBI-style futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.2.0
+- **Current**: v1.2.1
 
 ## Strategy Overview
 
-This strategy combines two GJBI indicators:
-- **GJBIEMABG**: Background color based on price vs 50 EMA
-- **GJBIHMACrossRibbon**: 6/21 HMA crossover ribbon
+This strategy combines:
+- **River-Based Background**: Price position relative to 20 EMA River
+- **HMA Cross Ribbon**: 6/21 HMA crossover for momentum confirmation
 
 Background is only painted when **BOTH** indicators agree on direction.
+
+### Background Logic
+
+| Price Position | Background |
+|----------------|------------|
+| **Above 20 EMA High** | Green (if HMA agrees) |
+| **Below 20 EMA Low** | Red (if HMA agrees) |
+| **Inside River** | Neutral (always) |
 
 ### Entry Conditions
 
 **LONG Entry** (all must be true):
-- Price ABOVE 50 EMA (background bullish)
+- Price ABOVE 20 EMA High (background bullish)
 - 6 HMA > 21 HMA (ribbon bullish)
 - River crossing condition met (Strict or Loose)
 - In trading session
 - Not in chop zone
 
 **SHORT Entry** (all must be true):
-- Price BELOW 50 EMA (background bearish)
+- Price BELOW 20 EMA Low (background bearish)
 - 6 HMA < 21 HMA (ribbon bearish)
 - River crossing condition met (Strict or Loose)
 - In trading session
@@ -51,10 +59,9 @@ Background is only painted when **BOTH** indicators agree on direction.
 
 | Component | Setting | Purpose |
 |-----------|---------|---------|
-| 50 EMA | Close | Background trend (GJBIEMABG) |
-| 20 EMA River | High / HL2 / Low | Entry zone |
-| 6 HMA | Close | Fast ribbon (GJBIHMACrossRibbon) |
-| 21 HMA | Close | Slow ribbon (GJBIHMACrossRibbon) |
+| 20 EMA River | High / HL2 / Low | Entry zone + Background |
+| 6 HMA | Close | Fast ribbon |
+| 21 HMA | Close | Slow ribbon |
 
 ## Filters
 
@@ -83,17 +90,21 @@ Single contract with configurable TP/SL:
 
 ## Changelog
 
+### v1.2.1
+- **River-based background**: Now uses 20 EMA High/Low instead of 50 EMA
+  - Green: Price > 20 EMA High (+ HMA agrees)
+  - Red: Price < 20 EMA Low (+ HMA agrees)
+  - Neutral: Price inside river (always)
+- Removed 50 EMA calculation and plot
+- Debug table shows "River BG" with ABOVE/IN RIVER/BELOW status
+
 ### v1.2.0 — MAJOR SIMPLIFICATION
-- **GJBI-style strategy** based on Geo-TX methodology
-- **Combined background**: Only paints when 50 EMA AND HMA ribbon agree
-- **River entry modes**: Strict (crossover) or Loose (in river) dropdown
-- **Exit modes**: Previous Bar HL, HMA Cross, or Both dropdown
-- **Single contract**: Removed multi-contract complexity
-- **Filters simplified**: BB and T-Line OFF by default, Session ON
-- Removed RSI Ribbon, Double Stochastic, and other complexity
+- GJBI-style strategy based on Geo-TX methodology
+- Combined background: Only paints when indicators agree
+- River entry modes: Strict (crossover) or Loose (in river) dropdown
+- Exit modes: Previous Bar HL, HMA Cross, or Both dropdown
+- Single contract: Removed multi-contract complexity
+- Filters simplified: BB and T-Line OFF by default, Session ON
 
 ### v1.1.x
 - Previous iterative development (see git history)
-
-### v1.0.x
-- Initial development
