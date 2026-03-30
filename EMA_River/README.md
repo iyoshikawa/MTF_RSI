@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.1.4
+- **Current**: v1.1.5
 
 ## Strategy Overview
 
@@ -28,8 +28,8 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ### Filters
 - **BB Chop Filter**: No trades when price inside BB bands (3min MTF)
-- **T-Line 1**: No trades when price inside 20 EMA ± 34 points, 15s cooldown
-- **T-Line 2**: No trades when price inside 50 EMA ± 80 points, 15s cooldown
+- **T-Line 1**: No trades inside 20 EMA ± 34pts, 15s cooldown, 10pt clearance, 30s re-entry lockout
+- **T-Line 2**: No trades inside 50 EMA ± 80pts, 15s cooldown, 15pt clearance, 30s re-entry lockout
 - **Session Filter**: Trade only during configured sessions
 
 ## Core Components
@@ -91,6 +91,17 @@ Toggle `Trade 2 Contracts` to enable/disable second contract.
 | DS▼ | Fuchsia | DStoch Sell Signal |
 
 ## Changelog
+
+### v1.1.5
+- **Distance Gate**: Price must move X points AWAY from channel edge before entry allowed
+  - T-Line 1: 10 points clearance (default)
+  - T-Line 2: 15 points clearance (default)
+  - Prevents entries right at the edge where pullback would re-enter channel
+- **Re-entry Lockout**: If price re-enters channel within X seconds of exiting, reset cooldown
+  - Default: 30 seconds for both T-Lines
+  - Prevents whipsaw: exit → wait cooldown → enter → immediately re-enter chop
+- Debug table now shows "TOO CLOSE" (orange) when outside channel but clearance not met
+- Both features help avoid back-to-back losing trades from "pop out and back in" price action
 
 ### v1.1.4
 - **Comprehensive tooltips** on all inputs explaining purpose and default values

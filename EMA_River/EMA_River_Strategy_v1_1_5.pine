@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.1.4
+// EMA River Strategy v1.1.5
 
 //@version=6
-strategy("EMA River Strategy v1.1.4", 
+strategy("EMA River Strategy v1.1.5", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -138,6 +138,10 @@ tline1_calcType  = input.int(0, "Calc Type", minval=0, maxval=6, group=grpTLine1
      tooltip="0=Close, 1=Open, 2=High, 3=Low, 4=HL2, 5=HLC3, 6=OHLC4. Default: 0 (Close)")
 tline1_cooldown  = input.int(15, "Cooldown (seconds)", minval=0, group=grpTLine1, 
      tooltip="Wait X seconds after price exits channel before allowing entries. Default: 15")
+tline1_clearance = input.int(10, "Distance Clearance (points)", minval=0, group=grpTLine1, 
+     tooltip="Price must be this many points AWAY from channel edge before entry allowed. Prevents entries right at the edge. Default: 10")
+tline1_reentry_lock = input.int(30, "Re-entry Lockout (seconds)", minval=0, group=grpTLine1, 
+     tooltip="If price re-enters channel within X seconds of exiting, reset cooldown. Prevents whipsaw entries. Default: 30")
 
 // T-Line 1 Styles
 tline1_ma_bull    = input.color(color.lime, "MA Bullish", group=grpTLine1, tooltip="T-Line 1 MA color when price above. Default: Lime")
@@ -164,6 +168,10 @@ tline2_calcType  = input.int(0, "Calc Type", minval=0, maxval=6, group=grpTLine2
      tooltip="0=Close, 1=Open, 2=High, 3=Low, 4=HL2, 5=HLC3, 6=OHLC4. Default: 0 (Close)")
 tline2_cooldown  = input.int(15, "Cooldown (seconds)", minval=0, group=grpTLine2, 
      tooltip="Wait X seconds after price exits channel before allowing entries. Default: 15")
+tline2_clearance = input.int(15, "Distance Clearance (points)", minval=0, group=grpTLine2, 
+     tooltip="Price must be this many points AWAY from channel edge before entry allowed. Prevents entries right at the edge. Default: 15")
+tline2_reentry_lock = input.int(30, "Re-entry Lockout (seconds)", minval=0, group=grpTLine2, 
+     tooltip="If price re-enters channel within X seconds of exiting, reset cooldown. Prevents whipsaw entries. Default: 30")
 
 // T-Line 2 Styles
 tline2_ma_bull    = input.color(color.lime, "MA Bullish", group=grpTLine2, tooltip="T-Line 2 MA color when price above. Default: Lime")
@@ -355,13 +363,36 @@ tline1_upper = tline1_ma + tline1_widthPrice
 tline1_lower = tline1_ma - tline1_widthPrice
 insideTLine1 = close < tline1_upper and close > tline1_lower
 
+// Distance from channel edges (in points)
+tline1_dist_above = (close - tline1_upper) / syminfo.mintick  // positive when above upper
+tline1_dist_below = (tline1_lower - close) / syminfo.mintick  // positive when below lower
+tline1_clearance_met = tline1_dist_above >= tline1_clearance or tline1_dist_below >= tline1_clearance
+
+// Cooldown and re-entry lockout tracking
 var int tline1_exitTime = 0
+var int tline1_lastInsideTime = 0
 tline1_cooldownMs = tline1_cooldown * 1000
+tline1_reentryMs = tline1_reentry_lock * 1000
+
+// Track when price is inside channel
+if insideTLine1
+    tline1_lastInsideTime := time
+
+// Track when price exits channel
 if insideTLine1[1] and not insideTLine1
     tline1_exitTime := time
+
+// Re-entry lockout: if price re-enters within lockout window, reset exit time
+if not insideTLine1[1] and insideTLine1
+    // Price just re-entered - check if within lockout window
+    if tline1_exitTime > 0 and (time - tline1_exitTime) < tline1_reentryMs
+        tline1_exitTime := 0  // Reset - will need fresh exit and cooldown
+
 tline1_timeSinceExit = time - tline1_exitTime
 tline1_cooldownActive = tline1_exitTime > 0 and tline1_timeSinceExit < tline1_cooldownMs
-tline1_chop = useTLine1 and (insideTLine1 or tline1_cooldownActive)
+
+// T-Line 1 blocks entry if: inside channel OR in cooldown OR distance clearance not met
+tline1_chop = useTLine1 and (insideTLine1 or tline1_cooldownActive or (not insideTLine1 and not tline1_clearance_met))
 
 // ─────────────────────────────── Chop Filter: T-Line 2 ────────────────────────
 tline2_src = f_src(tline2_calcType)
@@ -371,13 +402,36 @@ tline2_upper = tline2_ma + tline2_widthPrice
 tline2_lower = tline2_ma - tline2_widthPrice
 insideTLine2 = close < tline2_upper and close > tline2_lower
 
+// Distance from channel edges (in points)
+tline2_dist_above = (close - tline2_upper) / syminfo.mintick  // positive when above upper
+tline2_dist_below = (tline2_lower - close) / syminfo.mintick  // positive when below lower
+tline2_clearance_met = tline2_dist_above >= tline2_clearance or tline2_dist_below >= tline2_clearance
+
+// Cooldown and re-entry lockout tracking
 var int tline2_exitTime = 0
+var int tline2_lastInsideTime = 0
 tline2_cooldownMs = tline2_cooldown * 1000
+tline2_reentryMs = tline2_reentry_lock * 1000
+
+// Track when price is inside channel
+if insideTLine2
+    tline2_lastInsideTime := time
+
+// Track when price exits channel
 if insideTLine2[1] and not insideTLine2
     tline2_exitTime := time
+
+// Re-entry lockout: if price re-enters within lockout window, reset exit time
+if not insideTLine2[1] and insideTLine2
+    // Price just re-entered - check if within lockout window
+    if tline2_exitTime > 0 and (time - tline2_exitTime) < tline2_reentryMs
+        tline2_exitTime := 0  // Reset - will need fresh exit and cooldown
+
 tline2_timeSinceExit = time - tline2_exitTime
 tline2_cooldownActive = tline2_exitTime > 0 and tline2_timeSinceExit < tline2_cooldownMs
-tline2_chop = useTLine2 and (insideTLine2 or tline2_cooldownActive)
+
+// T-Line 2 blocks entry if: inside channel OR in cooldown OR distance clearance not met
+tline2_chop = useTLine2 and (insideTLine2 or tline2_cooldownActive or (not insideTLine2 and not tline2_clearance_met))
 
 // ─────────────────────────────── Session Filter ───────────────────────────────
 config_parts = str.split(sessionConfig, ":")
@@ -656,13 +710,13 @@ if showDebug and barstate.islast
     table.cell(debugTable, 1, 7, bbChopActive ? "CHOP" : "OK", text_color=bbChopActive ? color.red : color.lime, text_size=size.small)
     
     table.cell(debugTable, 0, 8, "T-Line 1", text_color=color.white, text_size=size.small)
-    tline1_status = insideTLine1 ? "INSIDE" : tline1_cooldownActive ? "COOLDOWN" : "OK"
-    tline1_col = insideTLine1 ? color.red : tline1_cooldownActive ? color.yellow : color.lime
+    tline1_status = insideTLine1 ? "INSIDE" : tline1_cooldownActive ? "COOLDOWN" : not tline1_clearance_met ? "TOO CLOSE" : "OK"
+    tline1_col = insideTLine1 ? color.red : tline1_cooldownActive ? color.yellow : not tline1_clearance_met ? color.orange : color.lime
     table.cell(debugTable, 1, 8, tline1_status, text_color=tline1_col, text_size=size.small)
     
     table.cell(debugTable, 0, 9, "T-Line 2", text_color=color.white, text_size=size.small)
-    tline2_status = insideTLine2 ? "INSIDE" : tline2_cooldownActive ? "COOLDOWN" : "OK"
-    tline2_col = insideTLine2 ? color.red : tline2_cooldownActive ? color.yellow : color.lime
+    tline2_status = insideTLine2 ? "INSIDE" : tline2_cooldownActive ? "COOLDOWN" : not tline2_clearance_met ? "TOO CLOSE" : "OK"
+    tline2_col = insideTLine2 ? color.red : tline2_cooldownActive ? color.yellow : not tline2_clearance_met ? color.orange : color.lime
     table.cell(debugTable, 1, 9, tline2_status, text_color=tline2_col, text_size=size.small)
     
     table.cell(debugTable, 0, 10, "In Session", text_color=color.white, text_size=size.small)
