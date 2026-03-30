@@ -3,7 +3,7 @@
 A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.1.3
+- **Current**: v1.1.4
 
 ## Strategy Overview
 
@@ -28,7 +28,8 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 
 ### Filters
 - **BB Chop Filter**: No trades when price inside BB bands (3min MTF)
-- **T-Line Channel**: No trades when price inside 20 EMA ± 34 points, 15s cooldown after exit
+- **T-Line 1**: No trades when price inside 20 EMA ± 34 points, 15s cooldown
+- **T-Line 2**: No trades when price inside 50 EMA ± 80 points, 15s cooldown
 - **Session Filter**: Trade only during configured sessions
 
 ## Core Components
@@ -40,7 +41,8 @@ A multi-confluence futures trading strategy for YM, NQ, ES, CL, HG.
 | 20 HMA | Close |
 | RSI Ribbon | 5/13 RSI diff |
 | HMA Exit Ribbon | 6 HMA / 21 HMA |
-| T-Line Channel | 20 EMA ± 34 pts |
+| T-Line 1 | 20 EMA ± 34 pts |
+| T-Line 2 | 50 EMA ± 80 pts |
 
 ## Session Windows
 
@@ -90,49 +92,38 @@ Toggle `Trade 2 Contracts` to enable/disable second contract.
 
 ## Changelog
 
+### v1.1.4
+- **Comprehensive tooltips** on all inputs explaining purpose and default values
+- **Section header tooltips** explaining what each group of settings does
+- **Full style customization** for all chart elements:
+  - Colors (bullish/bearish) for all MAs and channels
+  - Line widths (1-5) for all plotted lines
+  - Line styles (Solid/Dashed/Dotted) where applicable
+  - Fill colors for ribbons and channels
+- **Second T-Line Channel** (50 EMA / 80pt width) for broader consolidation filtering
+- T-Line 1 (20/34) now uses yellow color scheme
+- T-Line 2 (50/80) uses orange color scheme for differentiation
+- Entry signal arrow colors now customizable
+- DStoch marker colors now customizable
+
 ### v1.1.3
-- **T-Line Channel Chop Filter** — No entries when price inside 20 EMA ± 34 points
-- Configurable: MA period, type (EMA/SMA/VWMA/WMA), source, channel width
-- 15-second cooldown after price exits channel before allowing new entries
+- T-Line Channel Chop Filter — No entries when price inside 20 EMA ± 34 points
+- 15-second cooldown after price exits channel
 - Yellow channel fill visualization
-- Debug table shows T-Line status: INSIDE / COOLDOWN / OK
-- Existing trades still use HMA cross exit (not affected by T-Line)
+- Debug table shows T-Line status
 
 ### v1.1.2
-- **HMA Cross Exit**: Exit signals now based on 6/21 HMA crossover (faster exit on reversals)
-- Long exit: Fast HMA crosses below Slow HMA
-- Short exit: Fast HMA crosses above Slow HMA
-- HMA Exit Ribbon visual with fill between fast/slow HMA
-- Debug table shows HMA Exit status
+- HMA Cross Exit: Exit signals based on 6/21 HMA crossover
+- HMA Exit Ribbon visual with fill
 
 ### v1.1.1
-- **Session filter now uses single string input**
-- Format: `TIME1,TIME2,TIME3:DAYS`
-- Example: `1801-1940,0700-0815,0930-1100,1545-1600:23456`
-- Days: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+- Session filter changed to single string input
 - Supports up to 6 time windows
 
 ### v1.1.0 — MAJOR REWRITE
-- **Simplified entry logic**: RSI + 9 EMA + 20 HMA + 20 EMA confluence
-- **New exit condition**: Close vs 20 EMA HL2
-- **Removed**: T-Line chop, T-Line cooldown, EMA squeeze, HA trend detection, continuation/flip logic
-- Cleaner, more direct entry/exit rules
+- Simplified entry logic: RSI + 9 EMA + 20 HMA + 20 EMA confluence
+- New exit condition: Close vs 20 EMA HL2
+- Removed legacy complexity
 
-### v1.0.12
-- Multi-contract scaled exits — Trade 1 or 2 contracts with independent exit rules
-- Full BE and trailing stop management per contract
-
-### v1.0.11
-- Added EMA River Squeeze Filter
-
-### v1.0.10
-- Chop zone exit only triggers if position is in a loss
-
-### v1.0.9
-- Added Double Stochastic signals and RSI Momentum Ribbon
-
-### v1.0.8
-- Fixed strategy settings for futures execution
-
-### v1.0.0 - v1.0.7
+### v1.0.x
 - Initial development and debugging
