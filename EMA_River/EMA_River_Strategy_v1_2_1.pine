@@ -1,10 +1,10 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.2.0
+// EMA River Strategy v1.2.1
 // GJBI-style: Background + HMA Ribbon confluence entry
 
 //@version=6
-strategy("EMA River Strategy v1.2.0", 
+strategy("EMA River Strategy v1.2.1", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -19,17 +19,15 @@ strategy("EMA River Strategy v1.2.0",
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ INPUTS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────── GJBIEMABG (Background) ──────────────────────
-grpBG = "═══ GJBIEMABG Background ═══"
+// ─────────────────────────────── Background ──────────────────────────────────
+grpBG = "═══ Background ═══"
 
-bg_ema_len = input.int(50, "Trend EMA Length", minval=1, group=grpBG, 
-     tooltip="BACKGROUND TREND INDICATOR\nPaints background based on price vs this EMA.\n\nBullish (green): Price ABOVE this EMA\nBearish (red): Price BELOW this EMA\n\nDefault: 50")
 bg_bull_color = input.color(color.new(#00ffbb, 85), "Bullish Background", group=grpBG, 
-     tooltip="Background color when price > EMA. Default: Cyan-green 85% transparent")
+     tooltip="BACKGROUND TREND INDICATOR\nPaints based on price vs 20 EMA River boundaries.\n\nGreen: Price closes ABOVE 20 EMA High\nRed: Price closes BELOW 20 EMA Low\nNeutral: Price inside river\n\nDefault: Cyan-green 85% transparent")
 bg_bear_color = input.color(color.new(#ff0055, 85), "Bearish Background", group=grpBG, 
-     tooltip="Background color when price < EMA. Default: Pink-red 85% transparent")
+     tooltip="Background when price < 20 EMA Low. Default: Pink-red 85% transparent")
 bg_neutral_color = input.color(color.new(color.gray, 95), "Neutral Background", group=grpBG, 
-     tooltip="Background when indicators disagree. Default: Gray 95% transparent")
+     tooltip="Background when price is INSIDE the river (between High and Low), or when HMA ribbon disagrees. Default: Gray 95% transparent")
 
 // ─────────────────────────────── 20 EMA River ────────────────────────────────
 grpRiver = "═══ 20 EMA River ═══"
@@ -149,11 +147,6 @@ f_hma(_src, _len) =>
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CALCULATIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────── GJBIEMABG: 50 EMA Background ────────────────
-bg_ema = ta.ema(close, bg_ema_len)
-bg_bullish = close > bg_ema
-bg_bearish = close < bg_ema
-
 // ─────────────────────────────── 20 EMA River ────────────────────────────────
 river_high = ta.ema(high, river_len)
 river_hl2 = ta.ema(hl2, river_len)
@@ -163,6 +156,13 @@ river_low = ta.ema(low, river_len)
 above_river = close > river_high
 below_river = close < river_low
 in_river = close >= river_low and close <= river_high
+
+// ─────────────────────────────── Background: River-Based ─────────────────────
+// Green: price closes ABOVE 20 EMA High
+// Red: price closes BELOW 20 EMA Low  
+// Neutral: price is INSIDE the river
+bg_bullish = above_river
+bg_bearish = below_river
 
 // ─────────────────────────────── GJBIHMACrossRibbon: 6/21 HMA ────────────────
 hma_fast = f_hma(close, hma_fast_len)
@@ -315,12 +315,9 @@ if strategy.position_size == 0
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────── Combined Background ─────────────────────────
-// Only paint when both GJBIEMABG and HMA ribbon agree
+// Only paint when both River position AND HMA ribbon agree
 combined_bg = both_bullish ? bg_bull_color : both_bearish ? bg_bear_color : bg_neutral_color
-bgcolor(combined_bg, title="GJBI Combined Background")
-
-// ─────────────────────────────── 50 EMA (Background reference) ───────────────
-plot(bg_ema, "50 EMA", color=close > bg_ema ? color.lime : color.red, linewidth=2)
+bgcolor(combined_bg, title="Combined Background")
 
 // ─────────────────────────────── 20 EMA River ────────────────────────────────
 river_high_col = close > river_high ? river_bull_color : river_bear_color
@@ -359,8 +356,10 @@ if showDebug and barstate.islast
     table.cell(debugTable, 0, 0, "Condition", text_color=color.white, text_size=size.small)
     table.cell(debugTable, 1, 0, "Status", text_color=color.white, text_size=size.small)
     
-    table.cell(debugTable, 0, 1, "50 EMA (BG)", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 1, bg_bullish ? "BULL" : "BEAR", text_color=bg_bullish ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 1, "River BG", text_color=color.white, text_size=size.small)
+    river_bg_status = above_river ? "ABOVE" : below_river ? "BELOW" : "IN RIVER"
+    river_bg_col = above_river ? color.lime : below_river ? color.red : color.yellow
+    table.cell(debugTable, 1, 1, river_bg_status, text_color=river_bg_col, text_size=size.small)
     
     table.cell(debugTable, 0, 2, "HMA Ribbon", text_color=color.white, text_size=size.small)
     table.cell(debugTable, 1, 2, hma_bullish ? "BULL" : "BEAR", text_color=hma_bullish ? color.lime : color.red, text_size=size.small)
