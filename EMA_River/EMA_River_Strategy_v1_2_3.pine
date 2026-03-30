@@ -1,10 +1,10 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.2.2
+// EMA River Strategy v1.2.3
 // GJBI-style: Background + HMA Ribbon confluence entry
 
 //@version=6
-strategy("EMA River Strategy v1.2.2", 
+strategy("EMA River Strategy v1.2.3", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -145,6 +145,20 @@ tline_cooldown = input.int(15, "Cooldown (seconds)", minval=0, group=grpTLine,
 tline_clearance = input.int(10, "Distance Clearance (points)", minval=0, group=grpTLine, 
      tooltip="Points away from edge before entry. Default: 10")
 
+// ─────────────────────────────── QuantLynk Automation ────────────────────────
+grpQL = "═══ QuantLynk Automation ═══"
+
+ql_enabled = input.bool(false, "Enable QuantLynk Alerts", group=grpQL, 
+     tooltip="QUANTLYNK INTEGRATION\nWhen enabled, strategy orders include QuantLynk webhook payloads.\n\nIMPORTANT: Set your TradingView alert message to:\n{{strategy.order.alert_message}}\n\nDefault: false (OFF)")
+ql_user_id = input.string("", "QuantLynk User ID", group=grpQL, 
+     tooltip="Your qv_user_id from QuantLynk dashboard.\nFind it in the webhook generator.")
+ql_alert_id = input.string("", "QuantLynk Alert ID", group=grpQL, 
+     tooltip="Your alert_id from QuantLynk dashboard.\nFind it in the webhook generator.")
+ql_use_bracket = input.bool(true, "Use OSO Bracket", group=grpQL, 
+     tooltip="Send OSO bracket order with TP/SL attached.\nIf false, sends market order only (manage exits separately).\n\nDefault: true")
+ql_quantity = input.int(1, "Quantity", minval=1, group=grpQL, 
+     tooltip="Number of contracts to trade. Default: 1")
+
 // ─────────────────────────────── Display ─────────────────────────────────────
 grpDisplay = "═══ Display ═══"
 
@@ -168,6 +182,19 @@ f_hma(_src, _len) =>
     _wma1 = ta.wma(_src, _halfLen)
     _wma2 = ta.wma(_src, _len)
     ta.wma(2 * _wma1 - _wma2, _sqrtLen)
+
+// ─────────────────────────────── QuantLynk Payload Builders ──────────────────
+// Market order (no bracket)
+f_ql_market(_action) =>
+    '{"qv_user_id":"' + ql_user_id + '","alert_id":"' + ql_alert_id + '","quantity":"' + str.tostring(ql_quantity) + '","order_type":"market","action":"' + _action + '","price":"{{close}}"}'
+
+// OSO bracket order (market entry + TP/SL)
+f_ql_oso(_action, _tp_price, _sl_price) =>
+    '{"qv_user_id":"' + ql_user_id + '","alert_id":"' + ql_alert_id + '","quantity":"' + str.tostring(ql_quantity) + '","order_type":"market","action":"' + _action + '","oso":"true","price":"{{close}}","target_price":"' + str.tostring(_tp_price, "#.##") + '","stop_price":"' + str.tostring(_sl_price, "#.##") + '"}'
+
+// Flatten order
+f_ql_flatten() =>
+    '{"qv_user_id":"' + ql_user_id + '","alert_id":"' + ql_alert_id + '","flatten":"true"}'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CALCULATIONS ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -309,13 +336,28 @@ shortSignal = canTrade and both_bearish and river_short_ok
 
 var float entry_price = na
 
+// ─────────────────────────────── QuantLynk TP/SL Calculation ─────────────────
+// Calculate TP/SL prices in points for OSO bracket
+tp_points = tp_ticks * syminfo.mintick
+sl_points = sl_ticks * syminfo.mintick
+
+long_tp_price = close + tp_points
+long_sl_price = close - sl_points
+short_tp_price = close - tp_points
+short_sl_price = close + sl_points
+
+// Build alert messages
+ql_long_msg = ql_enabled ? (ql_use_bracket ? f_ql_oso("buy", long_tp_price, long_sl_price) : f_ql_market("buy")) : ""
+ql_short_msg = ql_enabled ? (ql_use_bracket ? f_ql_oso("sell", short_tp_price, short_sl_price) : f_ql_market("sell")) : ""
+ql_flatten_msg = ql_enabled ? f_ql_flatten() : ""
+
 // ─────────────────────────────── ENTRIES ──────────────────────────────────────
 if longSignal
-    strategy.entry("Long", strategy.long)
+    strategy.entry("Long", strategy.long, alert_message=ql_long_msg)
     entry_price := close
 
 if shortSignal
-    strategy.entry("Short", strategy.short)
+    strategy.entry("Short", strategy.short, alert_message=ql_short_msg)
     entry_price := close
 
 // ─────────────────────────────── EXIT CONDITIONS ─────────────────────────────
@@ -333,26 +375,26 @@ if strategy.position_size > 0  // Long position
         strategy.exit("Long Exit", "Long", stop=prev_bar_long_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
     else if exit_mode == "HMA Cross"
         if hma_long_exit
-            strategy.close("Long", comment="HMA Cross Exit")
+            strategy.close("Long", comment="HMA Cross Exit", alert_message=ql_flatten_msg)
         if use_tp or use_sl
             strategy.exit("Long Exit", "Long", profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
     else  // Both
         strategy.exit("Long Exit", "Long", stop=prev_bar_long_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
         if hma_long_exit
-            strategy.close("Long", comment="HMA Cross Exit")
+            strategy.close("Long", comment="HMA Cross Exit", alert_message=ql_flatten_msg)
 
 if strategy.position_size < 0  // Short position
     if exit_mode == "Previous Bar HL"
         strategy.exit("Short Exit", "Short", stop=prev_bar_short_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
     else if exit_mode == "HMA Cross"
         if hma_short_exit
-            strategy.close("Short", comment="HMA Cross Exit")
+            strategy.close("Short", comment="HMA Cross Exit", alert_message=ql_flatten_msg)
         if use_tp or use_sl
             strategy.exit("Short Exit", "Short", profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
     else  // Both
         strategy.exit("Short Exit", "Short", stop=prev_bar_short_stop, profit=use_tp ? tp_ticks : na, loss=use_sl ? sl_ticks : na)
         if hma_short_exit
-            strategy.close("Short", comment="HMA Cross Exit")
+            strategy.close("Short", comment="HMA Cross Exit", alert_message=ql_flatten_msg)
 
 // ─────────────────────────────── RESET ON CLOSE ──────────────────────────────
 if strategy.position_size == 0
