@@ -1,10 +1,10 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yellow_Yoshi
-// EMA River Strategy v1.2.1
+// EMA River Strategy v1.2.2
 // GJBI-style: Background + HMA Ribbon confluence entry
 
 //@version=6
-strategy("EMA River Strategy v1.2.1", 
+strategy("EMA River Strategy v1.2.2", 
      overlay=true, 
      initial_capital=1000000,
      currency=currency.USD,
@@ -28,6 +28,32 @@ bg_bear_color = input.color(color.new(#ff0055, 85), "Bearish Background", group=
      tooltip="Background when price < 20 EMA Low. Default: Pink-red 85% transparent")
 bg_neutral_color = input.color(color.new(color.gray, 95), "Neutral Background", group=grpBG, 
      tooltip="Background when price is INSIDE the river (between High and Low), or when HMA ribbon disagrees. Default: Gray 95% transparent")
+
+// ─────────────────────────────── Bright Highlight ────────────────────────────
+grpBright = "═══ Bright Highlight ═══"
+
+use_bright = input.bool(true, "Enable Bright Highlight", group=grpBright, 
+     tooltip="BRIGHT HIGHLIGHT\nHighlights bars when price crosses/stays past 20 EMA HL2 with full EMA confluence.\n\nRequires: Price past HL2 + above/below 9, 21, 50 EMAs\n\nDefault: true")
+bright_bull_color = input.color(color.new(#00ff00, 60), "Bright Bullish", group=grpBright, 
+     tooltip="Highlight when bullish confluence met. Default: Bright green 60% transparent")
+bright_bear_color = input.color(color.new(#ff0000, 60), "Bright Bearish", group=grpBright, 
+     tooltip="Highlight when bearish confluence met. Default: Bright red 60% transparent")
+
+// ─────────────────────────────── Confluence EMAs ─────────────────────────────
+grpConfluence = "═══ Confluence EMAs ═══"
+
+ema9_len = input.int(9, "9 EMA Length", minval=1, group=grpConfluence, 
+     tooltip="CONFLUENCE EMAs\nThese EMAs must all align for bright highlight.\n\n9 EMA period. Default: 9")
+ema21_len = input.int(21, "21 EMA Length", minval=1, group=grpConfluence, 
+     tooltip="21 EMA period. Default: 21")
+ema50_len = input.int(50, "50 EMA Length", minval=1, group=grpConfluence, 
+     tooltip="50 EMA period. Default: 50")
+show_confluence_emas = input.bool(false, "Show Confluence EMAs", group=grpConfluence, 
+     tooltip="Display 9/21/50 EMAs on chart. Default: false (off)")
+confluence_bull_color = input.color(color.lime, "Confluence Bullish", group=grpConfluence, 
+     tooltip="EMA color when price above. Default: Lime")
+confluence_bear_color = input.color(color.red, "Confluence Bearish", group=grpConfluence, 
+     tooltip="EMA color when price below. Default: Red")
 
 // ─────────────────────────────── 20 EMA River ────────────────────────────────
 grpRiver = "═══ 20 EMA River ═══"
@@ -174,6 +200,28 @@ hma_bearish = hma_fast < hma_slow
 hma_bull_cross = ta.crossover(hma_fast, hma_slow)
 hma_bear_cross = ta.crossunder(hma_fast, hma_slow)
 
+// ─────────────────────────────── Confluence EMAs ─────────────────────────────
+ema9 = ta.ema(close, ema9_len)
+ema21 = ta.ema(close, ema21_len)
+ema50 = ta.ema(close, ema50_len)
+
+// Price position relative to confluence EMAs
+above_ema9 = close > ema9
+above_ema21 = close > ema21
+above_ema50 = close > ema50
+below_ema9 = close < ema9
+below_ema21 = close < ema21
+below_ema50 = close < ema50
+
+// ─────────────────────────────── Bright Highlight ────────────────────────────
+// Bright bullish: Price > 20 EMA HL2 AND above all confluence EMAs (9, 21, 50)
+// Bright bearish: Price < 20 EMA HL2 AND below all confluence EMAs (9, 21, 50)
+above_hl2 = close > river_hl2
+below_hl2 = close < river_hl2
+
+bright_bull_confluence = above_hl2 and above_ema9 and above_ema21 and above_ema50
+bright_bear_confluence = below_hl2 and below_ema9 and below_ema21 and below_ema50
+
 // ─────────────────────────────── Combined Background ─────────────────────────
 // Only paint when BOTH indicators agree
 both_bullish = bg_bullish and hma_bullish
@@ -319,6 +367,21 @@ if strategy.position_size == 0
 combined_bg = both_bullish ? bg_bull_color : both_bearish ? bg_bear_color : bg_neutral_color
 bgcolor(combined_bg, title="Combined Background")
 
+// ─────────────────────────────── Bright Highlight ────────────────────────────
+// Overlay highlight when price past HL2 with full EMA confluence
+bright_highlight = use_bright and bright_bull_confluence ? bright_bull_color : 
+                   use_bright and bright_bear_confluence ? bright_bear_color : na
+bgcolor(bright_highlight, title="Bright Highlight")
+
+// ─────────────────────────────── Confluence EMAs ─────────────────────────────
+ema9_col = close > ema9 ? confluence_bull_color : confluence_bear_color
+ema21_col = close > ema21 ? confluence_bull_color : confluence_bear_color
+ema50_col = close > ema50 ? confluence_bull_color : confluence_bear_color
+
+plot(show_confluence_emas ? ema9 : na, "9 EMA", color=ema9_col, linewidth=1)
+plot(show_confluence_emas ? ema21 : na, "21 EMA", color=ema21_col, linewidth=1)
+plot(show_confluence_emas ? ema50 : na, "50 EMA", color=ema50_col, linewidth=2)
+
 // ─────────────────────────────── 20 EMA River ────────────────────────────────
 river_high_col = close > river_high ? river_bull_color : river_bear_color
 river_hl2_col = close > river_hl2 ? river_bull_color : river_bear_color
@@ -350,7 +413,7 @@ plotshape(showSignals and shortSignal, "Short Entry",
 bgcolor(not inTradingSession and useSessionFilter ? color.new(color.red, 95) : na, title="No Trade Session")
 
 // ─────────────────────────────── Debug Table ─────────────────────────────────
-var table debugTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
+var table debugTable = table.new(position.top_right, 2, 14, bgcolor=color.new(color.black, 80), border_width=1)
 
 if showDebug and barstate.islast
     table.cell(debugTable, 0, 0, "Condition", text_color=color.white, text_size=size.small)
@@ -369,32 +432,35 @@ if showDebug and barstate.islast
     agree_col = both_bullish ? color.lime : both_bearish ? color.red : color.gray
     table.cell(debugTable, 1, 3, agree_status, text_color=agree_col, text_size=size.small)
     
-    table.cell(debugTable, 0, 4, "River Position", text_color=color.white, text_size=size.small)
-    river_status = above_river ? "ABOVE" : below_river ? "BELOW" : "IN RIVER"
-    river_col = above_river ? color.lime : below_river ? color.red : color.yellow
-    table.cell(debugTable, 1, 4, river_status, text_color=river_col, text_size=size.small)
+    table.cell(debugTable, 0, 4, "Bright HL", text_color=color.white, text_size=size.small)
+    bright_status = bright_bull_confluence ? "BULL" : bright_bear_confluence ? "BEAR" : "NO"
+    bright_col = bright_bull_confluence ? color.lime : bright_bear_confluence ? color.red : color.gray
+    table.cell(debugTable, 1, 4, bright_status, text_color=bright_col, text_size=size.small)
     
-    table.cell(debugTable, 0, 5, "River Entry", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 5, "Above HL2", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 5, above_hl2 ? "YES" : below_hl2 ? "NO" : "AT", text_color=above_hl2 ? color.lime : below_hl2 ? color.red : color.yellow, text_size=size.small)
+    
+    table.cell(debugTable, 0, 6, "River Entry", text_color=color.white, text_size=size.small)
     river_entry_ok = (both_bullish and river_long_ok) or (both_bearish and river_short_ok)
-    table.cell(debugTable, 1, 5, river_entry_ok ? "OK" : "NO", text_color=river_entry_ok ? color.lime : color.gray, text_size=size.small)
+    table.cell(debugTable, 1, 6, river_entry_ok ? "OK" : "NO", text_color=river_entry_ok ? color.lime : color.gray, text_size=size.small)
     
-    table.cell(debugTable, 0, 6, "In Session", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 6, inTradingSession ? "YES" : "NO", text_color=inTradingSession ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 7, "In Session", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 7, inTradingSession ? "YES" : "NO", text_color=inTradingSession ? color.lime : color.red, text_size=size.small)
     
-    table.cell(debugTable, 0, 7, "BB Chop", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 7, useBBChop ? (bbChopActive ? "CHOP" : "OK") : "OFF", text_color=useBBChop ? (bbChopActive ? color.red : color.lime) : color.gray, text_size=size.small)
+    table.cell(debugTable, 0, 8, "BB Chop", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 8, useBBChop ? (bbChopActive ? "CHOP" : "OK") : "OFF", text_color=useBBChop ? (bbChopActive ? color.red : color.lime) : color.gray, text_size=size.small)
     
-    table.cell(debugTable, 0, 8, "T-Line", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 8, useTLine ? (tlineChopActive ? "CHOP" : "OK") : "OFF", text_color=useTLine ? (tlineChopActive ? color.red : color.lime) : color.gray, text_size=size.small)
+    table.cell(debugTable, 0, 9, "T-Line", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 9, useTLine ? (tlineChopActive ? "CHOP" : "OK") : "OFF", text_color=useTLine ? (tlineChopActive ? color.red : color.lime) : color.gray, text_size=size.small)
     
-    table.cell(debugTable, 0, 9, "Can Trade", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 9, canTrade ? "YES" : "NO", text_color=canTrade ? color.lime : color.red, text_size=size.small)
+    table.cell(debugTable, 0, 10, "Can Trade", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 10, canTrade ? "YES" : "NO", text_color=canTrade ? color.lime : color.red, text_size=size.small)
     
-    table.cell(debugTable, 0, 10, "Position", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 10, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 0, 11, "Position", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 11, str.tostring(strategy.position_size), text_color=color.white, text_size=size.small)
     
-    table.cell(debugTable, 0, 11, "Signal", text_color=color.white, text_size=size.small)
-    table.cell(debugTable, 1, 11, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
+    table.cell(debugTable, 0, 12, "Signal", text_color=color.white, text_size=size.small)
+    table.cell(debugTable, 1, 12, longSignal ? "LONG" : shortSignal ? "SHORT" : "NONE", text_color=longSignal ? color.lime : shortSignal ? color.red : color.gray, text_size=size.small)
 
 // ─────────────────────────────── Alerts ──────────────────────────────────────
 alertcondition(longSignal, "Long Entry", "GJBI River: Long Entry Signal")
