@@ -3,7 +3,7 @@
 A GJBI-style futures trading strategy for YM, NQ, ES, CL, HG.
 
 ## Version
-- **Current**: v1.2.1
+- **Current**: v1.2.3
 
 ## Strategy Overview
 
@@ -90,6 +90,21 @@ Single contract with configurable TP/SL:
 
 ## Changelog
 
+### v1.2.3
+- **QuantLynk Integration** for automated order routing
+  - Enable/disable toggle (default: OFF)
+  - User ID and Alert ID inputs
+  - OSO bracket orders (market + TP/SL attached)
+  - Flatten payload for HMA cross exits
+  - Quantity input for contract sizing
+
+### v1.2.2
+- **Bright Highlight** with EMA confluence
+  - Brighter background when price past 20 EMA HL2 + above/below 9/21/50 EMAs
+  - Sustained highlight (not just crossing bar)
+  - 9/21/50 EMA confluence inputs
+  - Optional confluence EMA plots
+
 ### v1.2.1
 - **River-based background**: Now uses 20 EMA High/Low instead of 50 EMA
   - Green: Price > 20 EMA High (+ HMA agrees)
@@ -108,3 +123,29 @@ Single contract with configurable TP/SL:
 
 ### v1.1.x
 - Previous iterative development (see git history)
+
+## QuantLynk Automation
+
+### Setup
+1. Enable "QuantLynk Alerts" in strategy settings
+2. Enter your `User ID` and `Alert ID` from QuantLynk dashboard
+3. Configure `Quantity` (contracts)
+4. Choose `Use OSO Bracket` (ON = broker-managed TP/SL)
+
+### TradingView Alert Setup
+Set alert message to:
+```
+{{strategy.order.alert_message}}
+```
+
+### Order Types
+
+| Scenario | Payload |
+|----------|---------|
+| **Entry (OSO ON)** | Market order + TP/SL bracket attached |
+| **Entry (OSO OFF)** | Market order only |
+| **HMA Cross Exit** | Flatten (closes all positions) |
+
+### TP/SL Calculation
+- TP/SL prices calculated from strategy's `Take Profit (ticks)` and `Stop Loss (ticks)` inputs
+- Sent as fixed prices in the OSO payload
