@@ -14,7 +14,7 @@ strategy("Signal Router [QuantLynk]", overlay=true,
 // ══════════════════════════════════════════════════════════════════════════════
 // VERSION
 // ══════════════════════════════════════════════════════════════════════════════
-var VERSION = "2.4.0"
+var VERSION = "2.4.1"
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SIGNAL TYPE & PRICE RELATION FUNCTIONS
@@ -519,95 +519,97 @@ if barstate.islast
 //                         GATE PANELS
 // ══════════════════════════════════════════════════════════════════════════════
 
-var table lg_panel = table.new(position.bottom_right, 4, 8, bgcolor=color.new(color.black, 80))
-var table sg_panel = table.new(position.bottom_left, 4, 8, bgcolor=color.new(color.black, 80))
+var table lg_panel = table.new(position.bottom_right, 4, 7, bgcolor=color.new(color.black, 80), border_width=1)
+var table sg_panel = table.new(position.bottom_left, 4, 7, bgcolor=color.new(color.black, 80), border_width=1)
 
 if barstate.islast and show_gate_panels
-    if long_gates_enabled > 0
-        table.cell(lg_panel, 0, 0, "▲ LONG", text_color=color.green, text_size=size.tiny)
-        table.cell(lg_panel, 1, 0, "Sig", text_color=color.gray, text_size=size.tiny)
-        table.cell(lg_panel, 2, 0, "Price", text_color=color.gray, text_size=size.tiny)
-        table.cell(lg_panel, 3, 0, "Gate", text_color=color.gray, text_size=size.tiny)
-        
-        int r = 1
-        if use_lg_1
-            table.cell(lg_panel, 0, r, lg_1_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(lg_panel, 1, r, lg_1_sig_ok ? "✓" : "✗", text_color=lg_1_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 2, r, lg_1_price_ok ? "✓" : "✗", text_color=lg_1_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 3, r, lg_1_ok ? "✓" : "✗", text_color=lg_1_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_lg_2
-            table.cell(lg_panel, 0, r, lg_2_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(lg_panel, 1, r, lg_2_sig_ok ? "✓" : "✗", text_color=lg_2_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 2, r, lg_2_price_ok ? "✓" : "✗", text_color=lg_2_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 3, r, lg_2_ok ? "✓" : "✗", text_color=lg_2_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_lg_3
-            table.cell(lg_panel, 0, r, lg_3_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(lg_panel, 1, r, lg_3_sig_ok ? "✓" : "✗", text_color=lg_3_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 2, r, lg_3_price_ok ? "✓" : "✗", text_color=lg_3_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 3, r, lg_3_ok ? "✓" : "✗", text_color=lg_3_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_lg_4
-            table.cell(lg_panel, 0, r, lg_4_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(lg_panel, 1, r, lg_4_sig_ok ? "✓" : "✗", text_color=lg_4_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 2, r, lg_4_price_ok ? "✓" : "✗", text_color=lg_4_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 3, r, lg_4_ok ? "✓" : "✗", text_color=lg_4_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_lg_5
-            table.cell(lg_panel, 0, r, lg_5_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(lg_panel, 1, r, lg_5_sig_ok ? "✓" : "✗", text_color=lg_5_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 2, r, lg_5_price_ok ? "✓" : "✗", text_color=lg_5_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 3, r, lg_5_ok ? "✓" : "✗", text_color=lg_5_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_lg_6
-            table.cell(lg_panel, 0, r, lg_6_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(lg_panel, 1, r, lg_6_sig_ok ? "✓" : "✗", text_color=lg_6_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 2, r, lg_6_price_ok ? "✓" : "✗", text_color=lg_6_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(lg_panel, 3, r, lg_6_ok ? "✓" : "✗", text_color=lg_6_ok ? color.green : color.red, text_size=size.tiny)
+    // Clear tables to prevent stale data
+    table.clear(lg_panel, 0, 0, 3, 6)
+    table.clear(sg_panel, 0, 0, 3, 6)
     
-    if short_gates_enabled > 0
-        table.cell(sg_panel, 0, 0, "▼ SHORT", text_color=color.red, text_size=size.tiny)
-        table.cell(sg_panel, 1, 0, "Sig", text_color=color.gray, text_size=size.tiny)
-        table.cell(sg_panel, 2, 0, "Price", text_color=color.gray, text_size=size.tiny)
-        table.cell(sg_panel, 3, 0, "Gate", text_color=color.gray, text_size=size.tiny)
-        
-        int r = 1
-        if use_sg_1
-            table.cell(sg_panel, 0, r, sg_1_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(sg_panel, 1, r, sg_1_sig_ok ? "✓" : "✗", text_color=sg_1_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 2, r, sg_1_price_ok ? "✓" : "✗", text_color=sg_1_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 3, r, sg_1_ok ? "✓" : "✗", text_color=sg_1_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_sg_2
-            table.cell(sg_panel, 0, r, sg_2_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(sg_panel, 1, r, sg_2_sig_ok ? "✓" : "✗", text_color=sg_2_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 2, r, sg_2_price_ok ? "✓" : "✗", text_color=sg_2_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 3, r, sg_2_ok ? "✓" : "✗", text_color=sg_2_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_sg_3
-            table.cell(sg_panel, 0, r, sg_3_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(sg_panel, 1, r, sg_3_sig_ok ? "✓" : "✗", text_color=sg_3_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 2, r, sg_3_price_ok ? "✓" : "✗", text_color=sg_3_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 3, r, sg_3_ok ? "✓" : "✗", text_color=sg_3_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_sg_4
-            table.cell(sg_panel, 0, r, sg_4_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(sg_panel, 1, r, sg_4_sig_ok ? "✓" : "✗", text_color=sg_4_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 2, r, sg_4_price_ok ? "✓" : "✗", text_color=sg_4_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 3, r, sg_4_ok ? "✓" : "✗", text_color=sg_4_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_sg_5
-            table.cell(sg_panel, 0, r, sg_5_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(sg_panel, 1, r, sg_5_sig_ok ? "✓" : "✗", text_color=sg_5_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 2, r, sg_5_price_ok ? "✓" : "✗", text_color=sg_5_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 3, r, sg_5_ok ? "✓" : "✗", text_color=sg_5_ok ? color.green : color.red, text_size=size.tiny)
-            r += 1
-        if use_sg_6
-            table.cell(sg_panel, 0, r, sg_6_name, text_color=color.gray, text_size=size.tiny)
-            table.cell(sg_panel, 1, r, sg_6_sig_ok ? "✓" : "✗", text_color=sg_6_sig_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 2, r, sg_6_price_ok ? "✓" : "✗", text_color=sg_6_price_ok ? color.green : color.red, text_size=size.tiny)
-            table.cell(sg_panel, 3, r, sg_6_ok ? "✓" : "✗", text_color=sg_6_ok ? color.green : color.red, text_size=size.tiny)
+    // LONG GATES PANEL - always draw header, then all 6 rows
+    table.cell(lg_panel, 0, 0, "▲ LONG", text_color=color.green, text_size=size.tiny)
+    table.cell(lg_panel, 1, 0, "Sig", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 2, 0, "Price", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 3, 0, all_long_gates_ok ? "✓" : "✗", text_color=all_long_gates_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 1
+    table.cell(lg_panel, 0, 1, use_lg_1 ? lg_1_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 1, 1, use_lg_1 ? (lg_1_sig_ok ? "✓" : "✗") : "", text_color=lg_1_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 2, 1, use_lg_1 ? (lg_1_price_ok ? "✓" : "✗") : "", text_color=lg_1_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 3, 1, use_lg_1 ? (lg_1_ok ? "✓" : "✗") : "", text_color=lg_1_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 2
+    table.cell(lg_panel, 0, 2, use_lg_2 ? lg_2_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 1, 2, use_lg_2 ? (lg_2_sig_ok ? "✓" : "✗") : "", text_color=lg_2_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 2, 2, use_lg_2 ? (lg_2_price_ok ? "✓" : "✗") : "", text_color=lg_2_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 3, 2, use_lg_2 ? (lg_2_ok ? "✓" : "✗") : "", text_color=lg_2_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 3
+    table.cell(lg_panel, 0, 3, use_lg_3 ? lg_3_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 1, 3, use_lg_3 ? (lg_3_sig_ok ? "✓" : "✗") : "", text_color=lg_3_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 2, 3, use_lg_3 ? (lg_3_price_ok ? "✓" : "✗") : "", text_color=lg_3_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 3, 3, use_lg_3 ? (lg_3_ok ? "✓" : "✗") : "", text_color=lg_3_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 4
+    table.cell(lg_panel, 0, 4, use_lg_4 ? lg_4_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 1, 4, use_lg_4 ? (lg_4_sig_ok ? "✓" : "✗") : "", text_color=lg_4_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 2, 4, use_lg_4 ? (lg_4_price_ok ? "✓" : "✗") : "", text_color=lg_4_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 3, 4, use_lg_4 ? (lg_4_ok ? "✓" : "✗") : "", text_color=lg_4_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 5
+    table.cell(lg_panel, 0, 5, use_lg_5 ? lg_5_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 1, 5, use_lg_5 ? (lg_5_sig_ok ? "✓" : "✗") : "", text_color=lg_5_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 2, 5, use_lg_5 ? (lg_5_price_ok ? "✓" : "✗") : "", text_color=lg_5_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 3, 5, use_lg_5 ? (lg_5_ok ? "✓" : "✗") : "", text_color=lg_5_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 6
+    table.cell(lg_panel, 0, 6, use_lg_6 ? lg_6_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(lg_panel, 1, 6, use_lg_6 ? (lg_6_sig_ok ? "✓" : "✗") : "", text_color=lg_6_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 2, 6, use_lg_6 ? (lg_6_price_ok ? "✓" : "✗") : "", text_color=lg_6_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(lg_panel, 3, 6, use_lg_6 ? (lg_6_ok ? "✓" : "✗") : "", text_color=lg_6_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // SHORT GATES PANEL - always draw header, then all 6 rows
+    table.cell(sg_panel, 0, 0, "▼ SHORT", text_color=color.red, text_size=size.tiny)
+    table.cell(sg_panel, 1, 0, "Sig", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 2, 0, "Price", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 3, 0, all_short_gates_ok ? "✓" : "✗", text_color=all_short_gates_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 1
+    table.cell(sg_panel, 0, 1, use_sg_1 ? sg_1_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 1, 1, use_sg_1 ? (sg_1_sig_ok ? "✓" : "✗") : "", text_color=sg_1_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 2, 1, use_sg_1 ? (sg_1_price_ok ? "✓" : "✗") : "", text_color=sg_1_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 3, 1, use_sg_1 ? (sg_1_ok ? "✓" : "✗") : "", text_color=sg_1_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 2
+    table.cell(sg_panel, 0, 2, use_sg_2 ? sg_2_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 1, 2, use_sg_2 ? (sg_2_sig_ok ? "✓" : "✗") : "", text_color=sg_2_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 2, 2, use_sg_2 ? (sg_2_price_ok ? "✓" : "✗") : "", text_color=sg_2_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 3, 2, use_sg_2 ? (sg_2_ok ? "✓" : "✗") : "", text_color=sg_2_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 3
+    table.cell(sg_panel, 0, 3, use_sg_3 ? sg_3_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 1, 3, use_sg_3 ? (sg_3_sig_ok ? "✓" : "✗") : "", text_color=sg_3_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 2, 3, use_sg_3 ? (sg_3_price_ok ? "✓" : "✗") : "", text_color=sg_3_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 3, 3, use_sg_3 ? (sg_3_ok ? "✓" : "✗") : "", text_color=sg_3_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 4
+    table.cell(sg_panel, 0, 4, use_sg_4 ? sg_4_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 1, 4, use_sg_4 ? (sg_4_sig_ok ? "✓" : "✗") : "", text_color=sg_4_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 2, 4, use_sg_4 ? (sg_4_price_ok ? "✓" : "✗") : "", text_color=sg_4_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 3, 4, use_sg_4 ? (sg_4_ok ? "✓" : "✗") : "", text_color=sg_4_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 5
+    table.cell(sg_panel, 0, 5, use_sg_5 ? sg_5_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 1, 5, use_sg_5 ? (sg_5_sig_ok ? "✓" : "✗") : "", text_color=sg_5_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 2, 5, use_sg_5 ? (sg_5_price_ok ? "✓" : "✗") : "", text_color=sg_5_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 3, 5, use_sg_5 ? (sg_5_ok ? "✓" : "✗") : "", text_color=sg_5_ok ? color.green : color.red, text_size=size.tiny)
+    
+    // Row 6
+    table.cell(sg_panel, 0, 6, use_sg_6 ? sg_6_name : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(sg_panel, 1, 6, use_sg_6 ? (sg_6_sig_ok ? "✓" : "✗") : "", text_color=sg_6_sig_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 2, 6, use_sg_6 ? (sg_6_price_ok ? "✓" : "✗") : "", text_color=sg_6_price_ok ? color.green : color.red, text_size=size.tiny)
+    table.cell(sg_panel, 3, 6, use_sg_6 ? (sg_6_ok ? "✓" : "✗") : "", text_color=sg_6_ok ? color.green : color.red, text_size=size.tiny)
 
 // ══════════════════════════════════════════════════════════════════════════════
 //                         DATA WINDOW
