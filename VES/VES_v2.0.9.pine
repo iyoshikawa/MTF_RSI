@@ -1,7 +1,16 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.8]
+// Volume Exhaustion Strategy [VES v2.0.9]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts, works on any chart type
+// ============================================================================
+// v2.0.9 CHANGES:
+//   - NEW: Signal Router — hidden meta-signals that bundle all longs and all
+//     shorts into single alert conditions. Useful for webhook routing where
+//     you don't care which confluence grade triggered — just "go long" or
+//     "go short". Does not appear on chart. Access via alert conditions:
+//       • "🟢 ROUTER: ANY LONG" — fires on any vol_bottom signal
+//       • "🔴 ROUTER: ANY SHORT" — fires on any vol_peak signal
+//     Alert message includes JSON payload with entry details for ATS/QuantLynk.
 // ============================================================================
 // v2.0.8 CHANGES:
 //   - FIX: Debug Mode now truly bypasses ALL gates including session.
@@ -104,7 +113,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.8"
+VER = "2.0.9"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -1276,3 +1285,62 @@ alertcondition(vol_peak and is_long,    title="🔄 FLATTEN→SHORT", message="F
 alertcondition(bb_squeeze_release, title="🔓 BB SQUEEZE RELEASED", message="Bollinger Bands expanding out of squeeze — watch for first signal.")
 alertcondition(is_choppy and not is_choppy[1], title="⛔ CHOP DETECTED", message="Wave length chop detector activated — signals blocked.")
 alertcondition(not is_choppy and is_choppy[1], title="✅ CHOP CLEARED", message="Wave length chop detector cleared — signals re-enabled.")
+
+// ============================================================================
+// SIGNAL ROUTER — Hidden meta-signals for webhook bundling (v2.0.9)
+// ============================================================================
+// These aggregate ALL long entries into one alert and ALL short entries into
+// one alert. Use for ATS/QuantLynk routing where you don't need to distinguish
+// between confluence grades — just "go long" or "go short".
+//
+// Alert setup:
+//   1. Create alert on this strategy
+//   2. Condition: "Any alert() function call"
+//   3. Message: Leave default (alert provides the payload)
+//   4. Webhook URL: Your ATS/QuantLynk endpoint
+//
+// The router uses alert() with dynamic JSON payloads including confluence
+// count, wave length, and entry price.
+// ============================================================================
+
+grp_router = "📡 Signal Router"
+router_enabled = input.bool(false, "Enable Signal Router Alerts", group=grp_router,
+     tooltip="When ON, fires alert() calls for ANY long or ANY short signal with JSON payloads.\nUse with 'Any alert() function call' condition.\nKeeps existing VEB/VEP labels and strategy entries unchanged.\n(Default: OFF)")
+router_webhook_url = input.string("", "Router Webhook URL (optional)", group=grp_router,
+     tooltip="If provided, included in alert payload for multi-endpoint routing.\n(Default: empty)")
+
+// Router signals — fire on ANY qualifying entry (same as vol_bottom/vol_peak)
+router_long  = vol_bottom and daily_ok
+router_short = vol_peak and daily_ok
+
+// Build JSON payloads
+router_payload_long = '{' +
+     '"action":"buy",' +
+     '"symbol":"' + syminfo.ticker + '",' +
+     '"price":' + str.tostring(close) + ',' +
+     '"confluence":' + str.tostring(conf_total_long) + ',' +
+     '"conf_max":' + str.tostring(conf_max) + ',' +
+     '"wave_len":' + str.tostring(prev_wave_len) + ',' +
+     '"tp":' + str.tostring(close + tp_pts) + ',' +
+     '"sl":' + str.tostring(close - sl_pts) + ',' +
+     '"trigger":"VES_ROUTER_LONG"' +
+     '}'
+
+router_payload_short = '{' +
+     '"action":"sell",' +
+     '"symbol":"' + syminfo.ticker + '",' +
+     '"price":' + str.tostring(close) + ',' +
+     '"confluence":' + str.tostring(conf_total_short) + ',' +
+     '"conf_max":' + str.tostring(conf_max) + ',' +
+     '"wave_len":' + str.tostring(prev_wave_len) + ',' +
+     '"tp":' + str.tostring(close - tp_pts) + ',' +
+     '"sl":' + str.tostring(close + sl_pts) + ',' +
+     '"trigger":"VES_ROUTER_SHORT"' +
+     '}'
+
+// Fire router alerts (hidden from chart — no labels, just alert())
+if router_enabled and router_long
+    alert(router_payload_long, alert.freq_once_per_bar_close)
+
+if router_enabled and router_short
+    alert(router_payload_short, alert.freq_once_per_bar_close)

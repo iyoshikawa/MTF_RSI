@@ -1,5 +1,5 @@
 # Volume Exhaustion Strategy (VES) — User Guide
-**Version:** 2.0.8
+**Version:** 2.0.9
 **Chart Type:** Renko Traditional (any base timeframe, down to 1s)  
 **Instruments:** YM, MYM, NQ, MNQ, ES, MES, CL, MCL, HG  
 
@@ -8,6 +8,33 @@
 ## What This Strategy Does
 
 VES is a **mean-reversion strategy** that detects when buying or selling pressure has exhausted at a swing extreme, then enters the reversal. It fires **VOL BOTTOM** (long) signals at swing lows and **VOL PEAK** (short) signals at swing highs. It manages two independent positions with take-profit, trailing stop, and breakeven stop exits.
+
+---
+
+## What Changed in v2.0.9
+
+- **NEW: Signal Router** — Hidden meta-signals that bundle ALL longs and ALL shorts into single alert conditions for webhook routing. Does not appear on chart — purely for automation.
+
+**Setup:**
+1. Enable `Signal Router Alerts` in the **📡 Signal Router** input group
+2. Create TradingView alert → Condition: "Any alert() function call"
+3. Set webhook URL to your ATS/QuantLynk endpoint
+4. Message: Leave default (alert provides JSON payload)
+
+**JSON Payload Example:**
+```json
+{
+  "action": "buy",
+  "symbol": "YM1!",
+  "price": 45800,
+  "confluence": 5,
+  "conf_max": 7,
+  "wave_len": 4,
+  "tp": 45840,
+  "sl": 45760,
+  "trigger": "VES_ROUTER_LONG"
+}
+```
 
 ---
 
