@@ -14,7 +14,7 @@ strategy("Signal Router [QuantLynk]", overlay=true,
 // ══════════════════════════════════════════════════════════════════════════════
 // VERSION
 // ══════════════════════════════════════════════════════════════════════════════
-var VERSION = "2.3.0"
+var VERSION = "2.4.0"
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SIGNAL TYPE & PRICE RELATION FUNCTIONS
@@ -270,16 +270,7 @@ session_ok = not use_session_filter or in_asian or in_london or in_ny_am or in_n
 // ══════════════════════════════════════════════════════════════════════════════
 //                         TRADE MANAGEMENT
 // ══════════════════════════════════════════════════════════════════════════════
-grp_trade = "◆ TRADE MANAGEMENT"
-
-sl_ticks = input.int(40, "Stop Loss (ticks)", minval=1, group=grp_trade,
-     tooltip="Initial stop loss distance in ticks. Sent as trailing stop to broker.")
-
-grp_tick = "◆ TICK SIZE"
-use_manual_tick = input.bool(false, "Manual Tick", group=grp_tick)
-manual_tick     = input.float(1.0, "Size", group=grp_tick,
-     tooltip="YM=1.0, ES/NQ=0.25, CL=0.01")
-tick_size = use_manual_tick ? manual_tick : syminfo.mintick
+// NOTE: TP/SL handled by QuantLynk ATM Brackets - no need to send stop_price
 
 // ══════════════════════════════════════════════════════════════════════════════
 //                         QUANTLYNK
@@ -298,7 +289,6 @@ grp_debug = "◆ DEBUG"
 show_signals = input.bool(true, "Show Signals", group=grp_debug)
 show_session = input.bool(true, "Highlight Sessions", group=grp_debug)
 show_news_block = input.bool(true, "Highlight News", group=grp_debug)
-show_levels  = input.bool(true, "Show SL Level", group=grp_debug)
 show_gate_panels = input.bool(true, "Show Gate Panels", group=grp_debug)
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -451,42 +441,30 @@ bool can_enter_short = short_trigger and session_ok and news_ok and all_universa
 
 var float entry_price = na
 var int   trade_dir   = 0
-var float stop_price  = na
 
 if can_enter_long or can_enter_short
     entry_price := close
     trade_dir   := can_enter_long ? 1 : -1
-    if trade_dir == 1
-        stop_price := entry_price - (sl_ticks * tick_size)
-    else
-        stop_price := entry_price + (sl_ticks * tick_size)
 
 // Reset on flat
 if strategy.position_size == 0
     entry_price := na
     trade_dir   := 0
-    stop_price  := na
 
 // ══════════════════════════════════════════════════════════════════════════════
 //                         STRATEGY EXECUTION
 // ══════════════════════════════════════════════════════════════════════════════
-
-// Calculate stop price for the alert message
-float long_stop = close - (sl_ticks * tick_size)
-float short_stop = close + (sl_ticks * tick_size)
+// QuantLynk ATM Brackets handle TP/SL - we just send market orders
 
 if can_enter_long
-    // Entry with trailing stop - matches your JSON format
-    // TradingView placeholders will resolve: {{strategy.order.contracts}}, {{strategy.order.action}}, {{close}}
-    // We manually provide stop_price since we calculate it
     string msg = ql_enabled ? 
-         '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "{{strategy.order.contracts}}", "order_type": "trailingstop", "action": "{{strategy.order.action}}", "price": "{{close}}", "stop_price": "' + str.tostring(long_stop, "#.##") + '"}' 
+         '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "{{strategy.order.contracts}}", "order_type": "market", "action": "{{strategy.order.action}}", "price": "{{close}}"}' 
          : "LONG"
     strategy.entry("Long", strategy.long, qty=1, alert_message=msg)
 
 if can_enter_short
     string msg = ql_enabled ? 
-         '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "{{strategy.order.contracts}}", "order_type": "trailingstop", "action": "{{strategy.order.action}}", "price": "{{close}}", "stop_price": "' + str.tostring(short_stop, "#.##") + '"}' 
+         '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "{{strategy.order.contracts}}", "order_type": "market", "action": "{{strategy.order.action}}", "price": "{{close}}"}' 
          : "SHORT"
     strategy.entry("Short", strategy.short, qty=1, alert_message=msg)
 
@@ -499,8 +477,6 @@ bgcolor(any_news_active and show_news_block ? color.new(color.red, 85) : na)
 
 plotshape(show_signals and can_enter_long, "Long", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(show_signals and can_enter_short, "Short", shape.triangledown, location.abovebar, color.red, size=size.small)
-
-plot(show_levels and not na(stop_price) ? stop_price : na, "Stop", color.new(color.red, 50), style=plot.style_linebr, linewidth=2)
 
 // ══════════════════════════════════════════════════════════════════════════════
 //                         DASHBOARD
