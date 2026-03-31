@@ -1,0 +1,646 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © iyoshikawa
+// Signal Router v2.3.0 - Single Contract + Trailing Stop Entry for QuantLynk/Tradovate
+
+//@version=6
+strategy("Signal Router [QuantLynk]", overlay=true, 
+     initial_capital=1000000, 
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1,
+     pyramiding=0,
+     calc_on_every_tick=true,
+     process_orders_on_close=false)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VERSION
+// ══════════════════════════════════════════════════════════════════════════════
+var VERSION = "2.3.0"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SIGNAL TYPE & PRICE RELATION FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+eval_signal_type(float src, string sig_type) =>
+    bool result = false
+    if sig_type == "any"
+        result := src > 0
+    else if sig_type == "cross"
+        result := ta.cross(src, 0)
+    else if sig_type == "cross_up"
+        result := ta.crossover(src, 0)
+    else if sig_type == "cross_down"
+        result := ta.crossunder(src, 0)
+    else if sig_type == "gt_zero"
+        result := src > 0
+    else if sig_type == "lt_zero"
+        result := src < 0
+    else if sig_type == "rising"
+        result := src > nz(src[1])
+    else if sig_type == "falling"
+        result := src < nz(src[1])
+    else if sig_type == "ignore"
+        result := true
+    result
+
+update_price_state(bool current_state, float src, string price_rel) =>
+    bool new_state = current_state
+    if price_rel == "price_cross_up"
+        if close > src
+            new_state := true
+        else if close < src
+            new_state := false
+    else if price_rel == "price_cross_down"
+        if close < src
+            new_state := true
+        else if close > src
+            new_state := false
+    new_state
+
+get_price_result(float src, string price_rel, bool state) =>
+    bool result = true
+    if price_rel == "ignore"
+        result := true
+    else if price_rel == "price_above"
+        result := close > src
+    else if price_rel == "price_below"
+        result := close < src
+    else if price_rel == "price_cross_up" or price_rel == "price_cross_down"
+        result := state
+    result
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                            LONG SIGNAL
+// ══════════════════════════════════════════════════════════════════════════════
+grp_long_sig = "▲ LONG SIGNAL"
+long_signal_src = input.source(close, "Long Entry Signal", group=grp_long_sig)
+long_sig_type = input.string("any", "Signal Type", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_long_sig)
+long_require_change = input.bool(true, "Require Signal Change", group=grp_long_sig)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                            LONG GATES
+// ══════════════════════════════════════════════════════════════════════════════
+grp_lg = "▲ LONG GATES"
+
+use_lg_1 = input.bool(false, "L1 Enable", group=grp_lg, inline="lg1a")
+lg_1_src = input.source(close, "Source", group=grp_lg, inline="lg1a")
+lg_1_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_lg, inline="lg1b")
+lg_1_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_lg, inline="lg1b")
+lg_1_name = input.string("L1", "Label", group=grp_lg, inline="lg1c")
+
+use_lg_2 = input.bool(false, "L2 Enable", group=grp_lg, inline="lg2a")
+lg_2_src = input.source(close, "Source", group=grp_lg, inline="lg2a")
+lg_2_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_lg, inline="lg2b")
+lg_2_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_lg, inline="lg2b")
+lg_2_name = input.string("L2", "Label", group=grp_lg, inline="lg2c")
+
+use_lg_3 = input.bool(false, "L3 Enable", group=grp_lg, inline="lg3a")
+lg_3_src = input.source(close, "Source", group=grp_lg, inline="lg3a")
+lg_3_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_lg, inline="lg3b")
+lg_3_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_lg, inline="lg3b")
+lg_3_name = input.string("L3", "Label", group=grp_lg, inline="lg3c")
+
+use_lg_4 = input.bool(false, "L4 Enable", group=grp_lg, inline="lg4a")
+lg_4_src = input.source(close, "Source", group=grp_lg, inline="lg4a")
+lg_4_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_lg, inline="lg4b")
+lg_4_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_lg, inline="lg4b")
+lg_4_name = input.string("L4", "Label", group=grp_lg, inline="lg4c")
+
+use_lg_5 = input.bool(false, "L5 Enable", group=grp_lg, inline="lg5a")
+lg_5_src = input.source(close, "Source", group=grp_lg, inline="lg5a")
+lg_5_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_lg, inline="lg5b")
+lg_5_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_lg, inline="lg5b")
+lg_5_name = input.string("L5", "Label", group=grp_lg, inline="lg5c")
+
+use_lg_6 = input.bool(false, "L6 Enable", group=grp_lg, inline="lg6a")
+lg_6_src = input.source(close, "Source", group=grp_lg, inline="lg6a")
+lg_6_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_lg, inline="lg6b")
+lg_6_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_lg, inline="lg6b")
+lg_6_name = input.string("L6", "Label", group=grp_lg, inline="lg6c")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                            SHORT SIGNAL
+// ══════════════════════════════════════════════════════════════════════════════
+grp_short_sig = "▼ SHORT SIGNAL"
+short_signal_src = input.source(close, "Short Entry Signal", group=grp_short_sig)
+short_sig_type = input.string("any", "Signal Type", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_short_sig)
+short_require_change = input.bool(true, "Require Signal Change", group=grp_short_sig)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                            SHORT GATES
+// ══════════════════════════════════════════════════════════════════════════════
+grp_sg = "▼ SHORT GATES"
+
+use_sg_1 = input.bool(false, "S1 Enable", group=grp_sg, inline="sg1a")
+sg_1_src = input.source(close, "Source", group=grp_sg, inline="sg1a")
+sg_1_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_sg, inline="sg1b")
+sg_1_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_sg, inline="sg1b")
+sg_1_name = input.string("S1", "Label", group=grp_sg, inline="sg1c")
+
+use_sg_2 = input.bool(false, "S2 Enable", group=grp_sg, inline="sg2a")
+sg_2_src = input.source(close, "Source", group=grp_sg, inline="sg2a")
+sg_2_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_sg, inline="sg2b")
+sg_2_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_sg, inline="sg2b")
+sg_2_name = input.string("S2", "Label", group=grp_sg, inline="sg2c")
+
+use_sg_3 = input.bool(false, "S3 Enable", group=grp_sg, inline="sg3a")
+sg_3_src = input.source(close, "Source", group=grp_sg, inline="sg3a")
+sg_3_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_sg, inline="sg3b")
+sg_3_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_sg, inline="sg3b")
+sg_3_name = input.string("S3", "Label", group=grp_sg, inline="sg3c")
+
+use_sg_4 = input.bool(false, "S4 Enable", group=grp_sg, inline="sg4a")
+sg_4_src = input.source(close, "Source", group=grp_sg, inline="sg4a")
+sg_4_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_sg, inline="sg4b")
+sg_4_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_sg, inline="sg4b")
+sg_4_name = input.string("S4", "Label", group=grp_sg, inline="sg4c")
+
+use_sg_5 = input.bool(false, "S5 Enable", group=grp_sg, inline="sg5a")
+sg_5_src = input.source(close, "Source", group=grp_sg, inline="sg5a")
+sg_5_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_sg, inline="sg5b")
+sg_5_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_sg, inline="sg5b")
+sg_5_name = input.string("S5", "Label", group=grp_sg, inline="sg5c")
+
+use_sg_6 = input.bool(false, "S6 Enable", group=grp_sg, inline="sg6a")
+sg_6_src = input.source(close, "Source", group=grp_sg, inline="sg6a")
+sg_6_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_sg, inline="sg6b")
+sg_6_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_sg, inline="sg6b")
+sg_6_name = input.string("S6", "Label", group=grp_sg, inline="sg6c")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         UNIVERSAL GATES
+// ══════════════════════════════════════════════════════════════════════════════
+grp_ug = "◆ UNIVERSAL GATES"
+
+use_ug_1 = input.bool(false, "U1 Enable", group=grp_ug, inline="ug1a")
+ug_1_src = input.source(close, "Source", group=grp_ug, inline="ug1a")
+ug_1_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_ug, inline="ug1b")
+ug_1_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_ug, inline="ug1b")
+ug_1_name = input.string("U1", "Label", group=grp_ug, inline="ug1c")
+
+use_ug_2 = input.bool(false, "U2 Enable", group=grp_ug, inline="ug2a")
+ug_2_src = input.source(close, "Source", group=grp_ug, inline="ug2a")
+ug_2_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_ug, inline="ug2b")
+ug_2_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_ug, inline="ug2b")
+ug_2_name = input.string("U2", "Label", group=grp_ug, inline="ug2c")
+
+use_ug_3 = input.bool(false, "U3 Enable", group=grp_ug, inline="ug3a")
+ug_3_src = input.source(close, "Source", group=grp_ug, inline="ug3a")
+ug_3_sig = input.string("any", "Signal", options=["any", "cross", "cross_up", "cross_down", "gt_zero", "lt_zero", "rising", "falling", "ignore"], group=grp_ug, inline="ug3b")
+ug_3_price = input.string("ignore", "Price", options=["ignore", "price_above", "price_below", "price_cross_up", "price_cross_down"], group=grp_ug, inline="ug3b")
+ug_3_name = input.string("U3", "Label", group=grp_ug, inline="ug3c")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         NEWS BLOCKER
+// ══════════════════════════════════════════════════════════════════════════════
+grp_news = "◆ NEWS BLOCKER"
+
+use_news_blocker = input.bool(true, "Enable News Blocker", group=grp_news)
+news_buffer_before = input.int(5, "Buffer Before (min)", minval=0, maxval=30, group=grp_news)
+news_buffer_after = input.int(15, "Buffer After (min)", minval=0, maxval=60, group=grp_news)
+
+block_830 = input.bool(true, "Block 8:30 AM ET", group=grp_news, inline="830")
+block_830_days = input.string("23456", "Days", group=grp_news, inline="830")
+
+block_1000 = input.bool(true, "Block 10:00 AM ET", group=grp_news, inline="1000")
+block_1000_days = input.string("23456", "Days", group=grp_news, inline="1000")
+
+block_1030 = input.bool(false, "Block 10:30 AM ET", group=grp_news, inline="1030")
+block_1030_days = input.string("4", "Days", group=grp_news, inline="1030")
+
+block_1400 = input.bool(true, "Block 2:00 PM ET", group=grp_news, inline="1400")
+block_1400_days = input.string("4", "Days", group=grp_news, inline="1400")
+
+block_1430 = input.bool(true, "Block 2:30 PM ET", group=grp_news, inline="1430")
+block_1430_days = input.string("4", "Days", group=grp_news, inline="1430")
+
+block_custom = input.bool(false, "Block Custom Time", group=grp_news, inline="cust")
+custom_time = input.int(1300, "HHMM", group=grp_news, inline="cust")
+block_custom_days = input.string("23456", "Days", group=grp_news, inline="cust2")
+
+et_hour = hour(time, "America/New_York")
+et_min  = minute(time, "America/New_York")
+et_dow  = dayofweek(time, "America/New_York")
+et_time_mins = et_hour * 60 + et_min
+
+is_day_match(string days, int dow) => str.contains(days, str.tostring(dow))
+is_in_news_window(int release_mins, int before_buffer, int after_buffer) =>
+    et_time_mins >= (release_mins - before_buffer) and et_time_mins <= (release_mins + after_buffer)
+
+release_830  = 8 * 60 + 30
+release_1000 = 10 * 60
+release_1030 = 10 * 60 + 30
+release_1400 = 14 * 60
+release_1430 = 14 * 60 + 30
+release_custom = math.floor(custom_time / 100) * 60 + (custom_time % 100)
+
+bool news_830_active  = block_830  and is_day_match(block_830_days, et_dow)  and is_in_news_window(release_830, news_buffer_before, news_buffer_after)
+bool news_1000_active = block_1000 and is_day_match(block_1000_days, et_dow) and is_in_news_window(release_1000, news_buffer_before, news_buffer_after)
+bool news_1030_active = block_1030 and is_day_match(block_1030_days, et_dow) and is_in_news_window(release_1030, news_buffer_before, news_buffer_after)
+bool news_1400_active = block_1400 and is_day_match(block_1400_days, et_dow) and is_in_news_window(release_1400, news_buffer_before, news_buffer_after)
+bool news_1430_active = block_1430 and is_day_match(block_1430_days, et_dow) and is_in_news_window(release_1430, news_buffer_before, news_buffer_after)
+bool news_custom_active = block_custom and is_day_match(block_custom_days, et_dow) and is_in_news_window(release_custom, news_buffer_before, news_buffer_after)
+
+bool any_news_active = news_830_active or news_1000_active or news_1030_active or news_1400_active or news_1430_active or news_custom_active
+bool news_ok = not use_news_blocker or not any_news_active
+string active_news_label = news_830_active ? "8:30" : news_1000_active ? "10:00" : news_1030_active ? "10:30" : news_1400_active ? "14:00" : news_1430_active ? "14:30" : news_custom_active ? "Custom" : ""
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         SESSION FILTER
+// ══════════════════════════════════════════════════════════════════════════════
+grp_sess = "◆ SESSION FILTER"
+
+use_session_filter = input.bool(true, "Enable Session Filter", group=grp_sess)
+sess_asian   = input.session("1800-0200", "Asian (ET)", group=grp_sess)
+sess_london  = input.session("0300-0500", "London AM (ET)", group=grp_sess)
+sess_ny_am   = input.session("0930-1130", "NY AM (ET)", group=grp_sess)
+sess_ny_pm   = input.session("1330-1500", "NY PM (ET)", group=grp_sess)
+
+use_asian  = input.bool(false, "Trade Asian", group=grp_sess)
+use_london = input.bool(true, "Trade London AM", group=grp_sess)
+use_ny_am  = input.bool(true, "Trade NY AM", group=grp_sess)
+use_ny_pm  = input.bool(false, "Trade NY PM", group=grp_sess)
+
+in_asian  = use_asian  and not na(time(timeframe.period, sess_asian, "America/New_York"))
+in_london = use_london and not na(time(timeframe.period, sess_london, "America/New_York"))
+in_ny_am  = use_ny_am  and not na(time(timeframe.period, sess_ny_am, "America/New_York"))
+in_ny_pm  = use_ny_pm  and not na(time(timeframe.period, sess_ny_pm, "America/New_York"))
+
+session_ok = not use_session_filter or in_asian or in_london or in_ny_am or in_ny_pm
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         TRADE MANAGEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+grp_trade = "◆ TRADE MANAGEMENT"
+
+sl_ticks = input.int(40, "Stop Loss (ticks)", minval=1, group=grp_trade,
+     tooltip="Initial stop loss distance in ticks. Sent as trailing stop to broker.")
+
+grp_tick = "◆ TICK SIZE"
+use_manual_tick = input.bool(false, "Manual Tick", group=grp_tick)
+manual_tick     = input.float(1.0, "Size", group=grp_tick,
+     tooltip="YM=1.0, ES/NQ=0.25, CL=0.01")
+tick_size = use_manual_tick ? manual_tick : syminfo.mintick
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         QUANTLYNK
+// ══════════════════════════════════════════════════════════════════════════════
+grp_ql = "◆ QUANTLYNK"
+ql_enabled  = input.bool(true, "Enable QuantLynk", group=grp_ql)
+ql_user_id  = input.string("", "User ID", group=grp_ql,
+     tooltip="Your qv_user_id from QuantLynk")
+ql_alert_id = input.string("", "Alert ID", group=grp_ql,
+     tooltip="Your alert_id from QuantLynk")
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         DEBUG
+// ══════════════════════════════════════════════════════════════════════════════
+grp_debug = "◆ DEBUG"
+show_signals = input.bool(true, "Show Signals", group=grp_debug)
+show_session = input.bool(true, "Highlight Sessions", group=grp_debug)
+show_news_block = input.bool(true, "Highlight News", group=grp_debug)
+show_levels  = input.bool(true, "Show SL Level", group=grp_debug)
+show_gate_panels = input.bool(true, "Show Gate Panels", group=grp_debug)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                   PRICE RELATION STATE TRACKING
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool lg_1_price_state = false
+var bool lg_2_price_state = false
+var bool lg_3_price_state = false
+var bool lg_4_price_state = false
+var bool lg_5_price_state = false
+var bool lg_6_price_state = false
+
+var bool sg_1_price_state = false
+var bool sg_2_price_state = false
+var bool sg_3_price_state = false
+var bool sg_4_price_state = false
+var bool sg_5_price_state = false
+var bool sg_6_price_state = false
+
+var bool ug_1_price_state = false
+var bool ug_2_price_state = false
+var bool ug_3_price_state = false
+
+lg_1_price_state := update_price_state(lg_1_price_state, lg_1_src, lg_1_price)
+lg_2_price_state := update_price_state(lg_2_price_state, lg_2_src, lg_2_price)
+lg_3_price_state := update_price_state(lg_3_price_state, lg_3_src, lg_3_price)
+lg_4_price_state := update_price_state(lg_4_price_state, lg_4_src, lg_4_price)
+lg_5_price_state := update_price_state(lg_5_price_state, lg_5_src, lg_5_price)
+lg_6_price_state := update_price_state(lg_6_price_state, lg_6_src, lg_6_price)
+
+sg_1_price_state := update_price_state(sg_1_price_state, sg_1_src, sg_1_price)
+sg_2_price_state := update_price_state(sg_2_price_state, sg_2_src, sg_2_price)
+sg_3_price_state := update_price_state(sg_3_price_state, sg_3_src, sg_3_price)
+sg_4_price_state := update_price_state(sg_4_price_state, sg_4_src, sg_4_price)
+sg_5_price_state := update_price_state(sg_5_price_state, sg_5_src, sg_5_price)
+sg_6_price_state := update_price_state(sg_6_price_state, sg_6_src, sg_6_price)
+
+ug_1_price_state := update_price_state(ug_1_price_state, ug_1_src, ug_1_price)
+ug_2_price_state := update_price_state(ug_2_price_state, ug_2_src, ug_2_price)
+ug_3_price_state := update_price_state(ug_3_price_state, ug_3_src, ug_3_price)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         GATE EVALUATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Long gates
+bool lg_1_sig_ok = eval_signal_type(lg_1_src, lg_1_sig)
+bool lg_1_price_ok = get_price_result(lg_1_src, lg_1_price, lg_1_price_state)
+bool lg_1_ok = not use_lg_1 or (lg_1_sig_ok and lg_1_price_ok)
+
+bool lg_2_sig_ok = eval_signal_type(lg_2_src, lg_2_sig)
+bool lg_2_price_ok = get_price_result(lg_2_src, lg_2_price, lg_2_price_state)
+bool lg_2_ok = not use_lg_2 or (lg_2_sig_ok and lg_2_price_ok)
+
+bool lg_3_sig_ok = eval_signal_type(lg_3_src, lg_3_sig)
+bool lg_3_price_ok = get_price_result(lg_3_src, lg_3_price, lg_3_price_state)
+bool lg_3_ok = not use_lg_3 or (lg_3_sig_ok and lg_3_price_ok)
+
+bool lg_4_sig_ok = eval_signal_type(lg_4_src, lg_4_sig)
+bool lg_4_price_ok = get_price_result(lg_4_src, lg_4_price, lg_4_price_state)
+bool lg_4_ok = not use_lg_4 or (lg_4_sig_ok and lg_4_price_ok)
+
+bool lg_5_sig_ok = eval_signal_type(lg_5_src, lg_5_sig)
+bool lg_5_price_ok = get_price_result(lg_5_src, lg_5_price, lg_5_price_state)
+bool lg_5_ok = not use_lg_5 or (lg_5_sig_ok and lg_5_price_ok)
+
+bool lg_6_sig_ok = eval_signal_type(lg_6_src, lg_6_sig)
+bool lg_6_price_ok = get_price_result(lg_6_src, lg_6_price, lg_6_price_state)
+bool lg_6_ok = not use_lg_6 or (lg_6_sig_ok and lg_6_price_ok)
+
+bool all_long_gates_ok = lg_1_ok and lg_2_ok and lg_3_ok and lg_4_ok and lg_5_ok and lg_6_ok
+
+int long_gates_enabled = (use_lg_1 ? 1 : 0) + (use_lg_2 ? 1 : 0) + (use_lg_3 ? 1 : 0) + (use_lg_4 ? 1 : 0) + (use_lg_5 ? 1 : 0) + (use_lg_6 ? 1 : 0)
+int long_gates_passing = (lg_1_ok and use_lg_1 ? 1 : 0) + (lg_2_ok and use_lg_2 ? 1 : 0) + (lg_3_ok and use_lg_3 ? 1 : 0) + (lg_4_ok and use_lg_4 ? 1 : 0) + (lg_5_ok and use_lg_5 ? 1 : 0) + (lg_6_ok and use_lg_6 ? 1 : 0)
+
+// Short gates
+bool sg_1_sig_ok = eval_signal_type(sg_1_src, sg_1_sig)
+bool sg_1_price_ok = get_price_result(sg_1_src, sg_1_price, sg_1_price_state)
+bool sg_1_ok = not use_sg_1 or (sg_1_sig_ok and sg_1_price_ok)
+
+bool sg_2_sig_ok = eval_signal_type(sg_2_src, sg_2_sig)
+bool sg_2_price_ok = get_price_result(sg_2_src, sg_2_price, sg_2_price_state)
+bool sg_2_ok = not use_sg_2 or (sg_2_sig_ok and sg_2_price_ok)
+
+bool sg_3_sig_ok = eval_signal_type(sg_3_src, sg_3_sig)
+bool sg_3_price_ok = get_price_result(sg_3_src, sg_3_price, sg_3_price_state)
+bool sg_3_ok = not use_sg_3 or (sg_3_sig_ok and sg_3_price_ok)
+
+bool sg_4_sig_ok = eval_signal_type(sg_4_src, sg_4_sig)
+bool sg_4_price_ok = get_price_result(sg_4_src, sg_4_price, sg_4_price_state)
+bool sg_4_ok = not use_sg_4 or (sg_4_sig_ok and sg_4_price_ok)
+
+bool sg_5_sig_ok = eval_signal_type(sg_5_src, sg_5_sig)
+bool sg_5_price_ok = get_price_result(sg_5_src, sg_5_price, sg_5_price_state)
+bool sg_5_ok = not use_sg_5 or (sg_5_sig_ok and sg_5_price_ok)
+
+bool sg_6_sig_ok = eval_signal_type(sg_6_src, sg_6_sig)
+bool sg_6_price_ok = get_price_result(sg_6_src, sg_6_price, sg_6_price_state)
+bool sg_6_ok = not use_sg_6 or (sg_6_sig_ok and sg_6_price_ok)
+
+bool all_short_gates_ok = sg_1_ok and sg_2_ok and sg_3_ok and sg_4_ok and sg_5_ok and sg_6_ok
+
+int short_gates_enabled = (use_sg_1 ? 1 : 0) + (use_sg_2 ? 1 : 0) + (use_sg_3 ? 1 : 0) + (use_sg_4 ? 1 : 0) + (use_sg_5 ? 1 : 0) + (use_sg_6 ? 1 : 0)
+int short_gates_passing = (sg_1_ok and use_sg_1 ? 1 : 0) + (sg_2_ok and use_sg_2 ? 1 : 0) + (sg_3_ok and use_sg_3 ? 1 : 0) + (sg_4_ok and use_sg_4 ? 1 : 0) + (sg_5_ok and use_sg_5 ? 1 : 0) + (sg_6_ok and use_sg_6 ? 1 : 0)
+
+// Universal gates
+bool ug_1_sig_ok = eval_signal_type(ug_1_src, ug_1_sig)
+bool ug_1_price_ok = get_price_result(ug_1_src, ug_1_price, ug_1_price_state)
+bool ug_1_ok = not use_ug_1 or (ug_1_sig_ok and ug_1_price_ok)
+
+bool ug_2_sig_ok = eval_signal_type(ug_2_src, ug_2_sig)
+bool ug_2_price_ok = get_price_result(ug_2_src, ug_2_price, ug_2_price_state)
+bool ug_2_ok = not use_ug_2 or (ug_2_sig_ok and ug_2_price_ok)
+
+bool ug_3_sig_ok = eval_signal_type(ug_3_src, ug_3_sig)
+bool ug_3_price_ok = get_price_result(ug_3_src, ug_3_price, ug_3_price_state)
+bool ug_3_ok = not use_ug_3 or (ug_3_sig_ok and ug_3_price_ok)
+
+bool all_universal_ok = ug_1_ok and ug_2_ok and ug_3_ok
+
+int universal_enabled = (use_ug_1 ? 1 : 0) + (use_ug_2 ? 1 : 0) + (use_ug_3 ? 1 : 0)
+int universal_passing = (ug_1_ok and use_ug_1 ? 1 : 0) + (ug_2_ok and use_ug_2 ? 1 : 0) + (ug_3_ok and use_ug_3 ? 1 : 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         SIGNAL PROCESSING
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool prev_long_signal = false
+var bool prev_short_signal = false
+
+bool current_long_signal = eval_signal_type(long_signal_src, long_sig_type)
+bool current_short_signal = eval_signal_type(short_signal_src, short_sig_type)
+
+bool long_signal_changed = current_long_signal and not prev_long_signal
+bool short_signal_changed = current_short_signal and not prev_short_signal
+
+bool long_trigger = current_long_signal and (not long_require_change or long_signal_changed)
+bool short_trigger = current_short_signal and (not short_require_change or short_signal_changed)
+
+prev_long_signal := current_long_signal
+prev_short_signal := current_short_signal
+
+bool can_enter_long = long_trigger and session_ok and news_ok and all_universal_ok and all_long_gates_ok and strategy.position_size == 0
+bool can_enter_short = short_trigger and session_ok and news_ok and all_universal_ok and all_short_gates_ok and strategy.position_size == 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         POSITION TRACKING
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float entry_price = na
+var int   trade_dir   = 0
+var float stop_price  = na
+
+if can_enter_long or can_enter_short
+    entry_price := close
+    trade_dir   := can_enter_long ? 1 : -1
+    if trade_dir == 1
+        stop_price := entry_price - (sl_ticks * tick_size)
+    else
+        stop_price := entry_price + (sl_ticks * tick_size)
+
+// Reset on flat
+if strategy.position_size == 0
+    entry_price := na
+    trade_dir   := 0
+    stop_price  := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         STRATEGY EXECUTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Calculate stop price for the alert message
+float long_stop = close - (sl_ticks * tick_size)
+float short_stop = close + (sl_ticks * tick_size)
+
+if can_enter_long
+    // Entry with trailing stop - matches your JSON format
+    // TradingView placeholders will resolve: {{strategy.order.contracts}}, {{strategy.order.action}}, {{close}}
+    // We manually provide stop_price since we calculate it
+    string msg = ql_enabled ? 
+         '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "{{strategy.order.contracts}}", "order_type": "trailingstop", "action": "{{strategy.order.action}}", "price": "{{close}}", "stop_price": "' + str.tostring(long_stop, "#.##") + '"}' 
+         : "LONG"
+    strategy.entry("Long", strategy.long, qty=1, alert_message=msg)
+
+if can_enter_short
+    string msg = ql_enabled ? 
+         '{"qv_user_id": "' + ql_user_id + '", "alert_id": "' + ql_alert_id + '", "quantity": "{{strategy.order.contracts}}", "order_type": "trailingstop", "action": "{{strategy.order.action}}", "price": "{{close}}", "stop_price": "' + str.tostring(short_stop, "#.##") + '"}' 
+         : "SHORT"
+    strategy.entry("Short", strategy.short, qty=1, alert_message=msg)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         VISUALS
+// ══════════════════════════════════════════════════════════════════════════════
+
+bgcolor(session_ok and show_session and news_ok ? color.new(color.blue, 95) : na)
+bgcolor(any_news_active and show_news_block ? color.new(color.red, 85) : na)
+
+plotshape(show_signals and can_enter_long, "Long", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(show_signals and can_enter_short, "Short", shape.triangledown, location.abovebar, color.red, size=size.small)
+
+plot(show_levels and not na(stop_price) ? stop_price : na, "Stop", color.new(color.red, 50), style=plot.style_linebr, linewidth=2)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table dash = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80))
+
+if barstate.islast
+    table.cell(dash, 0, 0, "Signal Router", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, "v" + VERSION, text_color=color.gray, text_size=size.small)
+    
+    table.cell(dash, 0, 1, "▲ Long:", text_color=color.green, text_size=size.tiny)
+    table.cell(dash, 1, 1, current_long_signal ? "SIGNAL" : "—", text_color=current_long_signal ? color.green : color.gray, text_size=size.tiny)
+    
+    table.cell(dash, 0, 2, "  Gates:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 2, long_gates_enabled > 0 ? str.tostring(long_gates_passing) + "/" + str.tostring(long_gates_enabled) : "—", text_color=all_long_gates_ok ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(dash, 0, 3, "▼ Short:", text_color=color.red, text_size=size.tiny)
+    table.cell(dash, 1, 3, current_short_signal ? "SIGNAL" : "—", text_color=current_short_signal ? color.red : color.gray, text_size=size.tiny)
+    
+    table.cell(dash, 0, 4, "  Gates:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 4, short_gates_enabled > 0 ? str.tostring(short_gates_passing) + "/" + str.tostring(short_gates_enabled) : "—", text_color=all_short_gates_ok ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(dash, 0, 5, "◆ Universal:", text_color=color.yellow, text_size=size.tiny)
+    table.cell(dash, 1, 5, universal_enabled > 0 ? str.tostring(universal_passing) + "/" + str.tostring(universal_enabled) : "—", text_color=all_universal_ok ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(dash, 0, 6, "News:", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 6, any_news_active ? "🚫 " + active_news_label : "✓", text_color=news_ok ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(dash, 0, 7, "Session:", text_color=color.gray, text_size=size.tiny)
+    string sess_txt = in_asian ? "Asian" : in_london ? "London" : in_ny_am ? "NY AM" : in_ny_pm ? "NY PM" : "OFF"
+    table.cell(dash, 1, 7, sess_txt, text_color=session_ok ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(dash, 0, 8, "Position:", text_color=color.gray, text_size=size.tiny)
+    string pos_txt = trade_dir == 1 ? "LONG" : trade_dir == -1 ? "SHORT" : "FLAT"
+    color pos_col = trade_dir == 1 ? color.green : trade_dir == -1 ? color.red : color.gray
+    table.cell(dash, 1, 8, pos_txt, text_color=pos_col, text_size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         GATE PANELS
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table lg_panel = table.new(position.bottom_right, 4, 8, bgcolor=color.new(color.black, 80))
+var table sg_panel = table.new(position.bottom_left, 4, 8, bgcolor=color.new(color.black, 80))
+
+if barstate.islast and show_gate_panels
+    if long_gates_enabled > 0
+        table.cell(lg_panel, 0, 0, "▲ LONG", text_color=color.green, text_size=size.tiny)
+        table.cell(lg_panel, 1, 0, "Sig", text_color=color.gray, text_size=size.tiny)
+        table.cell(lg_panel, 2, 0, "Price", text_color=color.gray, text_size=size.tiny)
+        table.cell(lg_panel, 3, 0, "Gate", text_color=color.gray, text_size=size.tiny)
+        
+        int r = 1
+        if use_lg_1
+            table.cell(lg_panel, 0, r, lg_1_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(lg_panel, 1, r, lg_1_sig_ok ? "✓" : "✗", text_color=lg_1_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 2, r, lg_1_price_ok ? "✓" : "✗", text_color=lg_1_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 3, r, lg_1_ok ? "✓" : "✗", text_color=lg_1_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_lg_2
+            table.cell(lg_panel, 0, r, lg_2_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(lg_panel, 1, r, lg_2_sig_ok ? "✓" : "✗", text_color=lg_2_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 2, r, lg_2_price_ok ? "✓" : "✗", text_color=lg_2_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 3, r, lg_2_ok ? "✓" : "✗", text_color=lg_2_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_lg_3
+            table.cell(lg_panel, 0, r, lg_3_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(lg_panel, 1, r, lg_3_sig_ok ? "✓" : "✗", text_color=lg_3_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 2, r, lg_3_price_ok ? "✓" : "✗", text_color=lg_3_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 3, r, lg_3_ok ? "✓" : "✗", text_color=lg_3_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_lg_4
+            table.cell(lg_panel, 0, r, lg_4_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(lg_panel, 1, r, lg_4_sig_ok ? "✓" : "✗", text_color=lg_4_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 2, r, lg_4_price_ok ? "✓" : "✗", text_color=lg_4_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 3, r, lg_4_ok ? "✓" : "✗", text_color=lg_4_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_lg_5
+            table.cell(lg_panel, 0, r, lg_5_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(lg_panel, 1, r, lg_5_sig_ok ? "✓" : "✗", text_color=lg_5_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 2, r, lg_5_price_ok ? "✓" : "✗", text_color=lg_5_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 3, r, lg_5_ok ? "✓" : "✗", text_color=lg_5_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_lg_6
+            table.cell(lg_panel, 0, r, lg_6_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(lg_panel, 1, r, lg_6_sig_ok ? "✓" : "✗", text_color=lg_6_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 2, r, lg_6_price_ok ? "✓" : "✗", text_color=lg_6_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(lg_panel, 3, r, lg_6_ok ? "✓" : "✗", text_color=lg_6_ok ? color.green : color.red, text_size=size.tiny)
+    
+    if short_gates_enabled > 0
+        table.cell(sg_panel, 0, 0, "▼ SHORT", text_color=color.red, text_size=size.tiny)
+        table.cell(sg_panel, 1, 0, "Sig", text_color=color.gray, text_size=size.tiny)
+        table.cell(sg_panel, 2, 0, "Price", text_color=color.gray, text_size=size.tiny)
+        table.cell(sg_panel, 3, 0, "Gate", text_color=color.gray, text_size=size.tiny)
+        
+        int r = 1
+        if use_sg_1
+            table.cell(sg_panel, 0, r, sg_1_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(sg_panel, 1, r, sg_1_sig_ok ? "✓" : "✗", text_color=sg_1_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 2, r, sg_1_price_ok ? "✓" : "✗", text_color=sg_1_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 3, r, sg_1_ok ? "✓" : "✗", text_color=sg_1_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_sg_2
+            table.cell(sg_panel, 0, r, sg_2_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(sg_panel, 1, r, sg_2_sig_ok ? "✓" : "✗", text_color=sg_2_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 2, r, sg_2_price_ok ? "✓" : "✗", text_color=sg_2_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 3, r, sg_2_ok ? "✓" : "✗", text_color=sg_2_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_sg_3
+            table.cell(sg_panel, 0, r, sg_3_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(sg_panel, 1, r, sg_3_sig_ok ? "✓" : "✗", text_color=sg_3_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 2, r, sg_3_price_ok ? "✓" : "✗", text_color=sg_3_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 3, r, sg_3_ok ? "✓" : "✗", text_color=sg_3_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_sg_4
+            table.cell(sg_panel, 0, r, sg_4_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(sg_panel, 1, r, sg_4_sig_ok ? "✓" : "✗", text_color=sg_4_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 2, r, sg_4_price_ok ? "✓" : "✗", text_color=sg_4_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 3, r, sg_4_ok ? "✓" : "✗", text_color=sg_4_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_sg_5
+            table.cell(sg_panel, 0, r, sg_5_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(sg_panel, 1, r, sg_5_sig_ok ? "✓" : "✗", text_color=sg_5_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 2, r, sg_5_price_ok ? "✓" : "✗", text_color=sg_5_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 3, r, sg_5_ok ? "✓" : "✗", text_color=sg_5_ok ? color.green : color.red, text_size=size.tiny)
+            r += 1
+        if use_sg_6
+            table.cell(sg_panel, 0, r, sg_6_name, text_color=color.gray, text_size=size.tiny)
+            table.cell(sg_panel, 1, r, sg_6_sig_ok ? "✓" : "✗", text_color=sg_6_sig_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 2, r, sg_6_price_ok ? "✓" : "✗", text_color=sg_6_price_ok ? color.green : color.red, text_size=size.tiny)
+            table.cell(sg_panel, 3, r, sg_6_ok ? "✓" : "✗", text_color=sg_6_ok ? color.green : color.red, text_size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         DATA WINDOW
+// ══════════════════════════════════════════════════════════════════════════════
+
+plot(current_long_signal ? 1 : 0, "Long Signal", display=display.data_window)
+plot(current_short_signal ? 1 : 0, "Short Signal", display=display.data_window)
+plot(all_long_gates_ok ? 1 : 0, "Long Gates OK", display=display.data_window)
+plot(all_short_gates_ok ? 1 : 0, "Short Gates OK", display=display.data_window)
+plot(all_universal_ok ? 1 : 0, "Universal OK", display=display.data_window)
+plot(news_ok ? 1 : 0, "News OK", display=display.data_window)
+plot(session_ok ? 1 : 0, "Session OK", display=display.data_window)

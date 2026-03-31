@@ -1,0 +1,263 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © iyoshikawa
+// Confluence Output Template v1.0.0
+// Template indicator showing how to structure plot outputs for Signal Router
+
+//@version=6
+indicator("Confluence Output [Template]", overlay=true)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HOW THIS WORKS
+// ══════════════════════════════════════════════════════════════════════════════
+// 
+// Signal Router reads values via input.source() from other indicators.
+// The rule is simple:
+//   • Value > 0 = TRUE (signal fires / gate passes)
+//   • Value ≤ 0 = FALSE (no signal / gate blocks)
+//
+// This template demonstrates the output structure. Copy/adapt these patterns
+// into your own indicators, or use this directly as a starting point.
+//
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EXAMPLE INPUTS (Replace with your actual indicator logic)
+// ══════════════════════════════════════════════════════════════════════════════
+
+grp_ema = "EMA SETTINGS"
+ema_fast_len = input.int(9, "Fast EMA", group=grp_ema)
+ema_slow_len = input.int(21, "Slow EMA", group=grp_ema)
+ema_trend_len = input.int(50, "Trend EMA", group=grp_ema)
+
+grp_rsi = "RSI SETTINGS"
+rsi_len = input.int(14, "RSI Length", group=grp_rsi)
+rsi_ob = input.int(70, "Overbought", group=grp_rsi)
+rsi_os = input.int(30, "Oversold", group=grp_rsi)
+
+grp_hma = "HMA SETTINGS"
+hma_len = input.int(20, "HMA Length", group=grp_hma)
+
+grp_vol = "VOLUME SETTINGS"
+vol_ma_len = input.int(20, "Volume MA Length", group=grp_vol)
+vol_mult = input.float(1.2, "Volume Threshold (x avg)", group=grp_vol)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// EMAs
+ema_fast = ta.ema(close, ema_fast_len)
+ema_slow = ta.ema(close, ema_slow_len)
+ema_trend = ta.ema(close, ema_trend_len)
+
+// RSI
+rsi = ta.rsi(close, rsi_len)
+
+// HMA
+hma = ta.hma(close, hma_len)
+hma_rising = hma > hma[1]
+hma_falling = hma < hma[1]
+
+// Volume
+vol_ma = ta.sma(volume, vol_ma_len)
+vol_confirmed = volume > vol_ma * vol_mult
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONDITION LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTRY SIGNALS (fires once on crossover/crossunder)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// EMA crossover signal
+long_signal_ema_cross = ta.crossover(ema_fast, ema_slow)
+short_signal_ema_cross = ta.crossunder(ema_fast, ema_slow)
+
+// RSI extreme reversal signal
+long_signal_rsi_reversal = ta.crossover(rsi, rsi_os)  // RSI crosses back above oversold
+short_signal_rsi_reversal = ta.crossunder(rsi, rsi_ob) // RSI crosses back below overbought
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIRECTIONAL GATES (persistent state - true while condition holds)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Price vs EMA gates
+long_above_fast_ema = close > ema_fast
+long_above_slow_ema = close > ema_slow
+long_above_trend_ema = close > ema_trend
+
+short_below_fast_ema = close < ema_fast
+short_below_slow_ema = close < ema_slow
+short_below_trend_ema = close < ema_trend
+
+// EMA stack alignment
+long_ema_stack = ema_fast > ema_slow and ema_slow > ema_trend
+short_ema_stack = ema_fast < ema_slow and ema_slow < ema_trend
+
+// HMA direction
+long_hma_rising = hma_rising
+short_hma_falling = hma_falling
+
+// RSI bias
+long_rsi_bullish = rsi > 50
+short_rsi_bearish = rsi < 50
+
+// RSI not extreme (avoid chasing)
+long_rsi_not_ob = rsi < rsi_ob
+short_rsi_not_os = rsi > rsi_os
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIVERSAL GATES (apply to both directions)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Volume confirmation
+universal_volume_ok = vol_confirmed
+
+// Price not at extreme from EMAs (anti-chase)
+ema_distance_pct = math.abs(close - ema_slow) / ema_slow * 100
+universal_not_extended = ema_distance_pct < 2.0  // Within 2% of slow EMA
+
+// Simple chop detection (EMA compression)
+ema_spread = math.abs(ema_fast - ema_slow)
+ema_spread_ma = ta.sma(ema_spread, 20)
+universal_not_chop = ema_spread > ema_spread_ma * 0.5  // EMAs not compressed
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PLOT OUTPUTS FOR SIGNAL ROUTER
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// NAMING CONVENTION:
+//   • "L:" prefix = Long gate
+//   • "S:" prefix = Short gate  
+//   • "U:" prefix = Universal gate
+//   • "SIG:" prefix = Entry signal
+//
+// VALUE RULE:
+//   • Output 1 when TRUE (condition met)
+//   • Output 0 when FALSE (condition not met)
+//
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTRY SIGNALS
+// Connect these to "Long Entry Signal" and "Short Entry Signal" in Router
+// ─────────────────────────────────────────────────────────────────────────────
+
+plot(long_signal_ema_cross ? 1 : 0, "SIG: Long EMA Cross", display=display.data_window)
+plot(short_signal_ema_cross ? 1 : 0, "SIG: Short EMA Cross", display=display.data_window)
+
+plot(long_signal_rsi_reversal ? 1 : 0, "SIG: Long RSI Reversal", display=display.data_window)
+plot(short_signal_rsi_reversal ? 1 : 0, "SIG: Short RSI Reversal", display=display.data_window)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LONG GATES
+// Connect these to L1-L9 in Router's Long Gates section
+// ─────────────────────────────────────────────────────────────────────────────
+
+plot(long_above_fast_ema ? 1 : 0, "L: Above Fast EMA", display=display.data_window)
+plot(long_above_slow_ema ? 1 : 0, "L: Above Slow EMA", display=display.data_window)
+plot(long_above_trend_ema ? 1 : 0, "L: Above Trend EMA", display=display.data_window)
+plot(long_ema_stack ? 1 : 0, "L: EMA Stack Bullish", display=display.data_window)
+plot(long_hma_rising ? 1 : 0, "L: HMA Rising", display=display.data_window)
+plot(long_rsi_bullish ? 1 : 0, "L: RSI > 50", display=display.data_window)
+plot(long_rsi_not_ob ? 1 : 0, "L: RSI Not OB", display=display.data_window)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORT GATES
+// Connect these to S1-S9 in Router's Short Gates section
+// ─────────────────────────────────────────────────────────────────────────────
+
+plot(short_below_fast_ema ? 1 : 0, "S: Below Fast EMA", display=display.data_window)
+plot(short_below_slow_ema ? 1 : 0, "S: Below Slow EMA", display=display.data_window)
+plot(short_below_trend_ema ? 1 : 0, "S: Below Trend EMA", display=display.data_window)
+plot(short_ema_stack ? 1 : 0, "S: EMA Stack Bearish", display=display.data_window)
+plot(short_hma_falling ? 1 : 0, "S: HMA Falling", display=display.data_window)
+plot(short_rsi_bearish ? 1 : 0, "S: RSI < 50", display=display.data_window)
+plot(short_rsi_not_os ? 1 : 0, "S: RSI Not OS", display=display.data_window)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIVERSAL GATES
+// Connect these to U1-U3 in Router's Universal Gates section
+// ─────────────────────────────────────────────────────────────────────────────
+
+plot(universal_volume_ok ? 1 : 0, "U: Volume Confirmed", display=display.data_window)
+plot(universal_not_extended ? 1 : 0, "U: Not Extended", display=display.data_window)
+plot(universal_not_chop ? 1 : 0, "U: Not Chop", display=display.data_window)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUAL REFERENCE (optional - for chart debugging)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Plot EMAs
+plot(ema_fast, "Fast EMA", color=color.new(color.yellow, 0), linewidth=1)
+plot(ema_slow, "Slow EMA", color=color.new(color.orange, 0), linewidth=1)
+plot(ema_trend, "Trend EMA", color=color.new(color.blue, 0), linewidth=2)
+plot(hma, "HMA", color=color.new(color.purple, 0), linewidth=1)
+
+// Signal markers
+plotshape(long_signal_ema_cross, "Long Signal", shape.triangleup, location.belowbar, 
+     color.green, size=size.tiny)
+plotshape(short_signal_ema_cross, "Short Signal", shape.triangledown, location.abovebar, 
+     color.red, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD - Gate Status
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table status = table.new(position.middle_right, 2, 18, bgcolor=color.new(color.black, 85))
+
+if barstate.islast
+    table.cell(status, 0, 0, "CONFLUENCE OUTPUT", text_color=color.white, text_size=size.small)
+    table.cell(status, 1, 0, "v1.0.0", text_color=color.gray, text_size=size.small)
+    
+    // Long gates
+    table.cell(status, 0, 1, "▲ LONG GATES", text_color=color.green, text_size=size.tiny)
+    table.cell(status, 1, 1, "", text_size=size.tiny)
+    
+    table.cell(status, 0, 2, "Above Fast EMA", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 2, long_above_fast_ema ? "✓" : "✗", text_color=long_above_fast_ema ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 3, "Above Slow EMA", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 3, long_above_slow_ema ? "✓" : "✗", text_color=long_above_slow_ema ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 4, "EMA Stack", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 4, long_ema_stack ? "✓" : "✗", text_color=long_ema_stack ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 5, "HMA Rising", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 5, long_hma_rising ? "✓" : "✗", text_color=long_hma_rising ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 6, "RSI > 50", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 6, long_rsi_bullish ? "✓" : "✗", text_color=long_rsi_bullish ? color.green : color.red, text_size=size.tiny)
+    
+    // Short gates
+    table.cell(status, 0, 7, "▼ SHORT GATES", text_color=color.red, text_size=size.tiny)
+    table.cell(status, 1, 7, "", text_size=size.tiny)
+    
+    table.cell(status, 0, 8, "Below Fast EMA", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 8, short_below_fast_ema ? "✓" : "✗", text_color=short_below_fast_ema ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 9, "Below Slow EMA", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 9, short_below_slow_ema ? "✓" : "✗", text_color=short_below_slow_ema ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 10, "EMA Stack", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 10, short_ema_stack ? "✓" : "✗", text_color=short_ema_stack ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 11, "HMA Falling", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 11, short_hma_falling ? "✓" : "✗", text_color=short_hma_falling ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 12, "RSI < 50", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 12, short_rsi_bearish ? "✓" : "✗", text_color=short_rsi_bearish ? color.green : color.red, text_size=size.tiny)
+    
+    // Universal gates
+    table.cell(status, 0, 13, "◆ UNIVERSAL", text_color=color.yellow, text_size=size.tiny)
+    table.cell(status, 1, 13, "", text_size=size.tiny)
+    
+    table.cell(status, 0, 14, "Volume", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 14, universal_volume_ok ? "✓" : "✗", text_color=universal_volume_ok ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 15, "Not Extended", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 15, universal_not_extended ? "✓" : "✗", text_color=universal_not_extended ? color.green : color.red, text_size=size.tiny)
+    
+    table.cell(status, 0, 16, "Not Chop", text_color=color.gray, text_size=size.tiny)
+    table.cell(status, 1, 16, universal_not_chop ? "✓" : "✗", text_color=universal_not_chop ? color.green : color.red, text_size=size.tiny)
