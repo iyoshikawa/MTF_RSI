@@ -1,0 +1,1220 @@
+//@version=6
+strategy("Hybrid Signal Router v1.1 (ATM)",
+     overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.fixed,
+     default_qty_value=2,
+     calc_on_every_tick=false,
+     use_bar_magnifier=true,
+     calc_on_order_fills=true,
+     process_orders_on_close=true,
+     fill_orders_on_standard_ohlc=true,
+     initial_capital=1000000,
+     max_labels_count=500)
+
+// ============================================================================
+// HYBRID SIGNAL ROUTER v1.1 (ATM)
+// ============================================================================
+// Combines:
+// - Signal Router: Marker gate, scoring engine, Qband validation
+// - Galgoom: Exit engine, day limits, trading windows
+// - ATM Multi-Target: 2-lot entry, dual OSO brackets (Target 1/2)
+//
+// ATM Configuration (YM):
+// Entry: 2 contracts (1 lot × 2)
+// Target 1: 50pt TP, 40pt SL | Label: YM Con 1
+// Target 2: 125pt TP, 40pt SL | Label: YM Con 2 (auto-trail enabled)
+// Auto Breakeven: 30pt trigger, +10pt offset
+// Auto Trail (T2): 1-Step, 20pt distance, 30pt profit trigger
+//
+// Architecture:
+// 1. VOL PEAK/BOTTOM fires → marker memory captures event
+// 2. Qband side validation (correct side of centerline)
+// 3. Chop/Neutral gate (Internal OR External)
+// 4. Scoring engine (8 slots with weights, required, veto)
+// 5. Session filter
+// 6. Entry signal → QuantLynk JSON alerts (Target 1 + Target 2 OSO)
+// 7. Exit engine (auto-BE, auto-trail T2, multi-target closes)
+// ============================================================================
+
+
+// ============================================================================
+// 01) ENTRY CONTROL
+// ============================================================================
+gEntry = "01) Entry Control"
+
+allow_longs = input.bool(true, "Allow Longs", group=gEntry,
+     tooltip="Enable long entries. OFF blocks all long trades.")
+allow_shorts = input.bool(true, "Allow Shorts", group=gEntry,
+     tooltip="Enable short entries. OFF blocks all short trades.")
+flip_on_opposite = input.bool(true, "Flip On Opposite Signal", group=gEntry,
+     tooltip="If long signal fires while short is open, close short first then open long.")
+allow_reentry_same_bar = input.bool(false, "Allow Re-Entry Same Bar", group=gEntry,
+     tooltip="OFF means opposite signal closes first, new entry waits for next bar.")
+
+
+// ============================================================================
+// 02) MARKER GATE (VOL PEAK / VOL BOTTOM)
+// ============================================================================
+gMarker = "02) Marker Gate"
+
+// Marker Sources
+peak_src = input.source(close, "VOL PEAK Source", group=gMarker,
+     tooltip="Source for bearish exhaustion marker (VOL PEAK). Typically from Q_Pilot Volume Peak indicator.")
+peak_mode = input.string("Rise > 0", "VOL PEAK Event Mode",
+     options=["Rise > 0", "Change", "Appear (NA→value)", "Fall < 0", "Any Activity"],
+     group=gMarker,
+     tooltip="Rise > 0: Source increases (from negative/zero to positive). Change: Source value changes. Appear: Source transitions from NA to a value. Fall < 0: Source decreases below zero. Any Activity: Source changes in any direction.")
+peak_threshold = input.float(0.5, "VOL PEAK Threshold", step=0.1, group=gMarker,
+     tooltip="Sensitivity threshold. Larger values = harder to trigger, fewer false signals.")
+
+bottom_src = input.source(close, "VOL BOTTOM Source", group=gMarker,
+     tooltip="Source for bullish exhaustion marker (VOL BOTTOM). Typically from Q_Pilot Volume Bottom indicator.")
+bottom_mode = input.string("Rise > 0", "VOL BOTTOM Event Mode",
+     options=["Rise > 0", "Change", "Appear (NA→value)", "Fall < 0", "Any Activity"],
+     group=gMarker,
+     tooltip="Same modes as VOL PEAK: Rise > 0, Change, Appear, Fall < 0, Any Activity.")
+bottom_threshold = input.float(0.5, "VOL BOTTOM Threshold", step=0.1, group=gMarker,
+     tooltip="Sensitivity threshold. Larger values = harder to trigger, fewer false signals.")
+
+// Marker Gate Settings
+marker_hold_bars = input.int(3, "Marker Hold Bars", minval=1, maxval=20, group=gMarker,
+     tooltip="Hold window includes marker bar. 3 = marker bar + 2 follow-up bars.")
+marker_extend_bars = input.int(0, "Extend Trigger Window (bars)", minval=0, maxval=10, group=gMarker,
+     tooltip="Keep trigger window active for N extra bars after hold window closes.")
+require_marker_gate = input.bool(true, "Require Marker Gate For Entry", group=gMarker,
+     tooltip="OFF = entries can fire without a marker (scoring only mode).")
+
+// Qband / Cloud Sources
+gQband = "02b) Qband / Cloud"
+qband_upper_src = input.source(close, "Qband Upper Source (Cloud Top)", group=gQband,
+     tooltip="Upper boundary of Qband cloud. Typically Q_Range upper band or Ichimoku Senkou A/B max.")
+qband_center_src = input.source(close, "Qband Centerline Source", group=gQband,
+     tooltip="Center/midline of Qband. Used to validate PEAK above / BOTTOM below requirement.")
+qband_lower_src = input.source(close, "Qband Lower Source (Cloud Bottom)", group=gQband,
+     tooltip="Lower boundary of Qband cloud. Typically Q_Range lower band or Ichimoku Senkou A/B min.")
+require_correct_side = input.bool(true, "Require Correct Side Of Centerline", group=gQband,
+     tooltip="VOL PEAK must be above centerline, VOL BOTTOM below. Prevents entries against trend.")
+require_outer_band = input.bool(false, "Require Marker Near Outer Band", group=gQband,
+     tooltip="ON: Marker must be in outer third (distance from center ≥ min_outer_fraction × band_width).")
+min_outer_fraction = input.float(0.35, "Min Outer Fraction", minval=0.0, maxval=1.0, step=0.05, group=gQband,
+     tooltip="0.35 = marker must be 35% of the way from centerline to outer edge to qualify as 'near outer band'.")
+min_qband_width = input.float(0.0, "Min Qband Width", minval=0.0, step=0.25, group=gQband,
+     tooltip="Minimum Qband width (upper - lower). 0.0 = no width requirement. Higher = wider cloud needed.")
+
+// Minimal Gate Mode
+enable_minimal_gate = input.bool(true, "Enable Minimal Gate Mode", group=gQband,
+     tooltip="When all scoring slots are OFF, allow entry on exhaustion + Qband side alone.")
+
+
+// ============================================================================
+// 03) CHOP / NEUTRAL GATE
+// ============================================================================
+gChopMain = "03) Chop / Neutral Gate"
+
+chop_gate_mode = input.string("Internal", "Chop Gate Mode",
+     options=["Internal", "External", "Disabled"],
+     group=gChopMain,
+     tooltip="Internal: Detects chop via scoring conflicts (bull_votes vs bear_votes ≥ threshold). External: Uses external source (ribbon). Disabled: No chop filtering.")
+
+// Internal Chop Settings
+gChopInternal = "03a) Internal Chop Detection"
+chop_max_abs_score = input.float(1.75, "Max Abs Score For Chop", minval=0.0, step=0.25, group=gChopInternal,
+     tooltip="If |total_score| ≤ this AND opposing votes exist → chop lockout.")
+chop_min_opposing_votes = input.int(1, "Min Opposing Votes For Chop", minval=1, maxval=8, group=gChopInternal,
+     tooltip="Both bull and bear must have at least this many votes to trigger chop.")
+
+// External Neutral Settings
+gChopExternal = "03b) External Neutral Source"
+neutral_src = input.source(close, "Neutral Source (e.g. Ribbon)", group=gChopExternal,
+     tooltip="External source that indicates neutral/chop condition.")
+neutral_active_mode = input.string("Source = 0", "Neutral Active When",
+     options=["Source = 0", "Source ≤ 0", "Source < 0", "Source > 0", "NA or 0"],
+     group=gChopExternal,
+     tooltip="Source = 0: Exact zero. Source ≤ 0: Zero or below. Source < 0: Strictly negative. Source > 0: Strictly positive. NA or 0: Missing or zero.")
+neutral_latch = input.bool(false, "Latch Until Fresh Marker", group=gChopExternal,
+     tooltip="When neutral fires, stay locked until a new VOL PEAK/BOTTOM fires.")
+
+
+// ============================================================================
+// 04) SCORING ENGINE (8 SLOTS)
+// ============================================================================
+
+// --- Helper Functions ---
+f_state(_src, _mode, _bull, _bear, _mid, _invert) =>
+    float prev = nz(_src[1], _src)
+    int raw = switch _mode
+        "binary" => _src >= 1 ? 1 : _src <= -1 ? -1 : 0
+        "sign" => _src > _bull ? 1 : _src < _bear ? -1 : 0
+        "midline" => _src > _mid ? 1 : _src < _mid ? -1 : 0
+        "cross" => ta.crossover(_src, _mid) ? 1 : ta.crossunder(_src, _mid) ? -1 : 0
+        "risingfalling" => _src > prev ? 1 : _src < prev ? -1 : 0
+        => 0
+    _invert ? raw * -1 : raw
+
+f_score(_enabled, _state, _weight) =>
+    _enabled ? _state * _weight : 0.0
+
+f_event(_src, _mode, _th) =>
+    bool pulse_up = _src > _th and nz(_src[1]) <= _th
+    bool non_na = not na(_src) and na(_src[1])
+    bool value_change = not na(_src) and _src != nz(_src[1])
+    bool fall_neg = _src < 0 and nz(_src[1]) >= 0
+    bool ev = switch _mode
+        "Rise > 0" => pulse_up
+        "Change" => value_change
+        "Appear (NA→value)" => non_na
+        "Fall < 0" => fall_neg
+        "Any Activity" => pulse_up or non_na or value_change
+        => false
+    ev
+
+// --- SLOT 1: RSI ---
+gS1 = "04a) Slot 1 - RSI"
+s1_enabled = input.bool(true, "Use Slot 1", group=gS1,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s1_name = input.string("RSI", "Slot 1 Name", group=gS1,
+     tooltip="Display name on dashboard.")
+s1_src = input.source(close, "Slot 1 Source", group=gS1,
+     tooltip="Indicator source (RSI, MACD, custom oscillator, etc.).")
+s1_mode = input.string("binary", "Slot 1 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS1,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s1_bull = input.float(0.5, "Slot 1 Bull Threshold", step=0.1, group=gS1,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s1_bear = input.float(-0.5, "Slot 1 Bear Threshold", step=0.1, group=gS1,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s1_mid = input.float(0.0, "Slot 1 Midline", step=0.1, group=gS1,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s1_invert = input.bool(false, "Invert Slot 1", group=gS1,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s1_weight = input.float(1.50, "Slot 1 Weight", step=0.25, group=gS1,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s1_req_l = input.bool(true, "Required For Long", group=gS1,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s1_req_s = input.bool(true, "Required For Short", group=gS1,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s1_veto_l = input.bool(false, "Veto Long When Bearish", group=gS1,
+     tooltip="ON: Block long entries if this slot is bearish, regardless of other votes.")
+s1_veto_s = input.bool(false, "Veto Short When Bullish", group=gS1,
+     tooltip="ON: Block short entries if this slot is bullish, regardless of other votes.")
+s1_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS1,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
+
+// --- SLOT 2: Qmomentum ---
+gS2 = "04b) Slot 2 - Qmomentum"
+s2_enabled = input.bool(true, "Use Slot 2", group=gS2)
+s2_name = input.string("Qmomentum", "Slot 2 Name", group=gS2)
+s2_src = input.source(close, "Slot 2 Source", group=gS2)
+s2_mode = input.string("binary", "Slot 2 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS2)
+s2_bull = input.float(0.5, "Slot 2 Bull Threshold", step=0.1, group=gS2)
+s2_bear = input.float(-0.5, "Slot 2 Bear Threshold", step=0.1, group=gS2)
+s2_mid = input.float(0.0, "Slot 2 Midline", step=0.1, group=gS2)
+s2_invert = input.bool(false, "Invert Slot 2", group=gS2)
+s2_weight = input.float(1.25, "Slot 2 Weight", step=0.25, group=gS2)
+s2_req_l = input.bool(true, "Required For Long", group=gS2)
+s2_req_s = input.bool(true, "Required For Short", group=gS2)
+s2_veto_l = input.bool(false, "Veto Long When Bearish", group=gS2)
+s2_veto_s = input.bool(false, "Veto Short When Bullish", group=gS2)
+s2_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS2)
+
+// --- SLOT 3: Stochastic ---
+gS3 = "04c) Slot 3 - Stochastic"
+s3_enabled = input.bool(true, "Use Slot 3", group=gS3)
+s3_name = input.string("Stochastic", "Slot 3 Name", group=gS3)
+s3_src = input.source(close, "Slot 3 Source", group=gS3)
+s3_mode = input.string("binary", "Slot 3 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS3)
+s3_bull = input.float(0.5, "Slot 3 Bull Threshold", step=0.1, group=gS3)
+s3_bear = input.float(-0.5, "Slot 3 Bear Threshold", step=0.1, group=gS3)
+s3_mid = input.float(0.0, "Slot 3 Midline", step=0.1, group=gS3)
+s3_invert = input.bool(false, "Invert Slot 3", group=gS3)
+s3_weight = input.float(0.75, "Slot 3 Weight", step=0.25, group=gS3)
+s3_req_l = input.bool(false, "Required For Long", group=gS3)
+s3_req_s = input.bool(false, "Required For Short", group=gS3)
+s3_veto_l = input.bool(false, "Veto Long When Bearish", group=gS3)
+s3_veto_s = input.bool(false, "Veto Short When Bullish", group=gS3)
+s3_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS3)
+
+// --- SLOT 4: EMA Bar ---
+gS4 = "04d) Slot 4 - EMA Bar"
+s4_enabled = input.bool(true, "Use Slot 4", group=gS4)
+s4_name = input.string("EMA Bar", "Slot 4 Name", group=gS4)
+s4_src = input.source(close, "Slot 4 Source", group=gS4)
+s4_mode = input.string("binary", "Slot 4 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS4)
+s4_bull = input.float(0.5, "Slot 4 Bull Threshold", step=0.1, group=gS4)
+s4_bear = input.float(-0.5, "Slot 4 Bear Threshold", step=0.1, group=gS4)
+s4_mid = input.float(0.0, "Slot 4 Midline", step=0.1, group=gS4)
+s4_invert = input.bool(false, "Invert Slot 4", group=gS4)
+s4_weight = input.float(1.50, "Slot 4 Weight", step=0.25, group=gS4)
+s4_req_l = input.bool(true, "Required For Long", group=gS4)
+s4_req_s = input.bool(true, "Required For Short", group=gS4)
+s4_veto_l = input.bool(false, "Veto Long When Bearish", group=gS4)
+s4_veto_s = input.bool(false, "Veto Short When Bullish", group=gS4)
+s4_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS4)
+
+// --- SLOT 5: Q_PILOT ---
+gS5 = "04e) Slot 5 - Q_PILOT"
+s5_enabled = input.bool(true, "Use Slot 5", group=gS5)
+s5_name = input.string("Q_PILOT", "Slot 5 Name", group=gS5)
+s5_src = input.source(close, "Slot 5 Source", group=gS5)
+s5_mode = input.string("binary", "Slot 5 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS5)
+s5_bull = input.float(0.5, "Slot 5 Bull Threshold", step=0.1, group=gS5)
+s5_bear = input.float(-0.5, "Slot 5 Bear Threshold", step=0.1, group=gS5)
+s5_mid = input.float(0.0, "Slot 5 Midline", step=0.1, group=gS5)
+s5_invert = input.bool(false, "Invert Slot 5", group=gS5)
+s5_weight = input.float(1.75, "Slot 5 Weight", step=0.25, group=gS5)
+s5_req_l = input.bool(false, "Required For Long", group=gS5)
+s5_req_s = input.bool(false, "Required For Short", group=gS5)
+s5_veto_l = input.bool(true, "Veto Long When Bearish", group=gS5)
+s5_veto_s = input.bool(true, "Veto Short When Bullish", group=gS5)
+s5_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS5)
+
+// --- SLOT 6: Extra ---
+gS6 = "04f) Slot 6 - Extra"
+s6_enabled = input.bool(false, "Use Slot 6", group=gS6)
+s6_name = input.string("Extra", "Slot 6 Name", group=gS6)
+s6_src = input.source(close, "Slot 6 Source", group=gS6)
+s6_mode = input.string("binary", "Slot 6 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS6)
+s6_bull = input.float(0.5, "Slot 6 Bull Threshold", step=0.1, group=gS6)
+s6_bear = input.float(-0.5, "Slot 6 Bear Threshold", step=0.1, group=gS6)
+s6_mid = input.float(0.0, "Slot 6 Midline", step=0.1, group=gS6)
+s6_invert = input.bool(false, "Invert Slot 6", group=gS6)
+s6_weight = input.float(1.00, "Slot 6 Weight", step=0.25, group=gS6)
+s6_req_l = input.bool(false, "Required For Long", group=gS6)
+s6_req_s = input.bool(false, "Required For Short", group=gS6)
+s6_veto_l = input.bool(false, "Veto Long When Bearish", group=gS6)
+s6_veto_s = input.bool(false, "Veto Short When Bullish", group=gS6)
+s6_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS6)
+
+// --- SLOT 7: Volume Ribbon Bull ---
+gS7 = "04g) Slot 7 - Vol Ribbon Bull"
+s7_enabled = input.bool(true, "Use Slot 7", group=gS7)
+s7_name = input.string("Vol Ribbon Bull", "Slot 7 Name", group=gS7)
+s7_src = input.source(close, "Slot 7 Source", group=gS7,
+     tooltip="Q_Pilot Volume Ribbon Bull source.")
+s7_mode = input.string("binary", "Slot 7 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS7)
+s7_bull = input.float(0.5, "Slot 7 Bull Threshold", step=0.1, group=gS7)
+s7_bear = input.float(-0.5, "Slot 7 Bear Threshold", step=0.1, group=gS7)
+s7_mid = input.float(0.0, "Slot 7 Midline", step=0.1, group=gS7)
+s7_invert = input.bool(false, "Invert Slot 7", group=gS7)
+s7_weight = input.float(1.25, "Slot 7 Weight", step=0.25, group=gS7)
+s7_req_l = input.bool(false, "Required For Long", group=gS7)
+s7_req_s = input.bool(false, "Required For Short", group=gS7)
+s7_veto_l = input.bool(false, "Veto Long When Bearish", group=gS7)
+s7_veto_s = input.bool(true, "Veto Short When Bullish", group=gS7,
+     tooltip="If Vol Ribbon Bull is active, veto short entries.")
+s7_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS7)
+
+// --- SLOT 8: Volume Ribbon Bear ---
+gS8 = "04h) Slot 8 - Vol Ribbon Bear"
+s8_enabled = input.bool(true, "Use Slot 8", group=gS8)
+s8_name = input.string("Vol Ribbon Bear", "Slot 8 Name", group=gS8)
+s8_src = input.source(close, "Slot 8 Source", group=gS8,
+     tooltip="Q_Pilot Volume Ribbon Bear source.")
+s8_mode = input.string("binary", "Slot 8 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS8)
+s8_bull = input.float(0.5, "Slot 8 Bull Threshold", step=0.1, group=gS8)
+s8_bear = input.float(-0.5, "Slot 8 Bear Threshold", step=0.1, group=gS8)
+s8_mid = input.float(0.0, "Slot 8 Midline", step=0.1, group=gS8)
+s8_invert = input.bool(false, "Invert Slot 8", group=gS8)
+s8_weight = input.float(1.25, "Slot 8 Weight", step=0.25, group=gS8)
+s8_req_l = input.bool(false, "Required For Long", group=gS8)
+s8_req_s = input.bool(false, "Required For Short", group=gS8)
+s8_veto_l = input.bool(true, "Veto Long When Bearish", group=gS8,
+     tooltip="If Vol Ribbon Bear is active, veto long entries.")
+s8_veto_s = input.bool(false, "Veto Short When Bullish", group=gS8)
+s8_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS8)
+
+// Scoring Thresholds
+gScoring = "04i) Scoring Thresholds"
+long_score_needed = input.float(4.0, "Long Score Threshold", step=0.25, group=gScoring)
+short_score_needed = input.float(-4.0, "Short Score Threshold", step=0.25, group=gScoring)
+min_bull_votes = input.int(3, "Min Bull Votes For Long", minval=0, maxval=8, group=gScoring)
+min_bear_votes = input.int(3, "Min Bear Votes For Short", minval=0, maxval=8, group=gScoring)
+
+
+// ============================================================================
+// 05) EXIT ENGINE
+// ============================================================================
+gUnits = "05a) Exit Units"
+exit_units = input.string("Ticks", "Exit Units", options=["Bricks", "Ticks"], group=gUnits,
+     tooltip="Bricks for Renko, Ticks for HA or time-based charts.")
+
+gTicks = "05b) Tick-Based Exits (ATM)"
+initial_sl_ticks = input.int(40, "Initial SL (ticks)", minval=1, group=gTicks)
+
+// ATM Multi-Target Configuration
+enable_atm_targets = input.bool(true, "Enable ATM Multi-Target Mode", group=gTicks,
+     tooltip="If ON: uses Target 1/2 TP values. If OFF: uses Take Profit (ticks) only.")
+target_1_tp_ticks = input.int(50, "Target 1 TP (ticks)", minval=1, group=gTicks,
+     tooltip="First target take profit. ATM: 50pts")
+target_1_qty = input.int(1, "Target 1 Qty", minval=1, group=gTicks)
+target_2_tp_ticks = input.int(125, "Target 2 TP (ticks)", minval=1, group=gTicks,
+     tooltip="Second target take profit. ATM: 125pts")
+target_2_qty = input.int(1, "Target 2 Qty", minval=1, group=gTicks)
+
+// Auto Breakeven (ATM)
+enable_auto_be = input.bool(true, "Enable Auto Breakeven", group=gTicks,
+     tooltip="Automatically move stop to break even + offset after hitting trigger.")
+auto_be_trigger_ticks = input.int(30, "Auto BE Trigger (ticks profit)", minval=1, group=gTicks,
+     tooltip="ATM: 30pts profit triggers BE move")
+auto_be_offset_ticks = input.int(10, "Auto BE Offset (ticks)", minval=0, group=gTicks,
+     tooltip="ATM: move SL to entry + 10pts")
+
+// Auto Trail (ATM - for Target 2)
+enable_auto_trail = input.bool(true, "Enable Auto Trail (Target 2)", group=gTicks,
+     tooltip="1-Step trailing stop for 2nd target. ATM: 20pt step, 30pt trigger")
+auto_trail_trigger_ticks = input.int(30, "Auto Trail Trigger (ticks profit)", minval=1, group=gTicks,
+     tooltip="ATM: 30pts profit triggers trailing")
+auto_trail_distance_ticks = input.int(20, "Auto Trail Distance (ticks)", minval=1, group=gTicks,
+     tooltip="ATM: 20pt trail step")
+
+// Legacy single-target fallback (if ATM disabled)
+trail_start_ticks = input.int(10, "Start Trailing After (ticks) [LEGACY]", minval=1, group=gTicks,
+     tooltip="Used only if ATM disabled.")
+trail_distance_ticks = input.int(20, "Trailing Distance (ticks) [LEGACY]", minval=1, group=gTicks)
+take_profit_ticks = input.int(50, "Take Profit (ticks) [LEGACY]", minval=1, group=gTicks)
+stop_loss_ticks = input.int(40, "Stop Loss (ticks) [LEGACY]", minval=1, group=gTicks)
+
+gBricks = "05c) Brick-Based Exits"
+brick_size = input.float(5.0, "Brick Size (must match chart)", minval=0.1, group=gBricks)
+initial_sl_bricks = input.int(2, "Initial SL (bricks)", minval=1, group=gBricks)
+trail_start_bricks = input.int(1, "Start Trailing After (bricks)", minval=1, group=gBricks)
+trail_distance_bricks = input.int(2, "Trailing Distance (bricks)", minval=1, group=gBricks)
+take_profit_bricks = input.int(2, "Take Profit (bricks)", minval=1, group=gBricks)
+stop_loss_bricks = input.int(2, "Stop Loss (bricks)", minval=1, group=gBricks)
+
+gExitSwitch = "05d) Exit Switches"
+enable_static_tp = input.bool(true, "Enable Static Take Profit", group=gExitSwitch)
+enable_static_sl = input.bool(true, "Enable Static SL (Overrides Trailing)", group=gExitSwitch,
+     tooltip="ATM: Static SL enabled for both targets at 40pts")
+freeze_trail_at_be = input.bool(false, "Freeze Trailing At Break Even", group=gExitSwitch)
+be_offset_ticks = input.int(10, "Break Even Offset (ticks)", minval=0, group=gExitSwitch,
+     tooltip="ATM: 10pts (used by auto-BE logic)")
+
+
+// ============================================================================
+// 06) TRADING WINDOWS & DAY FILTER
+// ============================================================================
+gWindows = "06) Trading Windows (NY Time)"
+
+// Day of week filter (1=Sunday, 2=Monday, ..., 7=Saturday)
+allow_sunday = input.bool(false, "Allow Sunday (1)", group=gWindows)
+allow_monday = input.bool(true, "Allow Monday (2)", group=gWindows)
+allow_tuesday = input.bool(true, "Allow Tuesday (3)", group=gWindows)
+allow_wednesday = input.bool(true, "Allow Wednesday (4)", group=gWindows)
+allow_thursday = input.bool(true, "Allow Thursday (5)", group=gWindows)
+allow_friday = input.bool(true, "Allow Friday (6)", group=gWindows)
+allow_saturday = input.bool(false, "Allow Saturday (7)", group=gWindows)
+
+// Trading day check
+is_trading_day = (dayofweek == 1 and allow_sunday) or
+                 (dayofweek == 2 and allow_monday) or
+                 (dayofweek == 3 and allow_tuesday) or
+                 (dayofweek == 4 and allow_wednesday) or
+                 (dayofweek == 5 and allow_thursday) or
+                 (dayofweek == 6 and allow_friday) or
+                 (dayofweek == 7 and allow_saturday)
+
+use_trading_windows = input.bool(true, "Use Trading Windows", group=gWindows)
+
+enable_evening = input.bool(true, "Enable Evening Window", group=gWindows)
+evening_session = input.session("1800-2359", "Evening Window", group=gWindows)
+flatten_evening = input.bool(true, "Flatten At End Of Evening", group=gWindows)
+
+enable_overnight = input.bool(true, "Enable Overnight Window", group=gWindows)
+overnight_session = input.session("0000-0800", "Overnight Window", group=gWindows)
+flatten_overnight = input.bool(true, "Flatten At End Of Overnight", group=gWindows)
+
+enable_ny = input.bool(true, "Enable NY Session Window", group=gWindows)
+ny_session = input.session("0930-1600", "NY Session", group=gWindows)
+flatten_ny = input.bool(true, "Flatten At End Of NY", group=gWindows)
+
+
+// ============================================================================
+// 07) DAY LIMITS
+// ============================================================================
+gLimits = "07) Day Limits"
+enable_profit_limit = input.bool(false, "Enable Profit Limit", group=gLimits)
+profit_limit_usd = input.float(2000.0, "Profit Limit (USD)", minval=0.0, group=gLimits)
+enable_loss_limit = input.bool(false, "Enable Loss Limit", group=gLimits)
+loss_limit_usd = input.float(1000.0, "Loss Limit (USD)", minval=0.0, group=gLimits)
+enable_trade_limit = input.bool(false, "Enable Trade Count Limit", group=gLimits)
+max_trades_per_day = input.int(6, "Max Trades Per Day", minval=1, group=gLimits)
+
+gCooldown = "07b) Cooldown"
+bar_cooldown = input.int(2, "Cooldown Bars After Order", minval=0, maxval=50, group=gCooldown)
+enable_sl_cooldown = input.bool(false, "Enable Same-Direction Cooldown After SL", group=gCooldown)
+sl_cooldown_bars = input.int(3, "SL Cooldown Bars", minval=1, group=gCooldown)
+
+
+// ============================================================================
+// 08) QUANTLYNK ALERTS
+// ============================================================================
+gQL = "08) QuantLynk"
+qv_user_id = input.string("", "QuantLynk User ID", group=gQL)
+alert_id = input.string("", "QuantLynk Alert ID", group=gQL)
+
+// ATM Multi-Lot Configuration
+use_atm_multi_lot = input.bool(true, "Use ATM Multi-Lot Entry (2x1)", group=gQL,
+     tooltip="Entry: 2 contracts (1+1). Two separate targets with OSO brackets.")
+entry_qty = input.int(2, "Entry Quantity (total)", minval=1, group=gQL,
+     tooltip="ATM: 2 contracts")
+
+// Target 1: 50pt TP, 40pt SL
+target_1_tp_pts = input.float(50.0, "Target 1 TP (points)", minval=0.0, group=gQL)
+target_1_sl_pts = input.float(40.0, "Target 1 SL (points)", minval=0.0, group=gQL)
+target_1_label = input.string("YM Con 1", "Target 1 Label (strategy name)", group=gQL)
+
+// Target 2: 125pt TP, 40pt SL, with auto-trail
+target_2_tp_pts = input.float(125.0, "Target 2 TP (points)", minval=0.0, group=gQL)
+target_2_sl_pts = input.float(40.0, "Target 2 SL (points)", minval=0.0, group=gQL)
+target_2_label = input.string("YM Con 2", "Target 2 Label (strategy name)", group=gQL,
+     tooltip="Uses auto-trail: 1-step, 20pt distance, 30pt trigger")
+
+use_oso = input.bool(true, "Use OSO Bracket", group=gQL,
+     tooltip="ATM: Enabled for both targets")
+
+// JSON Builders (ATM Multi-Target)
+f_market_json(_action, _qty_str, _comment) =>
+    '{"qv_user_id":"' + qv_user_id + '","alert_id":"' + alert_id + '","quantity":"' + _qty_str + '","order_type":"market","price":{{close}},"action":"' + _action + '","comment":"' + _comment + '"}'
+
+f_oso_json(_action, _qty_str, _target, _stop, _comment) =>
+    '{"qv_user_id":"' + qv_user_id + '","alert_id":"' + alert_id + '","quantity":"' + _qty_str + '","order_type":"market","action":"' + _action + '","price":{{close}},"oso":"true","target_price":"' + str.tostring(_target) + '","stop_price":"' + str.tostring(_stop) + '","comment":"' + _comment + '"}'
+
+// ATM Multi-Lot: Two separate OSO brackets
+f_atm_target1_json(_action, _comment) =>
+    '{"qv_user_id":"' + qv_user_id + '","alert_id":"' + alert_id + '","quantity":"1","order_type":"market","action":"' + _action + '","price":{{close}},"oso":"true","target_price":"' + str.tostring(strategy.position_avg_price + target_1_tp_pts) + '","stop_price":"' + str.tostring(strategy.position_avg_price - target_1_sl_pts) + '","comment":"Target 1: ' + _comment + ' - ' + target_1_label + '"}'
+
+f_atm_target2_json(_action, _comment) =>
+    '{"qv_user_id":"' + qv_user_id + '","alert_id":"' + alert_id + '","quantity":"1","order_type":"market","action":"' + _action + '","price":{{close}},"oso":"true","target_price":"' + str.tostring(strategy.position_avg_price + target_2_tp_pts) + '","stop_price":"' + str.tostring(strategy.position_avg_price - target_2_sl_pts) + '","comment":"Target 2: ' + _comment + ' - ' + target_2_label + ' (auto-trail 1-step, 20pt)"}'
+
+f_flatten_json(_comment) =>
+    '{"qv_user_id":"' + qv_user_id + '","alert_id":"' + alert_id + '","action":"flatten","comment":"' + _comment + '"}'
+
+
+// ============================================================================
+// 09) VISUALS
+// ============================================================================
+gVisual = "09) Visuals"
+show_signal_markers = input.bool(true, "Show Signal Markers", group=gVisual)
+show_dashboard = input.bool(true, "Show Dashboard", group=gVisual)
+dashboard_mode = input.string("Full", "Dashboard Mode", options=["Full", "Compact"], group=gVisual,
+     tooltip="Full: 19 rows with emojis. Compact: 10 rows, text only, no emojis.")
+table_opacity = input.int(30, "Table Opacity (%)", minval=0, maxval=95, group=gVisual,
+     tooltip="0 = transparent, 95 = opaque. Adjust for chart visibility.")
+
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// --- Tick/Brick Helpers ---
+_tick = syminfo.mintick
+f_bricks_to_price(b) => b * brick_size
+f_ticks_to_price(t) => t * _tick
+f_initial_sl() => exit_units == "Bricks" ? f_bricks_to_price(initial_sl_bricks) : f_ticks_to_price(initial_sl_ticks)
+f_trail_distance() => exit_units == "Bricks" ? f_bricks_to_price(trail_distance_bricks) : f_ticks_to_price(trail_distance_ticks)
+f_static_tp() => exit_units == "Bricks" ? f_bricks_to_price(take_profit_bricks) : f_ticks_to_price(take_profit_ticks)
+f_static_sl() => exit_units == "Bricks" ? f_bricks_to_price(stop_loss_bricks) : f_ticks_to_price(stop_loss_ticks)
+f_trail_start_threshold() => exit_units == "Bricks" ? trail_start_bricks : trail_start_ticks
+
+f_trail_moved(entry, peak, trough, isLong) =>
+    float move = na
+    if exit_units == "Bricks"
+        move := isLong ? (peak - entry) / brick_size : (entry - trough) / brick_size
+    else
+        move := isLong ? (peak - entry) / _tick : (entry - trough) / _tick
+    move
+
+// --- Extend Helper ---
+f_extend(sig, n) =>
+    bs = ta.barssince(sig)
+    n <= 0 ? sig : (sig or (not na(bs) and bs <= n))
+
+
+// ============================================================================
+// MARKER GATE LOGIC
+// ============================================================================
+
+// Marker events
+peak_event = f_event(peak_src, peak_mode, peak_threshold)
+bottom_event = f_event(bottom_src, bottom_mode, bottom_threshold)
+
+// Marker memory
+var int last_peak_bar = na
+var float last_peak_price = na
+var float last_peak_center = na
+var float last_peak_upper = na
+var float last_peak_position = na
+
+var int last_bottom_bar = na
+var float last_bottom_price = na
+var float last_bottom_center = na
+var float last_bottom_lower = na
+var float last_bottom_position = na
+
+if peak_event
+    last_peak_bar := bar_index
+    last_peak_price := close
+    last_peak_center := qband_center_src
+    last_peak_upper := qband_upper_src
+    float peak_den = math.max(math.abs(last_peak_upper - last_peak_center), _tick)
+    last_peak_position := (last_peak_price - last_peak_center) / peak_den
+
+if bottom_event
+    last_bottom_bar := bar_index
+    last_bottom_price := close
+    last_bottom_center := qband_center_src
+    last_bottom_lower := qband_lower_src
+    float bottom_den = math.max(math.abs(last_bottom_center - last_bottom_lower), _tick)
+    last_bottom_position := (last_bottom_center - last_bottom_price) / bottom_den
+
+// Hold windows (with extend)
+int total_hold = marker_hold_bars + marker_extend_bars
+bool peak_hold_open = not na(last_peak_bar) and (bar_index - last_peak_bar < total_hold)
+bool bottom_hold_open = not na(last_bottom_bar) and (bar_index - last_bottom_bar < total_hold)
+
+// Qband validation
+bool peak_side_ok = not require_correct_side or (not na(last_peak_price) and not na(last_peak_center) and last_peak_price > last_peak_center)
+bool peak_outer_ok = not require_outer_band or (not na(last_peak_position) and last_peak_position >= min_outer_fraction)
+bool bottom_side_ok = not require_correct_side or (not na(last_bottom_price) and not na(last_bottom_center) and last_bottom_price < last_bottom_center)
+bool bottom_outer_ok = not require_outer_band or (not na(last_bottom_position) and last_bottom_position >= min_outer_fraction)
+
+float qband_width = math.abs(qband_upper_src - qband_lower_src)
+bool qband_width_ok = min_qband_width <= 0 or qband_width >= min_qband_width
+
+// Marker gate status
+bool short_marker_gate_ok = peak_hold_open and peak_side_ok and peak_outer_ok and qband_width_ok
+bool long_marker_gate_ok = bottom_hold_open and bottom_side_ok and bottom_outer_ok and qband_width_ok
+
+// One-shot tracking
+var int last_short_signal_marker_bar = na
+var int last_long_signal_marker_bar = na
+bool short_marker_fresh = not na(last_peak_bar) and last_short_signal_marker_bar != last_peak_bar
+bool long_marker_fresh = not na(last_bottom_bar) and last_long_signal_marker_bar != last_bottom_bar
+
+
+// ============================================================================
+// SLOT STATES & SCORING
+// ============================================================================
+
+// Compute raw states
+int s1_state_raw = f_state(s1_src, s1_mode, s1_bull, s1_bear, s1_mid, s1_invert)
+int s2_state_raw = f_state(s2_src, s2_mode, s2_bull, s2_bear, s2_mid, s2_invert)
+int s3_state_raw = f_state(s3_src, s3_mode, s3_bull, s3_bear, s3_mid, s3_invert)
+int s4_state_raw = f_state(s4_src, s4_mode, s4_bull, s4_bear, s4_mid, s4_invert)
+int s5_state_raw = f_state(s5_src, s5_mode, s5_bull, s5_bear, s5_mid, s5_invert)
+int s6_state_raw = f_state(s6_src, s6_mode, s6_bull, s6_bear, s6_mid, s6_invert)
+int s7_state_raw = f_state(s7_src, s7_mode, s7_bull, s7_bear, s7_mid, s7_invert)
+int s8_state_raw = f_state(s8_src, s8_mode, s8_bull, s8_bear, s8_mid, s8_invert)
+
+// Apply extend (for bull state = 1)
+var int s1_bull_ext = 0
+var int s2_bull_ext = 0
+var int s3_bull_ext = 0
+var int s4_bull_ext = 0
+var int s5_bull_ext = 0
+var int s6_bull_ext = 0
+var int s7_bull_ext = 0
+var int s8_bull_ext = 0
+
+s1_bull_ext := s1_state_raw == 1 ? s1_extend : math.max(s1_bull_ext - 1, 0)
+s2_bull_ext := s2_state_raw == 1 ? s2_extend : math.max(s2_bull_ext - 1, 0)
+s3_bull_ext := s3_state_raw == 1 ? s3_extend : math.max(s3_bull_ext - 1, 0)
+s4_bull_ext := s4_state_raw == 1 ? s4_extend : math.max(s4_bull_ext - 1, 0)
+s5_bull_ext := s5_state_raw == 1 ? s5_extend : math.max(s5_bull_ext - 1, 0)
+s6_bull_ext := s6_state_raw == 1 ? s6_extend : math.max(s6_bull_ext - 1, 0)
+s7_bull_ext := s7_state_raw == 1 ? s7_extend : math.max(s7_bull_ext - 1, 0)
+s8_bull_ext := s8_state_raw == 1 ? s8_extend : math.max(s8_bull_ext - 1, 0)
+
+// Apply extend (for bear state = -1)
+var int s1_bear_ext = 0
+var int s2_bear_ext = 0
+var int s3_bear_ext = 0
+var int s4_bear_ext = 0
+var int s5_bear_ext = 0
+var int s6_bear_ext = 0
+var int s7_bear_ext = 0
+var int s8_bear_ext = 0
+
+s1_bear_ext := s1_state_raw == -1 ? s1_extend : math.max(s1_bear_ext - 1, 0)
+s2_bear_ext := s2_state_raw == -1 ? s2_extend : math.max(s2_bear_ext - 1, 0)
+s3_bear_ext := s3_state_raw == -1 ? s3_extend : math.max(s3_bear_ext - 1, 0)
+s4_bear_ext := s4_state_raw == -1 ? s4_extend : math.max(s4_bear_ext - 1, 0)
+s5_bear_ext := s5_state_raw == -1 ? s5_extend : math.max(s5_bear_ext - 1, 0)
+s6_bear_ext := s6_state_raw == -1 ? s6_extend : math.max(s6_bear_ext - 1, 0)
+s7_bear_ext := s7_state_raw == -1 ? s7_extend : math.max(s7_bear_ext - 1, 0)
+s8_bear_ext := s8_state_raw == -1 ? s8_extend : math.max(s8_bear_ext - 1, 0)
+
+// Final states with extend
+int s1_state = s1_state_raw == 1 ? 1 : s1_bull_ext > 0 ? 1 : s1_state_raw == -1 ? -1 : s1_bear_ext > 0 ? -1 : 0
+int s2_state = s2_state_raw == 1 ? 1 : s2_bull_ext > 0 ? 1 : s2_state_raw == -1 ? -1 : s2_bear_ext > 0 ? -1 : 0
+int s3_state = s3_state_raw == 1 ? 1 : s3_bull_ext > 0 ? 1 : s3_state_raw == -1 ? -1 : s3_bear_ext > 0 ? -1 : 0
+int s4_state = s4_state_raw == 1 ? 1 : s4_bull_ext > 0 ? 1 : s4_state_raw == -1 ? -1 : s4_bear_ext > 0 ? -1 : 0
+int s5_state = s5_state_raw == 1 ? 1 : s5_bull_ext > 0 ? 1 : s5_state_raw == -1 ? -1 : s5_bear_ext > 0 ? -1 : 0
+int s6_state = s6_state_raw == 1 ? 1 : s6_bull_ext > 0 ? 1 : s6_state_raw == -1 ? -1 : s6_bear_ext > 0 ? -1 : 0
+int s7_state = s7_state_raw == 1 ? 1 : s7_bull_ext > 0 ? 1 : s7_state_raw == -1 ? -1 : s7_bear_ext > 0 ? -1 : 0
+int s8_state = s8_state_raw == 1 ? 1 : s8_bull_ext > 0 ? 1 : s8_state_raw == -1 ? -1 : s8_bear_ext > 0 ? -1 : 0
+
+// Total score
+float total_score = f_score(s1_enabled, s1_state, s1_weight) +
+     f_score(s2_enabled, s2_state, s2_weight) +
+     f_score(s3_enabled, s3_state, s3_weight) +
+     f_score(s4_enabled, s4_state, s4_weight) +
+     f_score(s5_enabled, s5_state, s5_weight) +
+     f_score(s6_enabled, s6_state, s6_weight) +
+     f_score(s7_enabled, s7_state, s7_weight) +
+     f_score(s8_enabled, s8_state, s8_weight)
+
+// Vote counts
+int bull_votes = (s1_enabled and s1_state == 1 ? 1 : 0) +
+     (s2_enabled and s2_state == 1 ? 1 : 0) +
+     (s3_enabled and s3_state == 1 ? 1 : 0) +
+     (s4_enabled and s4_state == 1 ? 1 : 0) +
+     (s5_enabled and s5_state == 1 ? 1 : 0) +
+     (s6_enabled and s6_state == 1 ? 1 : 0) +
+     (s7_enabled and s7_state == 1 ? 1 : 0) +
+     (s8_enabled and s8_state == 1 ? 1 : 0)
+
+int bear_votes = (s1_enabled and s1_state == -1 ? 1 : 0) +
+     (s2_enabled and s2_state == -1 ? 1 : 0) +
+     (s3_enabled and s3_state == -1 ? 1 : 0) +
+     (s4_enabled and s4_state == -1 ? 1 : 0) +
+     (s5_enabled and s5_state == -1 ? 1 : 0) +
+     (s6_enabled and s6_state == -1 ? 1 : 0) +
+     (s7_enabled and s7_state == -1 ? 1 : 0) +
+     (s8_enabled and s8_state == -1 ? 1 : 0)
+
+// Required checks
+bool long_required_ok = (not s1_enabled or not s1_req_l or s1_state == 1) and
+     (not s2_enabled or not s2_req_l or s2_state == 1) and
+     (not s3_enabled or not s3_req_l or s3_state == 1) and
+     (not s4_enabled or not s4_req_l or s4_state == 1) and
+     (not s5_enabled or not s5_req_l or s5_state == 1) and
+     (not s6_enabled or not s6_req_l or s6_state == 1) and
+     (not s7_enabled or not s7_req_l or s7_state == 1) and
+     (not s8_enabled or not s8_req_l or s8_state == 1)
+
+bool short_required_ok = (not s1_enabled or not s1_req_s or s1_state == -1) and
+     (not s2_enabled or not s2_req_s or s2_state == -1) and
+     (not s3_enabled or not s3_req_s or s3_state == -1) and
+     (not s4_enabled or not s4_req_s or s4_state == -1) and
+     (not s5_enabled or not s5_req_s or s5_state == -1) and
+     (not s6_enabled or not s6_req_s or s6_state == -1) and
+     (not s7_enabled or not s7_req_s or s7_state == -1) and
+     (not s8_enabled or not s8_req_s or s8_state == -1)
+
+// Veto checks
+bool long_veto = (s1_enabled and s1_veto_l and s1_state == -1) or
+     (s2_enabled and s2_veto_l and s2_state == -1) or
+     (s3_enabled and s3_veto_l and s3_state == -1) or
+     (s4_enabled and s4_veto_l and s4_state == -1) or
+     (s5_enabled and s5_veto_l and s5_state == -1) or
+     (s6_enabled and s6_veto_l and s6_state == -1) or
+     (s7_enabled and s7_veto_l and s7_state == -1) or
+     (s8_enabled and s8_veto_l and s8_state == -1)
+
+bool short_veto = (s1_enabled and s1_veto_s and s1_state == 1) or
+     (s2_enabled and s2_veto_s and s2_state == 1) or
+     (s3_enabled and s3_veto_s and s3_state == 1) or
+     (s4_enabled and s4_veto_s and s4_state == 1) or
+     (s5_enabled and s5_veto_s and s5_state == 1) or
+     (s6_enabled and s6_veto_s and s6_state == 1) or
+     (s7_enabled and s7_veto_s and s7_state == 1) or
+     (s8_enabled and s8_veto_s and s8_state == 1)
+
+// All slots disabled check (for minimal gate mode)
+bool all_slots_disabled = not s1_enabled and not s2_enabled and not s3_enabled and
+     not s4_enabled and not s5_enabled and not s6_enabled and
+     not s7_enabled and not s8_enabled
+
+
+// ============================================================================
+// CHOP / NEUTRAL GATE
+// ============================================================================
+
+// Internal chop detection
+bool internal_chop = bull_votes >= chop_min_opposing_votes and
+     bear_votes >= chop_min_opposing_votes and
+     math.abs(total_score) <= chop_max_abs_score
+
+// External neutral detection
+bool external_neutral_raw = switch neutral_active_mode
+    "Source = 0" => neutral_src == 0
+    "Source ≤ 0" => neutral_src <= 0
+    "Source < 0" => neutral_src < 0
+    "Source > 0" => neutral_src > 0
+    "NA or 0" => na(neutral_src) or neutral_src == 0
+    => false
+
+// Neutral latch logic
+var bool neutral_latched = false
+if neutral_latch
+    if external_neutral_raw
+        neutral_latched := true
+    if peak_event or bottom_event
+        neutral_latched := false
+
+bool external_neutral = external_neutral_raw or (neutral_latch and neutral_latched)
+
+// Final chop lockout
+bool chop_lockout = switch chop_gate_mode
+    "Internal" => internal_chop
+    "External" => external_neutral
+    "Disabled" => false
+    => false
+
+
+// ============================================================================
+// SESSION FILTERS
+// ============================================================================
+
+ev_time = time(timeframe.period, evening_session, "America/New_York")
+ov_time = time(timeframe.period, overnight_session, "America/New_York")
+ny_time = time(timeframe.period, ny_session, "America/New_York")
+
+bool in_evening_raw = not na(ev_time)
+bool in_overnight_raw = not na(ov_time)
+bool in_ny_raw = not na(ny_time)
+
+bool in_evening = use_trading_windows and enable_evening and is_trading_day ? in_evening_raw : false
+bool in_overnight = use_trading_windows and enable_overnight and is_trading_day ? in_overnight_raw : false
+bool in_ny = use_trading_windows and enable_ny and is_trading_day ? in_ny_raw : false
+bool in_any_window = use_trading_windows ? (in_evening or in_overnight or in_ny) : is_trading_day
+
+bool end_of_evening = use_trading_windows and enable_evening and bar_index > 0 and in_evening[1] and not in_evening
+bool end_of_overnight = use_trading_windows and enable_overnight and bar_index > 0 and in_overnight[1] and not in_overnight
+bool end_of_ny = use_trading_windows and enable_ny and bar_index > 0 and in_ny[1] and not in_ny
+
+
+// ============================================================================
+// DAY LIMITS
+// ============================================================================
+
+var int daily_trade_count = 0
+var int last_trade_day = na
+var float day_start_net = na
+var bool day_halted = false
+var string halt_reason = ""
+var int last_long_sl_bar = na
+var int last_short_sl_bar = na
+var int last_trade_bar = na
+
+today = timestamp("GMT-0", year, month, dayofmonth)
+is_new_day = na(last_trade_day) or (today != last_trade_day)
+
+if is_new_day
+    last_trade_day := today
+    daily_trade_count := 0
+    day_start_net := strategy.netprofit
+    day_halted := false
+    halt_reason := ""
+    last_long_sl_bar := na
+    last_short_sl_bar := na
+
+day_pnl = strategy.netprofit - nz(day_start_net, strategy.netprofit)
+
+// Check profit/loss limits
+if not day_halted
+    if enable_profit_limit and day_pnl >= profit_limit_usd
+        day_halted := true
+        halt_reason := "PROFIT LIMIT"
+        strategy.close_all(comment="Daily Profit Limit", alert_message=f_flatten_json("limit_profit"))
+    if enable_loss_limit and day_pnl <= -loss_limit_usd
+        day_halted := true
+        halt_reason := "LOSS LIMIT"
+        strategy.close_all(comment="Daily Loss Limit", alert_message=f_flatten_json("limit_loss"))
+
+// Cooldown checks
+bool cooldown_ok = na(last_trade_bar) or (bar_index - last_trade_bar >= bar_cooldown)
+bool long_sl_cooldown_active = enable_sl_cooldown and not na(last_long_sl_bar) and (bar_index - last_long_sl_bar < sl_cooldown_bars)
+bool short_sl_cooldown_active = enable_sl_cooldown and not na(last_short_sl_bar) and (bar_index - last_short_sl_bar < sl_cooldown_bars)
+
+bool can_trade_today = (not enable_trade_limit or daily_trade_count < max_trades_per_day) and not day_halted
+bool can_enter = can_trade_today and in_any_window and cooldown_ok
+bool can_enter_long = can_enter and not long_sl_cooldown_active
+bool can_enter_short = can_enter and not short_sl_cooldown_active
+
+
+// ============================================================================
+// ENTRY CONDITIONS
+// ============================================================================
+
+// Standard confluence entry
+bool raw_long = allow_longs and
+     (require_marker_gate ? (long_marker_gate_ok and long_marker_fresh) : true) and
+     long_required_ok and
+     not long_veto and
+     bull_votes >= min_bull_votes and
+     total_score >= long_score_needed and
+     not chop_lockout
+
+bool raw_short = allow_shorts and
+     (require_marker_gate ? (short_marker_gate_ok and short_marker_fresh) : true) and
+     short_required_ok and
+     not short_veto and
+     bear_votes >= min_bear_votes and
+     total_score <= short_score_needed and
+     not chop_lockout
+
+// Minimal gate mode (exhaustion + Qband side only when all slots OFF)
+bool minimal_long = enable_minimal_gate and all_slots_disabled and
+     long_marker_gate_ok and long_marker_fresh and bottom_side_ok and
+     not chop_lockout
+
+bool minimal_short = enable_minimal_gate and all_slots_disabled and
+     short_marker_gate_ok and short_marker_fresh and peak_side_ok and
+     not chop_lockout
+
+// Final signals
+bool long_signal = (raw_long or minimal_long) and can_enter_long
+bool short_signal = (raw_short or minimal_short) and can_enter_short
+
+// Position state
+bool is_flat = strategy.position_size == 0
+bool is_long = strategy.position_size > 0
+bool is_short = strategy.position_size < 0
+
+
+// ============================================================================
+// ENTRY EXECUTION
+// ============================================================================
+
+string entry_long_msg = use_oso ? f_oso_json("buy", str.tostring(qty), close + target_pts, close - stop_pts, "long_entry") : f_market_json("buy", str.tostring(qty), "long_entry")
+string entry_short_msg = use_oso ? f_oso_json("sell", str.tostring(qty), close - target_pts, close + stop_pts, "short_entry") : f_market_json("sell", str.tostring(qty), "short_entry")
+string exit_long_msg = f_market_json("sell", "{{strategy.order.contracts}}", "exit_long")
+string exit_short_msg = f_market_json("buy", "{{strategy.order.contracts}}", "exit_short")
+
+if long_signal and is_flat
+    strategy.entry("Long", strategy.long, qty=entry_qty, comment="Long", alert_message=entry_long_msg)
+    alert(entry_long_msg, alert.freq_once_per_bar)
+    last_trade_bar := bar_index
+    daily_trade_count += 1
+    last_long_signal_marker_bar := last_bottom_bar
+    if enable_trade_limit and daily_trade_count >= max_trades_per_day and not day_halted
+        day_halted := true
+        halt_reason := "TRADE LIMIT"
+
+if short_signal and is_flat
+    strategy.entry("Short", strategy.short, qty=entry_qty, comment="Short", alert_message=entry_short_msg)
+    alert(entry_short_msg, alert.freq_once_per_bar)
+    last_trade_bar := bar_index
+    daily_trade_count += 1
+    last_short_signal_marker_bar := last_peak_bar
+    if enable_trade_limit and daily_trade_count >= max_trades_per_day and not day_halted
+        day_halted := true
+        halt_reason := "TRADE LIMIT"
+
+// Flip on opposite
+if flip_on_opposite
+    if long_signal and is_short
+        strategy.close("Short", comment="Flip to Long", alert_message=exit_short_msg)
+        alert(exit_short_msg, alert.freq_once_per_bar)
+        last_trade_bar := bar_index
+        if allow_reentry_same_bar
+            strategy.entry("Long", strategy.long, qty=entry_qty, comment="Long", alert_message=entry_long_msg)
+            alert(entry_long_msg, alert.freq_once_per_bar)
+            daily_trade_count += 1
+            last_long_signal_marker_bar := last_bottom_bar
+
+    if short_signal and is_long
+        strategy.close("Long", comment="Flip to Short", alert_message=exit_long_msg)
+        alert(exit_long_msg, alert.freq_once_per_bar)
+        last_trade_bar := bar_index
+        if allow_reentry_same_bar
+            strategy.entry("Short", strategy.short, qty=entry_qty, comment="Short", alert_message=entry_short_msg)
+            alert(entry_short_msg, alert.freq_once_per_bar)
+            daily_trade_count += 1
+            last_short_signal_marker_bar := last_peak_bar
+
+
+// ============================================================================
+// EXIT ENGINE (Trailing Stop Logic)
+// ============================================================================
+
+var float entry_price = na
+var float trail_stop = na
+var float peak_price = na
+var float trough_price = na
+var bool trail_frozen_at_be = false
+var int prev_pos_sign = 0
+
+cur_pos_sign = strategy.position_size > 0 ? 1 : strategy.position_size < 0 ? -1 : 0
+direction_changed = cur_pos_sign != 0 and prev_pos_sign != 0 and cur_pos_sign != prev_pos_sign
+skip_exit_checks = direction_changed
+
+if direction_changed
+    entry_price := na
+    trail_stop := na
+    peak_price := na
+    trough_price := na
+    trail_frozen_at_be := false
+
+if strategy.opentrades > 0
+    if na(entry_price)
+        entry_price := strategy.position_avg_price
+        peak_price := close
+        trough_price := close
+        trail_stop := na
+        trail_frozen_at_be := false
+
+    peak_price := math.max(peak_price, close)
+    trough_price := math.min(trough_price, close)
+
+    // Long position trailing
+    if strategy.position_size > 0
+        moved = f_trail_moved(entry_price, peak_price, trough_price, true)
+        be_lock_price = entry_price + f_ticks_to_price(be_offset_ticks)
+
+        if enable_static_sl
+            trail_stop := entry_price - f_static_sl()
+        else
+            if trail_frozen_at_be
+                trail_stop := be_lock_price
+            else
+                if moved >= f_trail_start_threshold()
+                    new_ts = peak_price - f_trail_distance()
+                    trail_stop := na(trail_stop) ? new_ts : math.max(trail_stop, new_ts)
+                    if freeze_trail_at_be and trail_stop >= be_lock_price
+                        trail_stop := be_lock_price
+                        trail_frozen_at_be := true
+                else
+                    trail_stop := entry_price - f_initial_sl()
+
+        if not skip_exit_checks and close <= trail_stop
+            last_long_sl_bar := bar_index
+            strategy.close("Long", comment=enable_static_sl ? "Static SL" : "Trail SL",
+                 alert_message=exit_long_msg)
+            alert(exit_long_msg, alert.freq_once_per_bar)
+
+        if enable_static_tp and not skip_exit_checks and close >= entry_price + f_static_tp()
+            strategy.close("Long", comment="Static TP", alert_message=exit_long_msg)
+            alert(exit_long_msg, alert.freq_once_per_bar)
+
+    // Short position trailing
+    if strategy.position_size < 0
+        moved = f_trail_moved(entry_price, peak_price, trough_price, false)
+        be_lock_price = entry_price - f_ticks_to_price(be_offset_ticks)
+
+        if enable_static_sl
+            trail_stop := entry_price + f_static_sl()
+        else
+            if trail_frozen_at_be
+                trail_stop := be_lock_price
+            else
+                if moved >= f_trail_start_threshold()
+                    new_ts = trough_price + f_trail_distance()
+                    trail_stop := na(trail_stop) ? new_ts : math.min(trail_stop, new_ts)
+                    if freeze_trail_at_be and trail_stop <= be_lock_price
+                        trail_stop := be_lock_price
+                        trail_frozen_at_be := true
+                else
+                    trail_stop := entry_price + f_initial_sl()
+
+        if not skip_exit_checks and close >= trail_stop
+            last_short_sl_bar := bar_index
+            strategy.close("Short", comment=enable_static_sl ? "Static SL" : "Trail SL",
+                 alert_message=exit_short_msg)
+            alert(exit_short_msg, alert.freq_once_per_bar)
+
+        if enable_static_tp and not skip_exit_checks and close <= entry_price - f_static_tp()
+            strategy.close("Short", comment="Static TP", alert_message=exit_short_msg)
+            alert(exit_short_msg, alert.freq_once_per_bar)
+
+if strategy.opentrades == 0
+    entry_price := na
+    trail_stop := na
+    peak_price := na
+    trough_price := na
+    trail_frozen_at_be := false
+
+
+// ============================================================================
+// SESSION FLATTEN
+// ============================================================================
+
+if flatten_evening and end_of_evening
+    strategy.close_all(comment="Flatten: Evening End", alert_message=f_flatten_json("session_evening"))
+
+if flatten_overnight and end_of_overnight
+    strategy.close_all(comment="Flatten: Overnight End", alert_message=f_flatten_json("session_overnight"))
+
+if flatten_ny and end_of_ny
+    strategy.close_all(comment="Flatten: NY End", alert_message=f_flatten_json("session_ny"))
+
+prev_pos_sign := cur_pos_sign
+
+
+// ============================================================================
+// VISUALS
+// ============================================================================
+
+// Signal markers
+plotshape(show_signal_markers and long_signal and is_flat, title="Long Signal",
+     style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="LONG")
+plotshape(show_signal_markers and short_signal and is_flat, title="Short Signal",
+     style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="SHORT")
+
+// Halt background
+var color halt_bg = na
+halt_bg := na
+if day_halted
+    halt_bg := halt_reason == "PROFIT LIMIT" ? color.new(color.green, 85) :
+               halt_reason == "LOSS LIMIT" ? color.new(color.red, 85) : color.new(color.orange, 85)
+bgcolor(halt_bg)
+
+// Session end markers
+plotshape(end_of_evening, title="End Evening", style=shape.flag, location=location.top, size=size.tiny, color=color.purple, text="EoE")
+plotshape(end_of_overnight, title="End Overnight", style=shape.flag, location=location.top, size=size.tiny, color=color.blue, text="EoO")
+plotshape(end_of_ny, title="End NY", style=shape.flag, location=location.top, size=size.tiny, color=color.orange, text="EoN")
+
+
+// ============================================================================
+// DASHBOARD
+// ============================================================================
+
+// Full mode: emojis | Compact mode: text only (no emojis)
+f_state_text(s) => 
+    dashboard_mode == "Compact" ? (s == 1 ? "B" : s == -1 ? "S" : "N") :
+    (s == 1 ? "✅" : s == -1 ? "❌" : "⚪")
+
+f_peak_text() =>
+    dashboard_mode == "Compact" ? (short_marker_gate_ok and short_marker_fresh ? "P" : "") :
+    (short_marker_gate_ok and short_marker_fresh ? "🏔️" : " ")
+
+f_bottom_text() =>
+    dashboard_mode == "Compact" ? (long_marker_gate_ok and long_marker_fresh ? "B" : "") :
+    (long_marker_gate_ok and long_marker_fresh ? "🍑" : " ")
+
+f_chop_text() =>
+    dashboard_mode == "Compact" ? (chop_lockout ? "C" : "✓") :
+    (chop_lockout ? "🔪" : "👍")
+
+// Dynamic table size based on mode
+int table_rows = dashboard_mode == "Compact" ? 10 : 19
+var table t = table.new(position.top_right, 2, table_rows, border_width=1)
+
+color table_bg_off = color.new(color.gray, math.min(95, table_opacity + 30))
+color table_header_bg = color.new(color.rgb(36, 76, 140), table_opacity)
+color table_value_bg = color.new(color.rgb(20, 24, 30), table_opacity)
+
+// Trading days display string
+string trading_days_str = (allow_sunday ? "Su " : "") + 
+                          (allow_monday ? "Mo " : "") + 
+                          (allow_tuesday ? "Tu " : "") + 
+                          (allow_wednesday ? "We " : "") + 
+                          (allow_thursday ? "Th " : "") + 
+                          (allow_friday ? "Fr " : "") + 
+                          (allow_saturday ? "Sa" : "")
+
+color peak_bg = short_marker_gate_ok ? (short_marker_fresh ? color.new(color.red, table_opacity) : color.new(color.gray, table_opacity + 10)) : table_bg_off
+color bottom_bg = long_marker_gate_ok ? (long_marker_fresh ? color.new(color.green, table_opacity) : color.new(color.gray, table_opacity + 10)) : table_bg_off
+
+if barstate.islast and show_dashboard
+    table.clear(t, 0, 0, 1, table_rows - 1)
+
+    table.cell(t, 0, 0, "Hybrid Router v1.1", text_color=color.white, bgcolor=table_header_bg)
+    table.cell(t, 1, 0, str.tostring(total_score, "#.##"), text_color=color.white, bgcolor=table_value_bg)
+
+    if dashboard_mode == "Full"
+        // === FULL MODE (19 rows with emojis) ===
+        table.cell(t, 0, 1, s1_name, text_color=color.white)
+        table.cell(t, 1, 1, s1_enabled ? f_state_text(s1_state) : "OFF", bgcolor=s1_enabled ? color.new(s1_state == 1 ? color.green : s1_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 2, s2_name, text_color=color.white)
+        table.cell(t, 1, 2, s2_enabled ? f_state_text(s2_state) : "OFF", bgcolor=s2_enabled ? color.new(s2_state == 1 ? color.green : s2_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 3, s3_name, text_color=color.white)
+        table.cell(t, 1, 3, s3_enabled ? f_state_text(s3_state) : "OFF", bgcolor=s3_enabled ? color.new(s3_state == 1 ? color.green : s3_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 4, s4_name, text_color=color.white)
+        table.cell(t, 1, 4, s4_enabled ? f_state_text(s4_state) : "OFF", bgcolor=s4_enabled ? color.new(s4_state == 1 ? color.green : s4_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 5, s5_name, text_color=color.white)
+        table.cell(t, 1, 5, s5_enabled ? f_state_text(s5_state) : "OFF", bgcolor=s5_enabled ? color.new(s5_state == 1 ? color.green : s5_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 6, s6_name, text_color=color.white)
+        table.cell(t, 1, 6, s6_enabled ? f_state_text(s6_state) : "OFF", bgcolor=s6_enabled ? color.new(s6_state == 1 ? color.green : s6_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 7, s7_name, text_color=color.white)
+        table.cell(t, 1, 7, s7_enabled ? f_state_text(s7_state) : "OFF", bgcolor=s7_enabled ? color.new(s7_state == 1 ? color.green : s7_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 8, s8_name, text_color=color.white)
+        table.cell(t, 1, 8, s8_enabled ? f_state_text(s8_state) : "OFF", bgcolor=s8_enabled ? color.new(s8_state == 1 ? color.green : s8_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+
+        table.cell(t, 0, 9, "Votes", text_color=color.white)
+        table.cell(t, 1, 9, "B " + str.tostring(bull_votes) + " / S " + str.tostring(bear_votes), text_color=color.white, bgcolor=table_value_bg)
+
+        table.cell(t, 0, 10, "VOL PEAK Gate", text_color=color.white)
+        table.cell(t, 1, 10, f_peak_text(), bgcolor=peak_bg)
+
+        table.cell(t, 0, 11, "VOL BOTTOM Gate", text_color=color.white)
+        table.cell(t, 1, 11, f_bottom_text(), bgcolor=bottom_bg)
+
+        table.cell(t, 0, 12, "Qband Width", text_color=color.white)
+        table.cell(t, 1, 12, qband_width_ok ? "OK" : "NARROW", bgcolor=qband_width_ok ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
+
+        table.cell(t, 0, 13, "Chop Gate", text_color=color.white)
+        table.cell(t, 1, 13, f_chop_text(), bgcolor=chop_lockout ? color.new(color.red, table_opacity) : color.new(color.green, table_opacity))
+
+        table.cell(t, 0, 14, "Trading Days", text_color=color.white)
+        table.cell(t, 1, 14, trading_days_str, text_color=color.white, bgcolor=is_trading_day ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
+
+        table.cell(t, 0, 15, "Session", text_color=color.white)
+        table.cell(t, 1, 15, in_any_window ? "ON" : "OFF", bgcolor=in_any_window ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
+
+        table.cell(t, 0, 16, "Day P&L", text_color=color.white)
+        table.cell(t, 1, 16, "$" + str.tostring(day_pnl, "#.##"), text_color=day_pnl >= 0 ? color.green : color.red, bgcolor=table_value_bg)
+
+        table.cell(t, 0, 17, "Trades Today", text_color=color.white)
+        table.cell(t, 1, 17, str.tostring(daily_trade_count) + (enable_trade_limit ? "/" + str.tostring(max_trades_per_day) : ""), bgcolor=table_value_bg)
+
+        string decision = is_long ? "IN LONG" : is_short ? "IN SHORT" : long_signal ? "→ LONG" : short_signal ? "→ SHORT" : day_halted ? "HALTED" : "WAIT"
+        color decision_bg = decision == "→ LONG" or decision == "IN LONG" ? color.new(color.green, table_opacity) :
+             decision == "→ SHORT" or decision == "IN SHORT" ? color.new(color.red, table_opacity) :
+             decision == "HALTED" ? color.new(color.orange, table_opacity) : color.new(color.gray, table_opacity + 12)
+        table.cell(t, 0, 18, "Decision", text_color=color.white)
+        table.cell(t, 1, 18, decision, bgcolor=decision_bg)
+
+    else  // Compact Mode
+        // === COMPACT MODE (10 rows, text only, no emojis) ===
+        table.cell(t, 0, 1, "Scores", text_color=color.white)
+        table.cell(t, 1, 1, "B " + str.tostring(bull_votes) + " / S " + str.tostring(bear_votes), text_color=color.white, bgcolor=table_value_bg)
+
+        table.cell(t, 0, 2, "Markers", text_color=color.white)
+        table.cell(t, 1, 2, (short_marker_fresh ? "P" : "") + (long_marker_fresh ? "B" : ""), text_color=color.white,
+             bgcolor=peak_bg if short_marker_fresh else bottom_bg if long_marker_fresh else table_bg_off)
+
+        table.cell(t, 0, 3, "Qband", text_color=color.white)
+        table.cell(t, 1, 3, qband_width_ok ? "OK" : "NARROW", bgcolor=qband_width_ok ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
+
+        table.cell(t, 0, 4, "Chop", text_color=color.white)
+        table.cell(t, 1, 4, chop_lockout ? "C" : "OK", bgcolor=chop_lockout ? color.new(color.red, table_opacity) : color.new(color.green, table_opacity))
+
+        table.cell(t, 0, 5, "Days", text_color=color.white)
+        table.cell(t, 1, 5, trading_days_str, text_color=color.white, bgcolor=is_trading_day ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
+
+        table.cell(t, 0, 6, "Session", text_color=color.white)
+        table.cell(t, 1, 6, in_any_window ? "ON" : "OFF", bgcolor=in_any_window ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
+
+        table.cell(t, 0, 7, "P&L", text_color=color.white)
+        table.cell(t, 1, 7, "$" + str.tostring(day_pnl, "#.##"), text_color=day_pnl >= 0 ? color.green : color.red, bgcolor=table_value_bg)
+
+        table.cell(t, 0, 8, "Trades", text_color=color.white)
+        table.cell(t, 1, 8, str.tostring(daily_trade_count) + (enable_trade_limit ? "/" + str.tostring(max_trades_per_day) : ""), bgcolor=table_value_bg)
+
+        string decision_compact = is_long ? "LONG" : is_short ? "SHORT" : long_signal ? "→L" : short_signal ? "→S" : day_halted ? "HALT" : "WAIT"
+        color decision_bg_compact = decision_compact == "LONG" or decision_compact == "→L" ? color.new(color.green, table_opacity) :
+             decision_compact == "SHORT" or decision_compact == "→S" ? color.new(color.red, table_opacity) :
+             decision_compact == "HALT" ? color.new(color.orange, table_opacity) : color.new(color.gray, table_opacity + 12)
+        table.cell(t, 0, 9, "Decision", text_color=color.white)
+        table.cell(t, 1, 9, decision_compact, bgcolor=decision_bg_compact)
+
+
+// ============================================================================
+// PLOTS
+// ============================================================================
+
+plot(total_score, "Total Score", color=color.white, linewidth=2, display=display.pane)
+hline(long_score_needed, "Long Threshold", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+hline(short_score_needed, "Short Threshold", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+hline(0, "Zero", color=color.new(color.gray, 70))
