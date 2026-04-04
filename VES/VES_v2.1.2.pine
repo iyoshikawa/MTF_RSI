@@ -3,6 +3,23 @@
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
 // Optimized for Renko charts; Heiken-Ashi supported via HA chart type
 // ============================================================================
+// v2.1.2 CHANGES:
+//   - NEW confluence: Multi-TF Volume ROC (M). Pulls Volume ROC from a fixed
+//     higher timeframe via request.security() and compares it to the current
+//     TF's ROC. Two outcome states:
+//       • Both decelerating → genuine exhaustion (+1 confluence, letter "M")
+//       • Only current TF decelerating → pullback only (0 confluence)
+//     Higher TF ROC uses same smoothing length as current TF ROC (vol_roc_len)
+//     but a separate user-configurable lookback (mtf_roc_lookback, default 20).
+//     Higher TF is user-selectable (mtf_roc_tf, default "15").
+//     req_M toggle (default OFF) promotes to hard gate.
+//     Always active regardless of vol_method selection — MTF ROC is an
+//     independent confluence layer, not tied to the Method 2 ROC path.
+//     All HTF variables declared before use; no new plot() calls added.
+//   - conf_max bumped 9 → 10.
+//   - Dashboard: Row 11 MTF ROC, rows 12-21 renumbered.
+//   - Debug gate row 21 gains M: status.
+// ============================================================================
 // v2.1.1 CHANGES:
 //   - NEW confluence: Spread Efficiency Qualifier (Q). On the current bar:
 //     volume above its SMA AND candle spread below its SMA → exhaustion candle.
@@ -144,7 +161,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.1.1"
+VER = "2.1.2"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -242,7 +259,11 @@ wave_climax_mult = input.float(1.2, "Wave: Climax Multiplier", group=grp_vol, mi
 wave_min_volume = input.float(0.0, "Wave: Min Wave Volume (0=off)", group=grp_vol, minval=0.0, maxval=100000.0, step=100.0,
      tooltip="Minimum cumulative volume a wave must have to qualify for exhaustion/climax detection. Filters out low-volume noise waves.\n0 = no filter (all waves qualify). For YM/NQ, try 500–2000 depending on session.\n(Default: 0)")
 
-grp_ema = "📈 Moving Averages (OHLC4)"
+grp_mtf = "📡 Multi-TF Volume ROC (MTF)"
+mtf_roc_tf = input.timeframe("15", "Higher Timeframe", group=grp_mtf,
+     tooltip="The higher timeframe from which volume ROC is pulled via request.security().\n\nThis gives the broader market's volume momentum. When BOTH this TF and the current chart TF show decelerating volume ROC, it confirms genuine exhaustion across timeframes — not just a local noise dip.\n\nUse a TF meaningfully larger than your chart: on a 1–3m HA chart try 15 or 30. On a 5m chart try 60.\n\nDo NOT use the same timeframe as your chart — that defeats the purpose.\n(Default: 15)")
+mtf_roc_lookback = input.int(20, "HTF ROC Lookback (bars)", group=grp_mtf, minval=5, maxval=200,
+     tooltip="SMA lookback used to compute the slow volume average on the higher timeframe. The HTF ROC = (fast SMA − slow SMA) / slow SMA × 100, using the same vol_roc_len as the fast SMA.\n\nLarger values = smoother, slower-adapting HTF baseline. Smaller = more reactive.\n\nConservative: 30 (stable HTF read). Aggressive: 10 (faster response).\n(Default: 20)")
 ema_fast_len  = input.int(21,  "EMA Fast (21)",  group=grp_ema, tooltip="Fast EMA on OHLC4 source. Part of the 21/34/50 trend stack. HMA 20 crossing this EMA triggers the trend-warning gate.\nConservative: 21 (standard). Aggressive: 18 (faster response).\n(Default: 21)")
 ema_mid_len   = input.int(34,  "EMA Mid (34)",   group=grp_ema, tooltip="Mid EMA on OHLC4 source. Middle of the 21/34/50 alignment stack.\n(Default: 34)")
 ema_slow_len  = input.int(50,  "EMA Slow (50)",  group=grp_ema, tooltip="Slow EMA on OHLC4 source. Anchor of the trend stack. Replaces the old 233 macro — the 50 provides sufficient trend context on Renko without lagging excessively.\nConservative: 50 (standard). Aggressive: 44 (faster unstack detection).\n(Default: 50)")
@@ -607,6 +628,59 @@ roc_vol_bottom = flip_to_bull and has_vol and (vol_decelerating or vol_below_avg
 roc_vol_peak   = flip_to_bear and has_vol and (vol_decelerating or vol_below_avg)
 
 // ============================================================================
+// MULTI-TF VOLUME ROC (v2.1.2 — Confluence "M")
+// ============================================================================
+// Pulls volume ROC from a fixed higher timeframe and compares it to the
+// current TF's ROC. Independent of the vol_method selection — always computed.
+//
+// States:
+//   Both TFs decelerating → genuine exhaustion across timeframes → M = true
+//   Only current TF decelerating → local pullback, not HTF-confirmed → M = false
+//   Only HTF decelerating → structural slowdown, current bar not yet there → M = false
+//
+// HTF ROC uses the same fast-SMA length (vol_roc_len) as the current TF for
+// apples-to-apples comparison, but its slow SMA uses mtf_roc_lookback so the
+// HTF baseline can be tuned independently.
+//
+// request.security() note: lookahead_off is intentional here — we want the
+// confirmed HTF bar's volume, not the still-forming one, to avoid lookahead bias.
+// ============================================================================
+
+// --- HTF volume ROC via request.security() ---
+// Declare HTF intermediates as na-initialised floats before the security call
+// to satisfy Pine's forward-reference requirement.
+var float htf_vol_sma_fast = na
+var float htf_vol_sma_slow = na
+var float htf_roc_val      = na
+
+// Pull the completed HTF bar's volume ROC. The function is evaluated on the
+// higher TF chart and the result is projected down to the current TF.
+htf_roc_calc(fast_len, slow_len) =>
+    htf_vol_safe = nz(volume, 0.0)
+    _fast = ta.sma(htf_vol_safe, fast_len)
+    _slow = ta.sma(htf_vol_safe, slow_len)
+    _roc  = _slow > 0 ? ((_fast - _slow) / _slow) * 100 : 0.0
+    [_fast, _slow, _roc]
+
+[_htf_fast, _htf_slow, _htf_roc] = request.security(
+     cleanTicker, mtf_roc_tf,
+     htf_roc_calc(vol_roc_len, mtf_roc_lookback),
+     gaps    = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+htf_vol_sma_fast := _htf_fast
+htf_vol_sma_slow := _htf_slow
+htf_roc_val      := _htf_roc
+
+// HTF ROC decelerating: current HTF ROC < prior HTF ROC bar
+htf_roc_decelerating = htf_roc_val < htf_roc_val[1]
+htf_below_avg        = htf_vol_sma_fast <= htf_vol_sma_slow
+
+// Confluence condition: BOTH timeframes show decelerating volume
+// Current TF uses vol_decelerating (already computed in Method 2 block)
+mtf_roc_ok = (vol_decelerating or vol_below_avg) and (htf_roc_decelerating or htf_below_avg)
+
+// ============================================================================
 // METHOD 3: Z-Score
 // ============================================================================
 vol_sma_z = ta.sma(vol_safe, vol_lookback)
@@ -742,6 +816,8 @@ req_R = input.bool(true,  "Require Effort vs Result (R)", group=grp_req,
      tooltip="When ON, signals require the counter-wave's volume-per-point ratio (effort/result) to be ≥ the dominant wave's equivalent ratio × the multiplier.\n\nA counter-wave that burned disproportionately more volume per unit of price confirms exhaustion and the mean-reversion premise.\n\nTurn OFF to allow signals regardless of E/R relationship.\n(Default: ON — core confluence)")
 req_Q = input.bool(false, "Require Spread Efficiency (Q)", group=grp_req,
      tooltip="When ON, signals require the current bar to be a spread efficiency candle: volume above its SMA AND spread (high-low) below its SMA.\n\nThis confirms absorption on the signal bar itself — the market is expending effort without producing price movement, the textbook exhaustion signature on Heiken-Ashi.\n\nKeep OFF to use Q as a bonus confluence score only. Turn ON for maximum precision at the cost of trade frequency.\n(Default: OFF)")
+req_M = input.bool(false, "Require Multi-TF ROC (M)", group=grp_req,
+     tooltip="When ON, signals require BOTH the current timeframe's volume ROC AND the higher timeframe's volume ROC to be decelerating simultaneously.\n\nBoth decelerating = genuine exhaustion confirmed across timeframes.\nOnly current TF decelerating = local pullback, not confirmed by the bigger picture.\n\nKeep OFF to score M as a bonus confluence only. Turn ON when you want the strongest multi-TF exhaustion confirmation.\n(Default: OFF)")
 
 // --- BB: confluence only (v2.0.6) — still computed for +1 confluence score ---
 // bb_ok_long/short retained for confluence counter; no longer used as a gate.
@@ -785,6 +861,9 @@ er_gate_short = not req_R or er_short_ok
 // Spread Efficiency gate (v2.1.1): requires absorption candle on the signal bar
 seq_gate = not req_Q or seq_ok
 
+// Multi-TF ROC gate (v2.1.2): requires both TFs showing decelerating volume
+mtf_gate = not req_M or mtf_roc_ok
+
 // Chop gate (v2.0.0)
 chop_gate = not debug_require_chop or not is_choppy
 
@@ -795,8 +874,8 @@ session_gate = not debug_require_session or in_session
 // flip_to_bull/bear is always the base requirement (v2.0.6).
 // bb_gate removed — BB is now confluence only.
 // v2.0.8: Debug mode now truly bypasses ALL gates — flip only, no session check.
-vol_bottom = debug_mode ? flip_to_bull : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and er_gate_long  and seq_gate and session_gate_long  and adr_ok and chop_gate)
-vol_peak   = debug_mode ? flip_to_bear : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and er_gate_short and seq_gate and session_gate_short and adr_ok and chop_gate)
+vol_bottom = debug_mode ? flip_to_bull : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and er_gate_long  and seq_gate and mtf_gate and session_gate_long  and adr_ok and chop_gate)
+vol_peak   = debug_mode ? flip_to_bear : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and er_gate_short and seq_gate and mtf_gate and session_gate_short and adr_ok and chop_gate)
 
 // ============================================================================
 // CONFLUENCE COUNTER (7 factors — v2.0.0)
@@ -836,10 +915,13 @@ conf_er_short = er_short_ok ? 1 : 0
 // 9. Spread Efficiency Qualifier (v2.1.1)
 conf_seq = seq_ok ? 1 : 0
 
+// 10. Multi-TF Volume ROC (v2.1.2)
+conf_mtf = mtf_roc_ok ? 1 : 0
+
 // Total confluence count
-conf_total_long  = conf_flip_long  + conf_vol_long  + conf_bb_long  + conf_session + conf_hma_long  + conf_ema_long  + conf_xwave_long  + conf_er_long  + conf_seq
-conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_session + conf_hma_short + conf_ema_short + conf_xwave_short + conf_er_short + conf_seq
-conf_max = 9
+conf_total_long  = conf_flip_long  + conf_vol_long  + conf_bb_long  + conf_session + conf_hma_long  + conf_ema_long  + conf_xwave_long  + conf_er_long  + conf_seq + conf_mtf
+conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_session + conf_hma_short + conf_ema_short + conf_xwave_short + conf_er_short + conf_seq + conf_mtf
+conf_max = 10
 
 // Exhaustion label text (method-specific value)
 wave_decl_or_clmx_bear = wave_bear_exhausted ? "WvDecl" : wave_bear_climax ? "WvClmx" : ""
@@ -1070,8 +1152,8 @@ candle_col = not color_candles ? na :
 barcolor(candle_col)
 
 // --- Tooltip confluence breakdown (pre-built to reduce label line length) ---
-conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗") + " R:" + (conf_er_long  > 0 ? "✓" : "✗") + " Q:" + (conf_seq > 0 ? "✓" : "✗")
-conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗") + " R:" + (conf_er_short > 0 ? "✓" : "✗") + " Q:" + (conf_seq > 0 ? "✓" : "✗")
+conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗") + " R:" + (conf_er_long  > 0 ? "✓" : "✗") + " Q:" + (conf_seq > 0 ? "✓" : "✗") + " M:" + (conf_mtf > 0 ? "✓" : "✗")
+conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗") + " R:" + (conf_er_short > 0 ? "✓" : "✗") + " Q:" + (conf_seq > 0 ? "✓" : "✗") + " M:" + (conf_mtf > 0 ? "✓" : "✗")
 
 // --- VOL PEAK / VOL BOTTOM Labels ---
 if show_labels and vol_bottom
@@ -1344,16 +1426,26 @@ if show_dash and barstate.islast
     table.cell(dash, 1, 10, xwave_pass ? "✓ WEAK" : xwave_text != "—" ? "· CONTESTED" : "· NO STACK", bgcolor=xwave_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 10, xwave_text, bgcolor=bg_row, text_color=xwave_pass ? color.green : color.gray, text_size=size.small)
 
-    // Row 11: Spread Efficiency Qualifier (v2.1.1)
+    // Row 11: Multi-TF Volume ROC (v2.1.2)
+    mtf_cur_state  = vol_decelerating ? "↓DECEL" : vol_below_avg ? "↓BELOW" : "→FLAT"
+    mtf_htf_state  = htf_roc_decelerating ? "↓DECEL" : htf_below_avg ? "↓BELOW" : "→FLAT"
+    mtf_col        = mtf_roc_ok ? color.new(color.green, 50) : color.new(color.gray, 70)
+    mtf_status     = mtf_roc_ok ? "✓ BOTH DECEL" : (vol_decelerating or vol_below_avg) ? "· CUR ONLY" : (htf_roc_decelerating or htf_below_avg) ? "· HTF ONLY" : "· NEITHER"
+    mtf_detail     = "C:" + mtf_cur_state + " H:" + mtf_htf_state + " [" + mtf_roc_tf + "]"
+    table.cell(dash, 0, 11, "MTF ROC", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 11, mtf_status, bgcolor=mtf_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 11, mtf_detail, bgcolor=bg_row, text_color=mtf_roc_ok ? color.green : color.gray, text_size=size.tiny)
+
+    // Row 12: Spread Efficiency Qualifier (v2.1.1)
     seq_col    = seq_ok ? color.new(color.green, 50) : color.new(color.gray, 70)
     seq_vol_txt    = has_vol ? str.tostring(vol_safe, "#,##0") + " vs " + str.tostring(vol_sma_seq, "#,##0") : "no vol"
     seq_sprd_txt   = str.tostring(spread_current, "#.##") + " vs " + str.tostring(spread_sma_seq, "#.##")
     seq_status = seq_ok ? "✓ ABSORB" : vol_safe > vol_sma_seq ? "· SPRD HIGH" : spread_current < spread_sma_seq ? "· VOL LOW" : "· NO SIGNAL"
-    table.cell(dash, 0, 11, "Sprd Effic", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 11, seq_status, bgcolor=seq_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 11, "V:" + seq_vol_txt, bgcolor=bg_row, text_color=seq_ok ? color.green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 12, "Sprd Effic", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 12, seq_status, bgcolor=seq_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 12, "V:" + seq_vol_txt, bgcolor=bg_row, text_color=seq_ok ? color.green : color.gray, text_size=size.tiny)
 
-    // Row 12: Effort vs Result (v2.1.0)
+    // Row 13: Effort vs Result (v2.1.0)
     er_pass     = er_long_ok or er_short_ok
     er_col      = er_pass ? color.new(color.green, 50) : bear_er_ratio > 0.0 or bull_er_ratio > 0.0 ? color.new(color.gray, 60) : color.new(color.gray, 80)
     er_src_lbl  = use_body_disp ? "Body" : "Wick"
@@ -1361,50 +1453,50 @@ if show_dash and barstate.islast
     er_bull_txt = bull_er_ratio > 0.0 ? str.tostring(bull_er_ratio, "0.0") : "—"
     er_status   = er_long_ok ? "✓ BEAR EXHSTD" : er_short_ok ? "✓ BULL EXHSTD" : bear_er_ratio > 0.0 or bull_er_ratio > 0.0 ? "· LOW EFFORT" : "· NO DATA"
     er_detail   = "B:" + er_bear_txt + " U:" + er_bull_txt + " [" + er_src_lbl + "]"
-    table.cell(dash, 0, 12, "E/R Ratio", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 12, er_status, bgcolor=er_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 12, er_detail, bgcolor=bg_row, text_color=er_pass ? color.green : color.gray, text_size=size.small)
+    table.cell(dash, 0, 13, "E/R Ratio", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 13, er_status, bgcolor=er_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 13, er_detail, bgcolor=bg_row, text_color=er_pass ? color.green : color.gray, text_size=size.small)
 
-    // Row 13: Confluence Counter (9 factors — v2.1.1)
+    // Row 14: Confluence Counter (10 factors — v2.1.2)
     conf_display = math.max(conf_total_long, conf_total_short)
-    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "Hpx" : "···") + (conf_ema_long > 0 ? "E" : "·") + (conf_xwave_long > 0 ? "W" : "·") + (conf_er_long > 0 ? "R" : "·") + (conf_seq > 0 ? "Q" : "·")
-    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "Hpx" : "···") + (conf_ema_short > 0 ? "E" : "·") + (conf_xwave_short > 0 ? "W" : "·") + (conf_er_short > 0 ? "R" : "·") + (conf_seq > 0 ? "Q" : "·")
+    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "Hpx" : "···") + (conf_ema_long > 0 ? "E" : "·") + (conf_xwave_long > 0 ? "W" : "·") + (conf_er_long > 0 ? "R" : "·") + (conf_seq > 0 ? "Q" : "·") + (conf_mtf > 0 ? "M" : "·")
+    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "Hpx" : "···") + (conf_ema_short > 0 ? "E" : "·") + (conf_xwave_short > 0 ? "W" : "·") + (conf_er_short > 0 ? "R" : "·") + (conf_seq > 0 ? "Q" : "·") + (conf_mtf > 0 ? "M" : "·")
     conf_col = conf_display >= 6 ? color.new(color.green, 40) : conf_display >= 4 ? color.new(color.yellow, 50) : color.new(color.gray, 70)
     conf_dir_text = conf_total_long > conf_total_short ? "L:" + conf_detail_l : conf_total_short > conf_total_long ? "S:" + conf_detail_s : "L:" + conf_detail_l
-    table.cell(dash, 0, 13, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 13, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 13, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 14, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 14, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 14, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 14: Win Rate
+    // Row 15: Win Rate
     wr_col = win_rate >= 60 ? color.new(color.green, 50) : win_rate >= 50 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 14, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 14, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 14, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 15, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 15, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 15, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 15: Net P&L
+    // Row 16: Net P&L
     pnl_col = net_pnl >= 0 ? color.new(color.green, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 15, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 15, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 15, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
+    table.cell(dash, 0, 16, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 16, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 16, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
 
-    // Row 16: Profit Factor
+    // Row 17: Profit Factor
     pf_col = pf >= 2.0 ? color.new(color.green, 50) : pf >= 1.5 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 16, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 16, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 16, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 17, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 17, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 17, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 17: Expectancy
+    // Row 18: Expectancy
     exp_col = expectancy > 0 ? color.new(color.green, 60) : color.new(color.red, 60)
-    table.cell(dash, 0, 17, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 17, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 17, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 18, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 18, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 18, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 18: Avg W/L
-    table.cell(dash, 0, 18, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 18, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 18, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
+    // Row 19: Avg W/L
+    table.cell(dash, 0, 19, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 19, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 19, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
 
-    // Row 19: Volume Method + Stats (v2.0.7: enhanced for Wave Compare)
+    // Row 20: Volume Method + Stats (v2.0.7: enhanced for Wave Compare)
     wave_exh_clx = (wave_use_exhaustion ? "E" : "·") + (wave_use_climax ? "C" : "·")
     wave_trigger = use_wave ? (wave_bear_exhausted or wave_bull_exhausted ? "EXH" : wave_bear_climax or wave_bull_climax ? "CLX" : "—") : ""
     wave_info = use_wave ? wave_trigger + " B:" + str.tostring(prev_bull_wave, "#,##0") + " S:" + str.tostring(prev_bear_wave, "#,##0") : ""
@@ -1414,15 +1506,15 @@ if show_dash and barstate.islast
     vol_pass = vol_bottom_raw or vol_peak_raw
     vol_col  = vol_pass ? color.new(color.green, 50) : color.new(color.gray, 70)
     vol_method_detail = use_wave ? vol_method_label + " [" + wave_exh_clx + "]" : vol_method_label
-    table.cell(dash, 0, 19, "Vol " + vol_method_detail, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 19, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 19, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 20, "Vol " + vol_method_detail, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 20, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 20, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 20: Debug Gate Diagnostic
+    // Row 21: Debug Gate Diagnostic
     if debug_mode
-        table.cell(dash, 0, 20, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 1, 20, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 2, 20, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
+        table.cell(dash, 0, 21, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 1, 21, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 2, 21, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
     else
         flip_ok = flip_to_bull or flip_to_bear
         raw_flip = raw_flip_bull or raw_flip_bear
@@ -1435,12 +1527,13 @@ if show_dash and barstate.islast
         dbg_xwv  = not req_W ? "OFF" : (xwave_long_ok or xwave_short_ok ? "✓" : "✗")
         dbg_er   = not req_R ? "OFF" : (er_long_ok or er_short_ok ? "✓" : "✗")
         dbg_seq  = not req_Q ? "OFF" : (seq_ok ? "✓" : "✗")
+        dbg_mtf  = not req_M ? "OFF" : (mtf_roc_ok ? "✓" : "✗")
         dbg_sess = not req_S or not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
         dbg_adr  = not enable_adr_filter ? "OFF" : (adr_ok ? "✓" : "✗" + str.tostring(adr_pct_used, "0") + "%")
         dbg_chop = not debug_require_chop ? "OFF" : (not is_choppy ? "✓" : "✗" + str.tostring(avg_wave_len, "0.1") + "b")
-        table.cell(dash, 0, 20, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 1, 20, "F:" + dbg_flip + " V:" + dbg_vol + " BB(c):" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 2, 20, "Hpx:" + dbg_hpx + " E:" + dbg_ema + " W:" + dbg_xwv + " R:" + dbg_er + " Q:" + dbg_seq + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 0, 21, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 21, "F:" + dbg_flip + " V:" + dbg_vol + " BB(c):" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 21, "Hpx:" + dbg_hpx + " E:" + dbg_ema + " W:" + dbg_xwv + " R:" + dbg_er + " Q:" + dbg_seq + " M:" + dbg_mtf + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
