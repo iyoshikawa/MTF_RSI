@@ -1,7 +1,26 @@
 // ============================================================================
-// Volume Exhaustion Strategy [VES v2.0.9]
+// Volume Exhaustion Strategy [VES v2.1.0]
 // Mean-reversion on volume exhaustion with Wave/ROC/Z-Score detection
-// Optimized for Renko charts, works on any chart type
+// Optimized for Renko charts; Heiken-Ashi supported via HA chart type
+// ============================================================================
+// v2.1.0 CHANGES:
+//   - NEW confluence: Effort vs Result (R). Compares the counter-wave's
+//     volume-per-point ratio (effort/result) against the dominant wave's
+//     equivalent ratio. A counter-wave that burned disproportionately more
+//     volume per unit of price movement confirms exhaustion and strengthens
+//     the mean-reversion premise.
+//     • Long: prev bear wave E/R ≥ prev bull wave E/R × er_mult
+//     • Short: prev bull wave E/R ≥ prev bear wave E/R × er_mult
+//     Price displacement source is user-selectable:
+//       - Body |open-close|: cleaner on Heiken-Ashi (default)
+//       - Wick high-low: full range, more conservative
+//     req_R defaults ON — treated as a core confluence from day one.
+//     NOTE: current implementation is absolute comparison (counter vs dominant).
+//     TODO: upgrade to comparative mode (counter E/R vs its own rolling
+//     historical average) in a future version for adaptive thresholding.
+//   - conf_max bumped 7 → 8.
+//   - Dashboard: confluence detail strings gain "R" letter; debug gate row
+//     gains "R:" status cell; Row 11 reflects new conf_max.
 // ============================================================================
 // v2.0.9 CHANGES:
 //   - NEW: Signal Router — hidden meta-signals that bundle all longs and all
@@ -113,7 +132,7 @@
 //   - All new thresholds exposed as inputs with conservative/aggressive tooltips.
 // ============================================================================
 //@version=6
-VER = "2.0.9"
+VER = "2.1.0"
 strategy("Volume Exhaustion Strategy [VES v" + VER + "]",
      overlay          = true,
      pyramiding       = 2,
@@ -253,6 +272,12 @@ chop_min_avg = input.float(5.0, "Min Avg Wave Length (bricks)", group=grp_chop, 
 grp_xwave = "⚖️ Cross-Wave Volume Ratio"
 xwave_threshold = input.float(0.50, "Max Counter-Wave Ratio", group=grp_xwave, minval=0.20, maxval=0.90, step=0.05,
      tooltip="When EMAs are stacked, this compares the counter-trend wave's volume to the dominant wave's volume. If the counter-wave is ≤ this ratio, the pop/dip was weak — adds +1 confluence confirming the dominant side still controls.\n\nExample at 0.50: In a bear stack, if the bullish pop had ≤50% of the prior bearish push's volume, the pop was hollow → confirms short bias.\n\nThis is a CONFLUENCE (adds to score), not a gate (does not block signals).\nConservative: 0.40 (only extremely weak counter-waves count). Aggressive: 0.65 (more lenient).\n(Default: 0.50)")
+
+grp_er = "📐 Effort vs Result (E/R)"
+er_range_source = input.string("Body (|open-close|)", "Price Displacement Source", options=["Body (|open-close|)", "Wick (high-low)"], group=grp_er,
+     tooltip="How to measure the 'Result' (price displacement) of each wave.\n\nBody |open-close|: Cumulative body size per wave. Cleaner on Heiken-Ashi since wicks can be noise — recommended default for HA charts.\n\nWick high-low: Full bar range per wave. More conservative — captures all price movement including wicks.\n\n(Default: Body)")
+er_mult = input.float(1.0, "E/R Ratio Multiplier", group=grp_er, minval=0.5, maxval=3.0, step=0.1,
+     tooltip="The counter-wave's effort/result ratio must be ≥ this multiple of the dominant wave's ratio to qualify.\n\n1.0 = any higher ratio counts (counter burned more vol/pt than dominant).\n1.2 = counter must be 20% more inefficient than dominant (stricter).\n1.5 = counter must be 50% more inefficient (very selective).\n\nConservative: 1.3. Aggressive: 1.0.\n(Default: 1.0)")
 
 grp_session = "⏰ Session Filter"
 use_session = input.bool(true, "Enable Session Filter", group=grp_session, tooltip="When enabled, signals only fire during configured trading windows.\n(Default: true)")
@@ -488,16 +513,38 @@ var float prev_bear_wave    = 0.0
 var float prev2_bull_wave   = 0.0
 var float prev2_bear_wave   = 0.0
 
+// --- Wave Price Displacement Accumulators (v2.1.0 — Effort vs Result) ---
+// Track cumulative price displacement per wave in parallel with volume.
+// Body: |open - close| per bar — recommended for Heiken-Ashi (wick noise filtered).
+// Wick: high - low per bar — full range, more conservative.
+// On flip: snapshot completed wave's displacement to prev_bear/bull_disp vars.
+var float wave_cum_body     = 0.0   // cumulative |open-close| of current wave
+var float wave_cum_wick     = 0.0   // cumulative (high-low) of current wave
+var float prev_bull_body    = 0.0   // body displacement of last completed bull wave
+var float prev_bear_body    = 0.0   // body displacement of last completed bear wave
+var float prev_bull_wick    = 0.0   // wick range of last completed bull wave
+var float prev_bear_wick    = 0.0   // wick range of last completed bear wave
+
 if raw_flip_bull
     prev2_bear_wave := prev_bear_wave
     prev_bear_wave  := wave_cum_vol
+    prev_bear_body  := wave_cum_body
+    prev_bear_wick  := wave_cum_wick
     wave_cum_vol    := vol_safe
+    wave_cum_body   := math.abs(open - close)
+    wave_cum_wick   := high - low
 else if raw_flip_bear
     prev2_bull_wave := prev_bull_wave
     prev_bull_wave  := wave_cum_vol
+    prev_bull_body  := wave_cum_body
+    prev_bull_wick  := wave_cum_wick
     wave_cum_vol    := vol_safe
+    wave_cum_body   := math.abs(open - close)
+    wave_cum_wick   := high - low
 else
-    wave_cum_vol += vol_safe
+    wave_cum_vol  += vol_safe
+    wave_cum_body += math.abs(open - close)
+    wave_cum_wick += (high - low)
 
 // Wave exhaustion: the ending wave had LESS volume than the prior same-direction wave.
 // Warmup fix: when prev2 is still 0 (only 1 prior wave observed), allow the signal
@@ -580,6 +627,49 @@ xwave_long_ok  = ema_stacked_bull and prev_bull_wave > 0 and prev_bear_wave <= (
 xwave_short_ok = ema_stacked_bear and prev_bear_wave > 0 and prev_bull_wave <= (prev_bear_wave * xwave_threshold)
 
 // ============================================================================
+// EFFORT VS RESULT (v2.1.0 — Confluence "R")
+// ============================================================================
+// Measures how much volume (effort) was required per unit of price movement
+// (result) for each completed wave. A counter-wave with a higher effort/result
+// ratio than the dominant wave is burning energy without moving price —
+// classic exhaustion confirmation.
+//
+// Formula:
+//   E/R ratio = cumulative_wave_volume / cumulative_wave_price_displacement
+//
+// Long signal (bear counter-wave ending): bear E/R ≥ bull E/R × er_mult
+//   → The bear wave was inefficient relative to the bull wave — bears exhausted.
+//
+// Short signal (bull counter-wave ending): bull E/R ≥ bear E/R × er_mult
+//   → The bull wave was inefficient relative to the bear wave — bulls exhausted.
+//
+// Price displacement source selected via er_range_source input:
+//   "Body (|open-close|)": cumulative body size — cleaner on Heiken-Ashi (default)
+//   "Wick (high-low)": cumulative full-range — more conservative, catches all movement
+//
+// NOTE: This is an absolute comparison (counter vs dominant wave).
+// TODO: Upgrade to comparative mode in a future version — counter E/R vs its own
+// rolling historical average — for adaptive thresholding across sessions/instruments.
+// ============================================================================
+
+use_body_disp = er_range_source == "Body (|open-close|)"
+
+// Select displacement source per configuration
+prev_bear_disp = use_body_disp ? prev_bear_body : prev_bear_wick
+prev_bull_disp = use_body_disp ? prev_bull_body : prev_bull_wick
+
+// Compute E/R ratios — guard against zero displacement to avoid division by zero
+// A zero displacement wave (all doji-like bars) returns 0.0 — treated as no data
+bear_er_ratio = prev_bear_disp > 0 ? prev_bear_wave / prev_bear_disp : 0.0
+bull_er_ratio = prev_bull_disp > 0 ? prev_bull_wave / prev_bull_disp : 0.0
+
+// Long: counter-wave was bear — bear E/R must exceed bull E/R × multiplier
+er_long_ok  = bull_er_ratio > 0.0 and bear_er_ratio >= (bull_er_ratio * er_mult)
+
+// Short: counter-wave was bull — bull E/R must exceed bear E/R × multiplier
+er_short_ok = bear_er_ratio > 0.0 and bull_er_ratio >= (bear_er_ratio * er_mult)
+
+// ============================================================================
 // DEBUG CONTROLS
 // ============================================================================
 debug_mode = input.bool(false, "🔧 DEBUG: Bypass all gates (flip only)", group="🔧 Debug",
@@ -612,6 +702,8 @@ req_E = input.bool(false, "Require EMA Stack (E)", group=grp_req,
      tooltip="When ON, longs require 21>34>50 (bull stack) and shorts require 21<34<50 (bear stack).\nEnsures trades are in the direction of the trend stack. Reduces counter-trend signals but significantly reduces trade count in mixed/transitional markets.\n(Default: OFF)")
 req_W = input.bool(false, "Require Cross-Wave Ratio (W)", group=grp_req,
      tooltip="When ON, signals require the counter-wave volume to be ≤ the configured ratio vs the dominant wave.\nEnsures only 'hollow' counter-waves qualify. Reduces trade count but increases confidence in dominant-side continuation.\nOnly active when EMAs are stacked (no stack = no cross-wave data).\n(Default: OFF)")
+req_R = input.bool(true,  "Require Effort vs Result (R)", group=grp_req,
+     tooltip="When ON, signals require the counter-wave's volume-per-point ratio (effort/result) to be ≥ the dominant wave's equivalent ratio × the multiplier.\n\nA counter-wave that burned disproportionately more volume per unit of price confirms exhaustion and the mean-reversion premise.\n\nTurn OFF to allow signals regardless of E/R relationship.\n(Default: ON — core confluence)")
 
 // --- BB: confluence only (v2.0.6) — still computed for +1 confluence score ---
 // bb_ok_long/short retained for confluence counter; no longer used as a gate.
@@ -648,6 +740,10 @@ ema_stack_gate_short = not req_E or ema_stacked_bear
 xwave_gate_long  = not req_W or xwave_long_ok
 xwave_gate_short = not req_W or xwave_short_ok
 
+// Effort vs Result gate (v2.1.0): requires counter-wave E/R ≥ dominant E/R × multiplier
+er_gate_long  = not req_R or er_long_ok
+er_gate_short = not req_R or er_short_ok
+
 // Chop gate (v2.0.0)
 chop_gate = not debug_require_chop or not is_choppy
 
@@ -658,8 +754,8 @@ session_gate = not debug_require_session or in_session
 // flip_to_bull/bear is always the base requirement (v2.0.6).
 // bb_gate removed — BB is now confluence only.
 // v2.0.8: Debug mode now truly bypasses ALL gates — flip only, no session check.
-vol_bottom = debug_mode ? flip_to_bull : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and session_gate_long  and adr_ok and chop_gate)
-vol_peak   = debug_mode ? flip_to_bear : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and session_gate_short and adr_ok and chop_gate)
+vol_bottom = debug_mode ? flip_to_bull : (flip_to_bull and vol_gate_long  and trend_gate_long  and hpx_gate_long  and ema_stack_gate_long  and xwave_gate_long  and er_gate_long  and session_gate_long  and adr_ok and chop_gate)
+vol_peak   = debug_mode ? flip_to_bear : (flip_to_bear and vol_gate_short and trend_gate_short and hpx_gate_short and ema_stack_gate_short and xwave_gate_short and er_gate_short and session_gate_short and adr_ok and chop_gate)
 
 // ============================================================================
 // CONFLUENCE COUNTER (7 factors — v2.0.0)
@@ -692,10 +788,14 @@ conf_ema_short = ema_stacked_bear ? 1 : 0
 conf_xwave_long  = xwave_long_ok  ? 1 : 0
 conf_xwave_short = xwave_short_ok ? 1 : 0
 
+// 8. Effort vs Result (v2.1.0)
+conf_er_long  = er_long_ok  ? 1 : 0
+conf_er_short = er_short_ok ? 1 : 0
+
 // Total confluence count
-conf_total_long  = conf_flip_long  + conf_vol_long  + conf_bb_long  + conf_session + conf_hma_long  + conf_ema_long  + conf_xwave_long
-conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_session + conf_hma_short + conf_ema_short + conf_xwave_short
-conf_max = 7
+conf_total_long  = conf_flip_long  + conf_vol_long  + conf_bb_long  + conf_session + conf_hma_long  + conf_ema_long  + conf_xwave_long  + conf_er_long
+conf_total_short = conf_flip_short + conf_vol_short + conf_bb_short + conf_session + conf_hma_short + conf_ema_short + conf_xwave_short + conf_er_short
+conf_max = 8
 
 // Exhaustion label text (method-specific value)
 wave_decl_or_clmx_bear = wave_bear_exhausted ? "WvDecl" : wave_bear_climax ? "WvClmx" : ""
@@ -926,8 +1026,8 @@ candle_col = not color_candles ? na :
 barcolor(candle_col)
 
 // --- Tooltip confluence breakdown (pre-built to reduce label line length) ---
-conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗")
-conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗")
+conf_str_long  = "Flip:✓ Vol:" + (conf_vol_long  > 0 ? "✓" : "✗") + " BB:" + (conf_bb_long  > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_long  > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_long  > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_long  > 0 ? "✓" : "✗") + " R:" + (conf_er_long  > 0 ? "✓" : "✗")
+conf_str_short = "Flip:✓ Vol:" + (conf_vol_short > 0 ? "✓" : "✗") + " BB:" + (conf_bb_short > 0 ? "✓" : "✗") + " Sess:" + (conf_session > 0 ? "✓" : "✗") + " Hpx:" + (conf_hma_short > 0 ? "✓" : "✗") + " EMA:" + (conf_ema_short > 0 ? "✓" : "✗") + " XWv:" + (conf_xwave_short > 0 ? "✓" : "✗") + " R:" + (conf_er_short > 0 ? "✓" : "✗")
 
 // --- VOL PEAK / VOL BOTTOM Labels ---
 if show_labels and vol_bottom
@@ -1200,46 +1300,58 @@ if show_dash and barstate.islast
     table.cell(dash, 1, 10, xwave_pass ? "✓ WEAK" : xwave_text != "—" ? "· CONTESTED" : "· NO STACK", bgcolor=xwave_col, text_color=txt, text_size=size.small)
     table.cell(dash, 2, 10, xwave_text, bgcolor=bg_row, text_color=xwave_pass ? color.green : color.gray, text_size=size.small)
 
-    // Row 11: Confluence Counter (7 factors — v2.0.0)
+    // Row 11: Effort vs Result (v2.1.0)
+    er_pass     = er_long_ok or er_short_ok
+    er_col      = er_pass ? color.new(color.green, 50) : bear_er_ratio > 0.0 or bull_er_ratio > 0.0 ? color.new(color.gray, 60) : color.new(color.gray, 80)
+    er_src_lbl  = use_body_disp ? "Body" : "Wick"
+    er_bear_txt = bear_er_ratio > 0.0 ? str.tostring(bear_er_ratio, "0.0") : "—"
+    er_bull_txt = bull_er_ratio > 0.0 ? str.tostring(bull_er_ratio, "0.0") : "—"
+    er_status   = er_long_ok ? "✓ BEAR EXHSTD" : er_short_ok ? "✓ BULL EXHSTD" : bear_er_ratio > 0.0 or bull_er_ratio > 0.0 ? "· LOW EFFORT" : "· NO DATA"
+    er_detail   = "B:" + er_bear_txt + " U:" + er_bull_txt + " [" + er_src_lbl + "]"
+    table.cell(dash, 0, 11, "E/R Ratio", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 11, er_status, bgcolor=er_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 11, er_detail, bgcolor=bg_row, text_color=er_pass ? color.green : color.gray, text_size=size.small)
+
+    // Row 12: Confluence Counter (8 factors — v2.1.0)
     conf_display = math.max(conf_total_long, conf_total_short)
-    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "Hpx" : "···") + (conf_ema_long > 0 ? "E" : "·") + (conf_xwave_long > 0 ? "W" : "·")
-    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "Hpx" : "···") + (conf_ema_short > 0 ? "E" : "·") + (conf_xwave_short > 0 ? "W" : "·")
+    conf_detail_l = (conf_flip_long > 0 ? "F" : "·") + (conf_vol_long > 0 ? "V" : "·") + (conf_bb_long > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_long > 0 ? "Hpx" : "···") + (conf_ema_long > 0 ? "E" : "·") + (conf_xwave_long > 0 ? "W" : "·") + (conf_er_long > 0 ? "R" : "·")
+    conf_detail_s = (conf_flip_short > 0 ? "F" : "·") + (conf_vol_short > 0 ? "V" : "·") + (conf_bb_short > 0 ? "B" : "·") + (conf_session > 0 ? "S" : "·") + (conf_hma_short > 0 ? "Hpx" : "···") + (conf_ema_short > 0 ? "E" : "·") + (conf_xwave_short > 0 ? "W" : "·") + (conf_er_short > 0 ? "R" : "·")
     conf_col = conf_display >= 6 ? color.new(color.green, 40) : conf_display >= 4 ? color.new(color.yellow, 50) : color.new(color.gray, 70)
     conf_dir_text = conf_total_long > conf_total_short ? "L:" + conf_detail_l : conf_total_short > conf_total_long ? "S:" + conf_detail_s : "L:" + conf_detail_l
-    table.cell(dash, 0, 11, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 11, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 11, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 12, "Confluence", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 12, str.tostring(conf_display) + "/" + str.tostring(conf_max), bgcolor=conf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 12, conf_dir_text, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 12: Win Rate
+    // Row 13: Win Rate
     wr_col = win_rate >= 60 ? color.new(color.green, 50) : win_rate >= 50 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 12, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 12, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 12, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 13, "Win Rate", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 13, str.tostring(win_rate, "0.0") + "%", bgcolor=wr_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 13, str.tostring(closed) + " closed", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 13: Net P&L
+    // Row 14: Net P&L
     pnl_col = net_pnl >= 0 ? color.new(color.green, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 13, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 13, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 13, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
+    table.cell(dash, 0, 14, "Net P&L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 14, "$" + str.tostring(net_pnl, "#,##0"), bgcolor=pnl_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 14, "DD:$" + str.tostring(max_dd, "#,##0"), bgcolor=bg_row, text_color=color.red, text_size=size.small)
 
-    // Row 14: Profit Factor
+    // Row 15: Profit Factor
     pf_col = pf >= 2.0 ? color.new(color.green, 50) : pf >= 1.5 ? color.new(color.yellow, 50) : color.new(color.red, 50)
-    table.cell(dash, 0, 14, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 14, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
-    table.cell(dash, 2, 14, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 15, "Prof Factor", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 15, str.tostring(pf, "0.00") + "x", bgcolor=pf_col, text_color=txt, text_size=size.normal)
+    table.cell(dash, 2, 15, "W:" + str.tostring(wins) + " L:" + str.tostring(losses), bgcolor=bg_row, text_color=color.gray, text_size=size.small)
 
-    // Row 15: Expectancy
+    // Row 16: Expectancy
     exp_col = expectancy > 0 ? color.new(color.green, 60) : color.new(color.red, 60)
-    table.cell(dash, 0, 15, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 15, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 15, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 16, "Expectancy", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 16, "$" + str.tostring(expectancy, "#,##0") + "/trade", bgcolor=exp_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 16, "per contract", bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 16: Avg W/L
-    table.cell(dash, 0, 16, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 16, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 16, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
+    // Row 17: Avg W/L
+    table.cell(dash, 0, 17, "Avg W/L", bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 17, "$" + str.tostring(avg_win, "#,##0"), bgcolor=color.new(color.green, 65), text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 17, "$" + str.tostring(avg_loss, "#,##0"), bgcolor=color.new(color.red, 65), text_color=txt, text_size=size.small)
 
-    // Row 17: Volume Method + Stats (v2.0.7: enhanced for Wave Compare)
+    // Row 18: Volume Method + Stats (v2.0.7: enhanced for Wave Compare)
     wave_exh_clx = (wave_use_exhaustion ? "E" : "·") + (wave_use_climax ? "C" : "·")
     wave_trigger = use_wave ? (wave_bear_exhausted or wave_bull_exhausted ? "EXH" : wave_bear_climax or wave_bull_climax ? "CLX" : "—") : ""
     wave_info = use_wave ? wave_trigger + " B:" + str.tostring(prev_bull_wave, "#,##0") + " S:" + str.tostring(prev_bear_wave, "#,##0") : ""
@@ -1249,15 +1361,15 @@ if show_dash and barstate.islast
     vol_pass = vol_bottom_raw or vol_peak_raw
     vol_col  = vol_pass ? color.new(color.green, 50) : color.new(color.gray, 70)
     vol_method_detail = use_wave ? vol_method_label + " [" + wave_exh_clx + "]" : vol_method_label
-    table.cell(dash, 0, 17, "Vol " + vol_method_detail, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 17, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
-    table.cell(dash, 2, 17, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 18, "Vol " + vol_method_detail, bgcolor=bg_row, text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 18, vol_pass ? "✓ EXHAUSTION" : "· scanning", bgcolor=vol_col, text_color=txt, text_size=size.small)
+    table.cell(dash, 2, 18, method_info, bgcolor=bg_row, text_color=color.gray, text_size=size.tiny)
 
-    // Row 18: Debug Gate Diagnostic
+    // Row 19: Debug Gate Diagnostic
     if debug_mode
-        table.cell(dash, 0, 18, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 1, 18, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
-        table.cell(dash, 2, 18, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
+        table.cell(dash, 0, 19, "🔧 DEBUG", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 1, 19, "ALL GATES BYPASSED", bgcolor=color.new(#FF6B00, 30), text_color=txt, text_size=size.small)
+        table.cell(dash, 2, 19, "flip only", bgcolor=color.new(#FF6B00, 50), text_color=txt, text_size=size.small)
     else
         flip_ok = flip_to_bull or flip_to_bear
         raw_flip = raw_flip_bull or raw_flip_bear
@@ -1268,12 +1380,13 @@ if show_dash and barstate.islast
         dbg_hpx  = not req_H ? "OFF" : ((hpx_gate_long and flip_to_bull) or (hpx_gate_short and flip_to_bear) ? "✓" : "✗")
         dbg_ema  = not req_E ? "OFF" : (ema_stacked_bull or ema_stacked_bear ? "✓" : "✗")
         dbg_xwv  = not req_W ? "OFF" : (xwave_long_ok or xwave_short_ok ? "✓" : "✗")
+        dbg_er   = not req_R ? "OFF" : (er_long_ok or er_short_ok ? "✓" : "✗")
         dbg_sess = not req_S or not debug_require_session ? "OFF" : (in_session ? "✓" : "✗")
         dbg_adr  = not enable_adr_filter ? "OFF" : (adr_ok ? "✓" : "✗" + str.tostring(adr_pct_used, "0") + "%")
         dbg_chop = not debug_require_chop ? "OFF" : (not is_choppy ? "✓" : "✗" + str.tostring(avg_wave_len, "0.1") + "b")
-        table.cell(dash, 0, 18, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 1, 18, "F:" + dbg_flip + " V:" + dbg_vol + " BB(c):" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
-        table.cell(dash, 2, 18, "Hpx:" + dbg_hpx + " E:" + dbg_ema + " W:" + dbg_xwv + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 0, 19, "🔧 GATES", bgcolor=color.new(#1a1a2e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 1, 19, "F:" + dbg_flip + " V:" + dbg_vol + " BB(c):" + dbg_bb + " TR:" + dbg_trend, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
+        table.cell(dash, 2, 19, "Hpx:" + dbg_hpx + " E:" + dbg_ema + " W:" + dbg_xwv + " R:" + dbg_er + " SS:" + dbg_sess + " CH:" + dbg_chop + " ADR:" + dbg_adr, bgcolor=color.new(#16213e, 0), text_color=color.orange, text_size=size.small)
 
 // ============================================================================
 // ALERT CONDITIONS
