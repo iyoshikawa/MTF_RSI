@@ -1,0 +1,911 @@
+// ============================================================================
+// Volume Exhaustion Strategy — Standard Candle [VES-SC v1.0.8]
+// Trend-continuation on standard candles using GJBI river cross trigger
+// ============================================================================
+// v1.0.8 — Complete Tooltip & Customization Expansion
+//   - NEW: Comprehensive tooltips on EVERY input (not just major groups)
+//   - NEW: Expanded color customization groups (signals, candles, text)
+//   - NEW: Customizable colors for all dashboard elements
+//   - NEW: Toggle & customize label appearance (size, color, transparency)
+//   - NEW: Customizable background/fill colors
+//   - ENHANCEMENT: Better organized visual customization groups
+// ============================================================================
+
+//@version=6
+strategy("VES-SC [v1.0.8]", overlay=true, 
+     default_qty_type=strategy.fixed, default_qty_value=2,
+     initial_capital=50000, commission_type=strategy.commission.cash_per_contract,
+     commission_value=2.0, slippage=1, max_bars_back=500,
+     calc_on_every_tick=false)
+
+VER = "v1.0.8"
+
+// ============================================================================
+// INPUT GROUPS — COMPLETE TOOLTIP COVERAGE
+// ============================================================================
+
+// -- Instrument & Broker Config
+grp_preset = "⚡ Instrument Preset"
+instrument_preset = input.string("YM/MYM (Dow)", "Instrument",
+     options=["YM/MYM (Dow)", "NQ/MNQ (NASDAQ)", "ES/MES (S&P 500)", "CL (Crude Oil)", "HG (Copper)", "CUSTOM"],
+     group=grp_preset,
+     tooltip="Select your trading instrument. Adjusts point values & ATR scaling automatically. Does not override manual inputs.")
+
+is_ym = instrument_preset == "YM/MYM (Dow)"
+is_nq = instrument_preset == "NQ/MNQ (NASDAQ)"
+is_es = instrument_preset == "ES/MES (S&P 500)"
+is_cl = instrument_preset == "CL (Crude Oil)"
+is_hg = instrument_preset == "HG (Copper)"
+
+tick_size  = is_ym ? 1.0  : is_nq ? 0.25 : is_es ? 0.25 : is_cl ? 0.01 : is_hg ? 0.0005 : 1.0
+tick_value = is_ym ? 5.0  : is_nq ? 5.0  : is_es ? 12.5 : is_cl ? 10.0 : is_hg ? 12.5   : 5.0
+
+grp_ql = "🔗 QuantLynk Integration"
+ql_symbol   = input.string("YM1!", "Symbol", group=grp_ql,
+     tooltip="Broker symbol (e.g., 'YM1!' for Micro Dow on Tradovate). Must match your exchange exactly. Used in webhook payloads.")
+ql_webhook  = input.string("", "Webhook URL", group=grp_ql,
+     tooltip="Your QuantLynk webhook URL endpoint. Example: https://api.quantlynk.com/webhook/abc123. Leave blank to disable alerts.")
+ql_alert_id = input.string("", "Alert ID", group=grp_ql,
+     tooltip="Your QuantLynk alert_id for platform routing & grouping. Optional but recommended for multi-strategy setups.")
+
+// -- River Trigger (GJBI 20 EMA)
+grp_river = "🌊 River Cross — GJBI 20 EMA Trigger"
+river_len    = input.int(20, "River EMA Length", group=grp_river, minval=5, maxval=50,
+     tooltip="Length of the 20 EMA used for river bands (Low / Close / High). Lower (10-15) = faster response, higher (25-30) = smoother. Default: 20 (standard GJBI).")
+river_strict = input.bool(false, "Strict Mode (2-bar close required)", group=grp_river,
+     tooltip="OFF (default): Single bar cross of river bands triggers signal. ON: Price must stay inside river for 2 consecutive bars. Reduces false breakouts. More conservative.")
+
+// -- Directional Bias (HTF 34/50 EMA)
+grp_htf = "📡 HTF Directional Bias (34/50 EMA)"
+input.string("", "Auto-stepped HTF: 1m→5m, 5m→15m, 15m→60m, 60m+→240m", group=grp_htf,
+     tooltip="The 34/50 EMA automatically shifts to higher timeframe based on your chart TF, ensuring longer-term trend confirmation without manual inputs.")
+
+// -- HMA Ribbon (6/21)
+grp_hma = "〰️ HMA Ribbon Confluence (6/21)"
+hma_6_len  = input.int(6,  "HMA Fast Length", group=grp_hma, minval=2, maxval=20,
+     tooltip="Hull Moving Average fast length. Reacts quickly to price action & reversals. Default: 6. Range: 2-20 (lower = faster).")
+hma_21_len = input.int(21, "HMA Slow Length", group=grp_hma, minval=5, maxval=50,
+     tooltip="Hull Moving Average slow length. Smoother, longer-term bias. Default: 21. Range: 5-50 (higher = slower response).")
+
+// -- Grade Engine (MTF RSI)
+grp_grade = "📊 MTF RSI Grade Gate (A+ → B+ Hierarchy)"
+use_grade_gate = input.bool(true, "Enable Grade Gate", group=grp_grade,
+     tooltip="When ON: Only A+, A, A-, or B+ grades trigger entries (filters low-conviction setups). When OFF: All grades considered equal (scalp mode).")
+use_a_plus     = input.bool(false, "Include A+ Grade", group=grp_grade,
+     tooltip="A+ = 3 TF aligned + VWAP + volume surge + ADX ≥ 25. Rarest, highest conviction. Default OFF (too restrictive for most traders).")
+use_a          = input.bool(true, "Include A Grade", group=grp_grade,
+     tooltip="A = 3 TF aligned + RSI direction + EMA side + momentum. High conviction signals. Default ON (recommended).")
+use_a_minus    = input.bool(true, "Include A- Grade", group=grp_grade,
+     tooltip="A- = 2 TF aligned + RSI direction + EMA side + momentum. Mid conviction scalps. Default ON. Best risk/reward ratio.")
+use_b_plus     = input.bool(true, "Include B+ Grade", group=grp_grade,
+     tooltip="B+ = 2 TF aligned + HMA side + filters pass. Lowest bar for entry. Default ON. Can be choppy but catches early moves.")
+
+grp_rsi = "RSI Engine (Oscillator Calculations)"
+rsi_short_len = input.int(5, "Short RSI Period", group=grp_rsi,
+     tooltip="RSI period for fast oscillations (captures quick reversals). Default: 5. Matches MTF RSI Signals indicator settings.")
+rsi_long_len  = input.int(13, "Long RSI Period", group=grp_rsi,
+     tooltip="RSI period for slow oscillations (smoother momentum). Default: 13. Used for divergence detection & multi-TF confirmation.")
+rsi_short_sm  = input.int(2, "Short Smoothing", group=grp_rsi,
+     tooltip="EMA smoothing applied to fast RSI. Default: 2. Reduces noise while keeping responsiveness.")
+rsi_long_sm   = input.int(3, "Long Smoothing", group=grp_rsi,
+     tooltip="EMA smoothing applied to slow RSI. Default: 3. Higher = less reactive, smoother alignment signals.")
+rsi_thresh    = input.float(1.0, "RSI Neutral Zone", group=grp_rsi,
+     tooltip="Minimum RSI difference to register a direction signal. Prevents whipsaws in choppy markets. Default: 1.0. Range: 0.5-5.0.")
+
+grp_stoch = "Stochastic Engine (Momentum Confirmation)"
+stoch_len = input.int(10, "Stoch Period", group=grp_stoch,
+     tooltip="Stochastic lookback period for momentum detection (used in A+ grade). Default: 10. Range: 5-20.")
+stoch_sm  = input.int(3, "Stoch Smoothing", group=grp_stoch,
+     tooltip="Smoothing applied to stochastic oscillator (double EMA). Default: 3. Higher = smoother but slower response.")
+
+grp_adx = "📈 ADX Trend Strength Filter"
+use_adx         = input.bool(true, "Enable ADX Gate", group=grp_adx,
+     tooltip="When ON: Blocks entries when ADX < threshold (market not trending enough). When OFF: ADX ignored (trades all conditions).")
+adx_len         = input.int(14, "ADX Length", group=grp_adx,
+     tooltip="ADX lookback period. Default: 14 (standard DMI period). Higher (20-28) = smoother but slower response.")
+adx_threshold   = input.float(20, "ADX Gate Threshold", group=grp_adx,
+     tooltip="Minimum ADX to allow entries. Below this = market is choppy/ranging (high false breakouts). Default: 20. Suggested: 15-25.")
+adx_thresh_aplus = input.float(25, "ADX A+ Threshold", group=grp_adx,
+     tooltip="Minimum ADX for A+ grade qualification. Must be > ADX Gate Threshold. Default: 25. Suggested: 24-30.")
+vol_ma_len  = input.int(20, "Volume MA Length", group=grp_adx,
+     tooltip="SMA period for volume baseline (used in A+ qualification). Default: 20. Range: 10-50.")
+vol_mult    = input.float(1.1, "Volume Multiplier", group=grp_adx,
+     tooltip="Volume must exceed MA × this multiplier for A+ grade qualification. Default: 1.1 (10% above average). Range: 1.0-2.0.")
+
+// -- Squeeze Gate
+grp_sq = "🔀 TTM Squeeze (Volatility Coil Detection)"
+use_squeeze        = input.bool(true, "Enable Squeeze Gate", group=grp_sq,
+     tooltip="When ON: TTM Squeeze conditions must align. When OFF: Squeeze ignored (scalp mode).")
+use_squeeze_dir    = input.bool(true, "Require Direction (signal 1/-1)", group=grp_sq,
+     tooltip="When ON: Oscillator must be positive+rising (longs) or negative+falling (shorts). When OFF: Direction not required.")
+use_squeeze_fired  = input.bool(false, "Require Squeeze Fired (BB > KC)", group=grp_sq,
+     tooltip="When ON: Bollinger must be outside Keltner (squeeze released, momentum confirmed). When OFF: Entries allowed during coiling phase.")
+sq_len             = input.int(20, "Squeeze Length", group=grp_sq, minval=5, maxval=50,
+     tooltip="Lookback for Bollinger Bands, Keltner Channel, linear regression. Default: 20. Range: 15-30.")
+
+// -- Volume ROC Gate
+grp_vol2 = "📊 Volume ROC (Exhaustion Detection)"
+use_vol_roc = input.bool(true, "Enable Volume ROC Gate", group=grp_vol2,
+     tooltip="When ON: Volume must be decelerating (ROC declining) at trigger. Detects exhaustion. When OFF: Volume ignored.")
+vol_roc_len = input.int(5, "ROC Length (bars)", group=grp_vol2, minval=2, maxval=20,
+     tooltip="Bars back for volume rate-of-change calculation. Default: 5. Range: 3-10 (lower = faster detection).")
+vol_roc_sm  = input.int(3, "ROC Smoothing", group=grp_vol2, minval=1, maxval=10,
+     tooltip="SMA smoothing on ROC values. Reduces noise & prevents false signals. Default: 3. Range: 1-5.")
+
+// -- Bollinger Bands Confluence
+grp_bb = "📉 Bollinger Bands (Confluence Zones)"
+bb_len   = input.int(20, "BB Length", group=grp_bb,
+     tooltip="SMA period for Bollinger Bands basis. Default: 20. Range: 15-30. Lower = tighter bands, higher = wider bands.")
+bb_mult  = input.float(2.0, "BB Multiplier", group=grp_bb,
+     tooltip="Standard deviation multiplier (controls band width). Default: 2.0 (classic Bollinger). Range: 1.5-2.5.")
+bb_tf_in = input.timeframe("", "BB Timeframe (blank = chart)", group=grp_bb,
+     tooltip="Leave blank to use chart TF. Set to higher TF for broader context (e.g., '5' for 5-minute bands on 1m chart). Useful for multi-TF confluence.")
+
+// -- ADR Filter
+grp_adr = "📏 ADR Filter (Range Exhaustion Protection)"
+use_adr     = input.bool(true, "Enable ADR Filter", group=grp_adr,
+     tooltip="When ON: Blocks entries if today's range has consumed ≥ threshold% of average daily range. Protects against end-of-day gaps.")
+adr_len     = input.int(10, "ADR Lookback (days)", group=grp_adr, minval=1, maxval=50,
+     tooltip="Number of days to average for ADR calculation. Default: 10 (2 trading weeks). Range: 5-20.")
+adr_exhaust = input.float(85, "Exhaustion Threshold (%)", group=grp_adr, minval=50, maxval=100,
+     tooltip="If today's range > ADR × this %, entries blocked. Default: 85% (still 15% range left for move). Range: 75%-95%.")
+
+// -- Session Gate
+grp_sess = "⏰ Session & Time Filtering"
+session_str     = input.string("0200-0500,0930-1145,1330-1600", "Session Windows (ET)", group=grp_sess,
+     tooltip="Comma-separated windows (ET timezone). Format: HHMM-HHMM. Default: London (02-05), NY AM (09:30-11:45), NY PM (13:30-16:00). Customize for your trading style.")
+flatten_outside = input.bool(true, "Flatten Outside Session", group=grp_sess,
+     tooltip="When ON: Closes all positions when session ends (avoids overnight slippage). When OFF: Positions can run into next session.")
+
+grp_days = "📅 Trading Days Filter (Avoid Choppy Days)"
+trade_sun = input.bool(false, "Sunday (Asian Overlap)", group=grp_days, inline="d1",
+     tooltip="Trade on Sunday (Asian overlap). Most US traders OFF. Default OFF.")
+trade_mon = input.bool(true, "Monday", group=grp_days, inline="d1",
+     tooltip="Trade on Monday. Full market activity. Default ON.")
+trade_tue = input.bool(true, "Tuesday", group=grp_days, inline="d1",
+     tooltip="Trade on Tuesday. Default ON. Full volume.")
+trade_wed = input.bool(true, "Wednesday", group=grp_days, inline="d2",
+     tooltip="Trade on Wednesday. Mid-week chop possible but tradeable. Default ON.")
+trade_thu = input.bool(true, "Thursday", group=grp_days, inline="d2",
+     tooltip="Trade on Thursday. Good volume. Default ON.")
+trade_fri = input.bool(true, "Friday", group=grp_days, inline="d2",
+     tooltip="Trade on Friday. Caution: Check for FOMC, NFP, or big economic releases. Default ON but monitor calendar.")
+trade_sat = input.bool(false, "Saturday (Closed)", group=grp_days, inline="d2",
+     tooltip="Trade on Saturday (futures closed). Default OFF. For crypto/forex only.")
+
+// -- ATR Exits
+grp_atr = "🎯 ATR-Based Exit Management"
+atr_len_in     = input.int(14, "ATR Length", group=grp_atr,
+     tooltip="ATR lookback period. Default: 14 (standard). Range: 10-20. Higher = smoother but slower response.")
+atr_sl_mult    = input.float(1.5, "ATR SL Multiplier", group=grp_atr,
+     tooltip="Stop loss = ATR × this. Suggested: YM/NQ/ES: 1.5-2.0 (tighter stops). CL: 2.0-2.5. HG: 1.5-2.0.")
+atr_tp_mult    = input.float(2.0, "ATR TP Multiplier", group=grp_atr,
+     tooltip="Take profit = ATR × this. Suggested: YM/NQ/ES: 2.0-2.5. CL: 2.5-3.0. HG: 2.0-2.5. Risk/reward target.")
+atr_trail_mult = input.float(1.0, "ATR Trail Activation", group=grp_atr,
+     tooltip="Trailing stop activates after profit = ATR × this. Default: 1.0. Let winners run once activated.")
+atr_trail_dist = input.float(0.5, "ATR Trail Distance", group=grp_atr,
+     tooltip="Trail distance once activated = ATR × this. Default: 0.5 (tight trailing for scalps). Range: 0.25-1.0.")
+use_be         = input.bool(true, "Enable Break Even", group=grp_atr,
+     tooltip="When ON: Moves stop to break-even after ATR × multiplier profit. Risk-free scaling into winners.")
+be_atr_mult    = input.float(1.0, "BE Activation (ATR×)", group=grp_atr,
+     tooltip="Move to BE after price moves this × ATR in profit direction. Default: 1.0. Range: 0.75-1.5.")
+be_offset_pts  = input.float(2.0, "BE Offset (pts)", group=grp_atr,
+     tooltip="Lock in this many points above entry when BE activates. Default: 2.0 (covers slippage + 1pt profit). Range: 1-5.")
+
+// -- Debug Mode
+grp_debug = "🛠️ Debug & Testing Mode"
+debug_mode = input.bool(false, "Debug Mode (bypass all gates)", group=grp_debug,
+     tooltip="When ON: ALL gates bypassed, entries fire on river cross ONLY. Use for visual testing, strategy isolation, or baseline performance.")
+
+// ============================================================================
+// VISUAL CUSTOMIZATION GROUPS — COMPLETE
+// ============================================================================
+
+// --- River Bands
+grp_viz_river = "🎨 River Bands — Colors, Width & Visibility"
+show_river = input.bool(true, "Show River Bands", group=grp_viz_river,
+     tooltip="Toggle visibility of all river band lines (Low, Mid, High) on/off.")
+river_low_color  = input.color(color.new(#FF6B6B, 60), "River Low Color", group=grp_viz_river,
+     tooltip="Color of river low band (marks long entry zone). Default: Soft red #FF6B6B. Suggested: Red tones for bullish bias.")
+river_mid_color  = input.color(color.new(#FFD700, 70), "River Mid Color", group=grp_viz_river,
+     tooltip="Color of river middle line (zero line / reference). Default: Gold #FFD700. Suggested: Neutral/bright color for visibility.")
+river_high_color = input.color(color.new(#6BFFB8, 60), "River High Color", group=grp_viz_river,
+     tooltip="Color of river high band (marks short entry zone). Default: Cyan #6BFFB8. Suggested: Cyan/green for bearish bias.")
+river_width = input.int(1, "River Width (1-3)", group=grp_viz_river, minval=1, maxval=3,
+     tooltip="Line thickness for river bands. 1=thin (subtle), 2=medium (balanced), 3=thick (bold, high contrast).")
+
+// --- EMA Stack (21/34/50)
+grp_viz_ema = "🎨 EMA Stack (21/34/50) — Dynamic Colors & Width"
+show_ema = input.bool(true, "Show EMA Stack", group=grp_viz_ema,
+     tooltip="Toggle visibility of all EMA lines (21, 34, 50) on/off.")
+ema_above_color = input.color(color.new(#00FF00, 30), "EMA Above Price (Bullish) Color", group=grp_viz_ema,
+     tooltip="Color when EMA is ABOVE price (bullish setup). Default: Lime green #00FF00. Price below = trend forming. Suggested: Green tones.")
+ema_below_color = input.color(color.new(#DC143C, 30), "EMA Below Price (Bearish) Color", group=grp_viz_ema,
+     tooltip="Color when EMA is BELOW price (bearish setup). Default: Crimson #DC143C. Price above = trend forming. Suggested: Red tones.")
+ema_21_width = input.int(1, "EMA 21 Width (1-3)", group=grp_viz_ema, minval=1, maxval=3,
+     tooltip="Line thickness for fast EMA (21). 1=thin, 2=medium, 3=thick. Recommended: 1 (lightweight).")
+ema_34_width = input.int(1, "EMA 34 Width (1-3)", group=grp_viz_ema, minval=1, maxval=3,
+     tooltip="Line thickness for mid EMA (34). 1=thin, 2=medium, 3=thick. Recommended: 1 (lightweight).")
+ema_50_width = input.int(2, "EMA 50 Width (1-3)", group=grp_viz_ema, minval=1, maxval=3,
+     tooltip="Line thickness for slow EMA (50). 1=thin, 2=medium, 3=thick. Recommended: 2 (heavier, trend reference).")
+
+// --- HMA Ribbon (6/21)
+grp_viz_hma = "🎨 HMA Ribbon (6/21) — Dynamic Colors & Width"
+show_hma = input.bool(true, "Show HMA Ribbon", group=grp_viz_hma,
+     tooltip="Toggle visibility of Hull Moving Average lines (6 & 21) on/off.")
+hma_above_color = input.color(color.new(#00AA66, 40), "HMA Above Price (Bullish) Color", group=grp_viz_hma,
+     tooltip="Color when HMA is ABOVE price (bullish). Default: Forest green #00AA66. Use when HMA confluence confirms trend.")
+hma_below_color = input.color(color.new(#FF6B35, 40), "HMA Below Price (Bearish) Color", group=grp_viz_hma,
+     tooltip="Color when HMA is BELOW price (bearish). Default: Orange #FF6B35. Use when HMA acts as resistance.")
+hma_6_width = input.int(1, "HMA 6 Width (1-3)", group=grp_viz_hma, minval=1, maxval=3,
+     tooltip="Line thickness for fast HMA (6). 1=thin, 2=medium, 3=thick. Recommended: 1 (lightweight).")
+hma_21_width = input.int(1, "HMA 21 Width (1-3)", group=grp_viz_hma, minval=1, maxval=3,
+     tooltip="Line thickness for slow HMA (21). 1=thin, 2=medium, 3=thick. Recommended: 1 (lightweight).")
+
+// --- Bollinger Bands
+grp_viz_bb = "🎨 Bollinger Bands — Colors, Width & Fill"
+show_bb = input.bool(true, "Show Bollinger Bands", group=grp_viz_bb,
+     tooltip="Toggle visibility of Bollinger Bands (upper, lower, fill) on/off.")
+bb_band_color = input.color(color.new(#AAAAAA, 60), "BB Band Color", group=grp_viz_bb,
+     tooltip="Color of upper and lower Bollinger Band lines. Default: Gray #AAAAAA. Suggested: Neutral gray or white for subtlety.")
+bb_fill_color = input.color(color.new(#AAAAAA, 92), "BB Fill Color (Inside Bands)", group=grp_viz_bb,
+     tooltip="Color of fill area between upper & lower bands. Default: Gray #AAAAAA, highly transparent (92 alpha). Suggested: Keep transparent for clarity.")
+bb_width = input.int(1, "BB Width (1-3)", group=grp_viz_bb, minval=1, maxval=3,
+     tooltip="Line thickness for Bollinger Band edges. 1=thin (subtle), 2=medium, 3=thick (bold). Recommended: 1.")
+
+// --- Signal Labels & Markers
+grp_viz_labels = "🎨 Signal Labels & Entry Markers"
+show_labels = input.bool(true, "Show Grade Labels", group=grp_viz_labels,
+     tooltip="Toggle visibility of grade labels (A+, A, A-, B+) on chart entries on/off.")
+label_text_color = input.color(color.white, "Label Text Color", group=grp_viz_labels,
+     tooltip="Color of grade label text. Default: White #FFFFFF. Suggested: White or light colors for contrast against label background.")
+label_bg_opacity = input.int(80, "Label Background Opacity (0-100)", group=grp_viz_labels, minval=0, maxval=100,
+     tooltip="Transparency of label background. 0=fully transparent (text only), 100=fully opaque (solid). Default: 80 (semi-transparent).")
+label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group=grp_viz_labels,
+     tooltip="Size of grade marker labels (A+, A, etc) on chart. tiny=3px, small=11px, normal=14px. Recommended: 'small' for balance.")
+
+// --- Candle Coloring
+grp_viz_candles = "🎨 Candle Colors by Grade"
+show_candle_colors = input.bool(true, "Color Candles by Grade", group=grp_viz_candles,
+     tooltip="When ON: Bars color-coded by grade (A+/A/A-/B+ = greens for longs, reds for shorts). When OFF: Normal candle colors.")
+grade_aplus_long_color = input.color(color.new(#00FF00, 0), "A+ Long Candle Color", group=grp_viz_candles,
+     tooltip="Candle color during A+ long signals. Default: Bright green #00FF00. Represents highest conviction bullish.")
+grade_aplus_short_color = input.color(color.new(#DC143C, 0), "A+ Short Candle Color", group=grp_viz_candles,
+     tooltip="Candle color during A+ short signals. Default: Crimson #DC143C. Represents highest conviction bearish.")
+grade_a_long_color = input.color(color.new(#00CC44, 0), "A Long Candle Color", group=grp_viz_candles,
+     tooltip="Candle color during A long signals. Default: Green #00CC44. High conviction bullish.")
+grade_a_short_color = input.color(color.new(#CC0000, 0), "A Short Candle Color", group=grp_viz_candles,
+     tooltip="Candle color during A short signals. Default: Dark red #CC0000. High conviction bearish.")
+
+// --- Dashboard
+grp_dash = "📋 Dashboard Table — Appearance & Position"
+show_dash = input.bool(true, "Show Dashboard", group=grp_dash,
+     tooltip="Toggle visibility of the main strategy dashboard table (gate states, signals, P&L, etc) on/off.")
+dash_pos  = input.string("Top Right", "Dashboard Position",
+     options=["Top Right","Bottom Right","Top Left","Bottom Left"], group=grp_dash,
+     tooltip="Position of dashboard table on chart. Top Right=corner, Bottom Left=opposite corner. Choose based on your layout.")
+dash_size = input.string("Small", "Text Size",
+     options=["Tiny","Small","Normal"], group=grp_dash,
+     tooltip="Text size inside dashboard table. Tiny=minimal, Small=balanced (recommended), Normal=large/readable from distance.")
+dash_opacity = input.int(80, "Dashboard Opacity (0-100)", group=grp_dash, minval=0, maxval=100,
+     tooltip="Transparency of dashboard background. 0=fully transparent, 100=fully opaque. Default: 80. Lower values = less screen clutter.")
+
+// ============================================================================
+// STATE INITIALIZATION
+// ============================================================================
+
+var int   last_sig_bar   = na
+var string last_sig_grade = "—"
+var int   last_sig_dir   = 0
+
+var float daily_pnl   = 0.0
+var int   daily_trades = 0
+var float prev_closed  = 0.0
+
+var float be_stop_l1 = na
+var float be_stop_l2 = na
+var float be_stop_s1 = na
+var float be_stop_s2 = na
+var bool  be1_triggered = false
+var bool  be2_triggered = false
+
+// ============================================================================
+// CORE HELPERS
+// ============================================================================
+
+hasVol = not na(volume) and volume > 0
+_cleanTicker = ticker.new(syminfo.prefix, syminfo.ticker)
+
+_calc_rsi_diff(src, sl, ll, ss, ls) =>
+    ta.ema(ta.rsi(src, sl), ss) - ta.ema(ta.rsi(src, ll), ls)
+
+_get_rsi_dir(diff, thresh) =>
+    diff > thresh ? 1 : diff < -thresh ? -1 : 0
+
+_calc_dstoch(len, sm) =>
+    ta.ema(ta.ema(ta.stoch(close, high, low, len), sm), sm)
+
+_bband(len, mult) => ta.sma(close, len) + mult * ta.stdev(close, len)
+_keltner(len, mult) => ta.ema(close, len) + mult * ta.ema(ta.tr, len)
+
+_safe_div(a, b, default_val) =>
+    b != 0 and not na(a) and not na(b) ? (a / b) : default_val
+
+_dpos  = dash_pos == "Top Right"    ? position.top_right    :
+         dash_pos == "Bottom Right"  ? position.bottom_right :
+         dash_pos == "Top Left"      ? position.top_left     : position.bottom_left
+_dsize = dash_size == "Tiny" ? size.tiny : dash_size == "Normal" ? size.normal : size.small
+
+// ============================================================================
+// SIGNAL TRIGGERS (Primary: River Cross)
+// ============================================================================
+
+river_low  = ta.ema(low,   river_len)
+river_mid  = ta.ema(close, river_len)
+river_high = ta.ema(high,  river_len)
+
+river_cross_long_loose  = not na(river_low) and close[1] < river_low[1] and close >= river_low
+river_cross_short_loose = not na(river_high) and close[1] > river_high[1] and close <= river_high
+
+river_inside_long  = not na(river_low) and close >= river_low
+river_inside_short = not na(river_high) and close <= river_high
+river_cross_long_strict  = river_inside_long  and river_inside_long[1]  and not river_inside_long[2]
+river_cross_short_strict = river_inside_short and river_inside_short[1] and not river_inside_short[2]
+
+river_cross_long  = river_strict ? river_cross_long_strict  : river_cross_long_loose
+river_cross_short = river_strict ? river_cross_short_strict : river_cross_short_loose
+river_state = river_cross_long ? 1 : river_cross_short ? -1 : 0
+
+// ============================================================================
+// GATE 1: DIRECTIONAL BIAS (HTF 34/50 EMA)
+// ============================================================================
+
+_tf_secs = timeframe.in_seconds()
+bias_tf  = _tf_secs <= 60  ? "5"  :
+           _tf_secs <= 300  ? "15" :
+           _tf_secs <= 900  ? "60" : "240"
+
+ema_34_htf = request.security(ticker.new(syminfo.prefix, syminfo.ticker), bias_tf,
+     ta.ema(close, 34), lookahead=barmerge.lookahead_off)
+ema_50_htf = request.security(ticker.new(syminfo.prefix, syminfo.ticker), bias_tf,
+     ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+
+ema_34_htf := na(ema_34_htf) ? ema_34_htf[1] : ema_34_htf
+ema_50_htf := na(ema_50_htf) ? ema_50_htf[1] : ema_50_htf
+
+htf_bull = not na(ema_34_htf) and not na(ema_50_htf) and ema_34_htf > ema_50_htf
+htf_bear = not na(ema_34_htf) and not na(ema_50_htf) and ema_34_htf < ema_50_htf
+
+src_ohlc4    = ohlc4
+ema_21_chart = ta.ema(src_ohlc4, 21)
+ema_34_chart = ta.ema(src_ohlc4, 34)
+ema_50_chart = ta.ema(src_ohlc4, 50)
+
+chart_stack_bull = ema_21_chart > ema_34_chart and ema_34_chart > ema_50_chart
+chart_stack_bear = ema_21_chart < ema_34_chart and ema_34_chart < ema_50_chart
+chart_stack_str  = chart_stack_bull ? "BULL" : chart_stack_bear ? "BEAR" : "NEUTRAL"
+
+// ============================================================================
+// GATE 2: HMA RIBBON CONFLUENCE
+// ============================================================================
+
+hma_6  = ta.hma(close, hma_6_len)
+hma_21_val = ta.hma(close, hma_21_len)
+
+hma_ribbon_bull = not na(hma_6) and not na(hma_21_val) and hma_6 > hma_21_val
+hma_ribbon_bear = not na(hma_6) and not na(hma_21_val) and hma_6 < hma_21_val
+conf_hma_long  = hma_ribbon_bull ? 1 : 0
+conf_hma_short = hma_ribbon_bear ? 1 : 0
+
+// ============================================================================
+// GATE 3: GRADE ENGINE
+// ============================================================================
+
+diff_curr    = _calc_rsi_diff(close, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm)
+rsi_dir_curr = _get_rsi_dir(diff_curr, rsi_thresh)
+db_stoch = _calc_dstoch(stoch_len, stoch_sm)
+stoch_momentum_bull = db_stoch > 50
+stoch_momentum_bear = db_stoch < 50
+
+_chart_min = timeframe.in_seconds() / 60
+mtf_fast_tf = _chart_min <= 3 ? "5"  : _chart_min <= 5 ? "15" : _chart_min <= 15 ? "60"  : "240"
+mtf_mid_tf  = _chart_min <= 3 ? "15" : _chart_min <= 5 ? "60" : _chart_min <= 15 ? "240" : "D"
+mtf_slow_tf = _chart_min <= 3 ? "60" : _chart_min <= 5 ? "240": _chart_min <= 15 ? "D"   : "W"
+
+_get_mtf_dir(tf) =>
+    d = request.security(_cleanTicker, tf,
+         _calc_rsi_diff(close, rsi_short_len, rsi_long_len, rsi_short_sm, rsi_long_sm),
+         lookahead=barmerge.lookahead_on)
+    d_safe = na(d) ? d[1] : d
+    _get_rsi_dir(d_safe, rsi_thresh)
+
+rsi_dir_fast = _get_mtf_dir(mtf_fast_tf)
+rsi_dir_mid  = _get_mtf_dir(mtf_mid_tf)
+rsi_dir_slow = _get_mtf_dir(mtf_slow_tf)
+
+mtf_3tf_bull = rsi_dir_fast == 1 and rsi_dir_mid == 1 and rsi_dir_slow == 1
+mtf_3tf_bear = rsi_dir_fast == -1 and rsi_dir_mid == -1 and rsi_dir_slow == -1
+mtf_2tf_bull = rsi_dir_fast == 1 and rsi_dir_mid == 1
+mtf_2tf_bear = rsi_dir_fast == -1 and rsi_dir_mid == -1
+
+ema_34_grade = ta.ema(close, 34)
+ema_bull_grade = close > ema_34_grade
+ema_bear_grade = close < ema_34_grade
+
+hma_34_grade = ta.hma(close, 34)
+hma_bull_grade = not na(hma_34_grade) and close > hma_34_grade
+hma_bear_grade = not na(hma_34_grade) and close < hma_34_grade
+
+vwap_val  = ta.vwap(close)
+vwap_bull = not na(vwap_val) and close > vwap_val
+vwap_bear = not na(vwap_val) and close < vwap_val
+
+vol_ma_val = ta.sma(hasVol ? volume : 1, vol_ma_len)
+vol_above  = hasVol ? (_safe_div(volume, vol_ma_val, 1.0) > vol_mult) : true
+
+[_diP, _diM, adx_value] = ta.dmi(adx_len, adx_len)
+adx_gate      = not use_adx or adx_value >= adx_threshold
+adx_ok_aplus  = adx_value >= adx_thresh_aplus
+adx_ok_a      = adx_value >= adx_threshold
+
+is_a_plus_long  = mtf_3tf_bull and rsi_dir_curr == 1 and ema_bull_grade and vwap_bull and stoch_momentum_bull and vol_above and adx_ok_aplus
+is_a_plus_short = mtf_3tf_bear and rsi_dir_curr == -1 and ema_bear_grade and vwap_bear and stoch_momentum_bear and vol_above and adx_ok_aplus
+
+is_a_long  = mtf_3tf_bull and rsi_dir_curr == 1 and ema_bull_grade and stoch_momentum_bull and adx_ok_a and not is_a_plus_long
+is_a_short = mtf_3tf_bear and rsi_dir_curr == -1 and ema_bear_grade and stoch_momentum_bear and adx_ok_a and not is_a_plus_short
+
+is_a_minus_long  = mtf_2tf_bull and rsi_dir_curr == 1 and ema_bull_grade and stoch_momentum_bull and not is_a_long and not is_a_plus_long
+is_a_minus_short = mtf_2tf_bear and rsi_dir_curr == -1 and ema_bear_grade and stoch_momentum_bear and not is_a_short and not is_a_plus_short
+
+is_b_plus_long  = mtf_2tf_bull and hma_bull_grade and not is_a_minus_long and not is_a_long and not is_a_plus_long
+is_b_plus_short = mtf_2tf_bear and hma_bear_grade and not is_a_minus_short and not is_a_short and not is_a_plus_short
+
+grade_str = is_a_plus_long or is_a_plus_short ? "A+" :
+            is_a_long      or is_a_short      ? "A"  :
+            is_a_minus_long or is_a_minus_short ? "A-" :
+            is_b_plus_long  or is_b_plus_short  ? "B+" : "NONE"
+
+grade_is_long  = is_a_plus_long  or is_a_long  or is_a_minus_long  or is_b_plus_long
+grade_is_short = is_a_plus_short or is_a_short or is_a_minus_short or is_b_plus_short
+
+grade_long_ok  = not use_grade_gate or (
+     (use_a_plus  and is_a_plus_long)  or
+     (use_a       and is_a_long)       or
+     (use_a_minus and is_a_minus_long) or
+     (use_b_plus  and is_b_plus_long))
+
+grade_short_ok = not use_grade_gate or (
+     (use_a_plus  and is_a_plus_short)  or
+     (use_a       and is_a_short)       or
+     (use_a_minus and is_a_minus_short) or
+     (use_b_plus  and is_b_plus_short))
+
+// ============================================================================
+// GATE 4: TTM SQUEEZE
+// ============================================================================
+
+sq_basis_hl  = (ta.highest(high, sq_len) + ta.lowest(low, sq_len)) / 2.0
+sq_basis_sma = ta.sma(close, sq_len)
+sq_e1        = sq_basis_hl + sq_basis_sma
+sq_osc       = ta.linreg(close - sq_e1 / 2.0, sq_len, 0)
+sq_diff      = _bband(sq_len, 2.0) - _keltner(sq_len, 1.0)
+
+sq_bullish = not na(sq_osc) and sq_osc > 0 and sq_osc > sq_osc[1]
+sq_bearish = not na(sq_osc) and sq_osc < 0 and sq_osc < sq_osc[1]
+sq_signal  = sq_bullish ? 1 : sq_bearish ? -1 : 0
+sq_fired   = not na(sq_diff) and sq_diff >= 0
+
+sq_dir_long_ok   = not use_squeeze_dir or sq_signal == 1
+sq_fire_long_ok  = not use_squeeze_fired or sq_fired
+sq_dir_short_ok  = not use_squeeze_dir or sq_signal == -1
+sq_fire_short_ok = not use_squeeze_fired or sq_fired
+
+squeeze_gate_long  = not use_squeeze or (sq_dir_long_ok and sq_fire_long_ok)
+squeeze_gate_short = not use_squeeze or (sq_dir_short_ok and sq_fire_short_ok)
+
+// ============================================================================
+// GATE 5: VOLUME ROC
+// ============================================================================
+
+vol_roc_raw  = hasVol ? _safe_div(volume - volume[vol_roc_len], math.max(volume[vol_roc_len], 1), 0.0) * 100 : 0.0
+vol_roc_sma  = ta.sma(vol_roc_raw, vol_roc_sm)
+vol_roc_decl = vol_roc_sma < vol_roc_sma[1]
+vol_roc_dir  = vol_roc_sma > 0 ? 1 : vol_roc_sma < 0 ? -1 : 0
+
+vol_roc_gate_long  = not use_vol_roc or vol_roc_decl
+vol_roc_gate_short = not use_vol_roc or vol_roc_decl
+
+// ============================================================================
+// GATE 6: BOLLINGER BANDS CONFLUENCE
+// ============================================================================
+
+_bb_close = bb_tf_in == "" ? close : request.security(_cleanTicker, bb_tf_in, close, lookahead=barmerge.lookahead_off)
+_bb_close := na(_bb_close) ? _bb_close[1] : _bb_close
+
+bb_basis  = ta.sma(_bb_close, bb_len)
+bb_dev    = ta.stdev(_bb_close, bb_len)
+bb_upper  = bb_basis + bb_mult * bb_dev
+bb_lower  = bb_basis - bb_mult * bb_dev
+bb_width  = bb_upper - bb_lower
+bb_width_ma = ta.sma(bb_width, 50)
+bb_squeezed = not na(bb_width_ma) and bb_width < bb_width_ma * 0.6
+
+conf_bb_long  = not na(bb_lower) and not bb_squeezed and close <= bb_lower ? 1 : 0
+conf_bb_short = not na(bb_upper) and not bb_squeezed and close >= bb_upper ? 1 : 0
+
+// ============================================================================
+// GATE 7: ADR FILTER
+// ============================================================================
+
+daily_high = request.security(_cleanTicker, "D", high[1],  lookahead=barmerge.lookahead_on)
+daily_low  = request.security(_cleanTicker, "D", low[1],   lookahead=barmerge.lookahead_on)
+daily_rng  = request.security(_cleanTicker, "D", high[1] - low[1], lookahead=barmerge.lookahead_on)
+
+daily_high := na(daily_high) ? daily_high[1] : daily_high
+daily_low  := na(daily_low) ? daily_low[1] : daily_low
+daily_rng  := na(daily_rng) ? daily_rng[1] : daily_rng
+
+adr_val    = ta.sma(daily_rng, adr_len)
+today_rng  = high - daily_low
+adr_pct    = _safe_div(today_rng, adr_val, 0.0) * 100
+adr_ok     = not use_adr or adr_pct < adr_exhaust
+
+// ============================================================================
+// GATE 8: SESSION & TRADING DAY FILTER
+// ============================================================================
+
+_dow = dayofweek(time, "America/New_York")
+
+is_trade_day = (_dow == dayofweek.sunday    and trade_sun) or
+               (_dow == dayofweek.monday    and trade_mon) or
+               (_dow == dayofweek.tuesday   and trade_tue) or
+               (_dow == dayofweek.wednesday and trade_wed) or
+               (_dow == dayofweek.thursday  and trade_thu) or
+               (_dow == dayofweek.friday    and trade_fri) or
+               (_dow == dayofweek.saturday  and trade_sat)
+
+_sess_parts   = str.split(session_str, ",")
+_num_windows  = array.size(_sess_parts)
+_day_str      = ":23456"
+in_w1 = _num_windows >= 1 ? not na(time(timeframe.period, str.trim(array.get(_sess_parts, 0)) + _day_str, "America/New_York")) : false
+in_w2 = _num_windows >= 2 ? not na(time(timeframe.period, str.trim(array.get(_sess_parts, 1)) + _day_str, "America/New_York")) : false
+in_w3 = _num_windows >= 3 ? not na(time(timeframe.period, str.trim(array.get(_sess_parts, 2)) + _day_str, "America/New_York")) : false
+in_session = (in_w1 or in_w2 or in_w3) and is_trade_day
+
+sess_win_name = in_w1 ? "LONDON" : in_w2 ? "NY AM" : in_w3 ? "NY PM" : "—"
+
+in_session_prev = in_session[1]
+session_just_closed = in_session_prev and not in_session
+
+// ============================================================================
+// ATR EXITS
+// ============================================================================
+
+atr_val = ta.atr(atr_len_in)
+atr_val := math.max(atr_val, syminfo.mintick * 10)
+
+sl_pts    = atr_val * atr_sl_mult
+tp_pts    = atr_val * atr_tp_mult
+trail_act = atr_val * atr_trail_mult
+trail_dst = atr_val * atr_trail_dist
+be_pts    = atr_val * be_atr_mult
+
+sl_ticks    = math.max(math.round(sl_pts    / syminfo.mintick), 1)
+tp_ticks    = math.max(math.round(tp_pts    / syminfo.mintick), 1)
+trail_ticks = math.max(math.round(trail_dst / syminfo.mintick), 1)
+trail_act_t = math.max(math.round(trail_act / syminfo.mintick), 1)
+
+// ============================================================================
+// FINAL SIGNAL LOGIC
+// ============================================================================
+
+gate_long  = vol_roc_gate_long and adx_gate and grade_long_ok and squeeze_gate_long and in_session and is_trade_day and adr_ok and htf_bull
+gate_short = vol_roc_gate_short and adx_gate and grade_short_ok and squeeze_gate_short and in_session and is_trade_day and adr_ok and htf_bear
+
+long_signal  = debug_mode ? river_cross_long  : river_cross_long  and gate_long
+short_signal = debug_mode ? river_cross_short : river_cross_short and gate_short
+
+conf_long  = conf_hma_long  + conf_bb_long
+conf_short = conf_hma_short + conf_bb_short
+
+// ============================================================================
+// STRATEGY EXECUTION
+// ============================================================================
+
+is_flat  = strategy.position_size == 0
+is_long  = strategy.position_size > 0
+is_short_pos = strategy.position_size < 0
+
+if long_signal
+    if not is_flat
+        strategy.close_all(comment="REV→L")
+    strategy.entry("L1", strategy.long,  qty=1, comment="VES-SC L")
+    strategy.entry("L2", strategy.long,  qty=1, comment="VES-SC L")
+    be_stop_l1 := na
+    be_stop_l2 := na
+    be1_triggered := false
+    be2_triggered := false
+
+if short_signal
+    if not is_flat
+        strategy.close_all(comment="REV→S")
+    strategy.entry("S1", strategy.short, qty=1, comment="VES-SC S")
+    strategy.entry("S2", strategy.short, qty=1, comment="VES-SC S")
+    be_stop_s1 := na
+    be_stop_s2 := na
+    be1_triggered := false
+    be2_triggered := false
+
+// ============================================================================
+// BREAK EVEN MANAGEMENT
+// ============================================================================
+
+if is_long and use_be and strategy.opentrades.size() > 0
+    entry_l1 = strategy.opentrades.entry_price(0)
+    entry_l2 = strategy.opentrades.entry_price(1) if strategy.opentrades.size() > 1 else na
+    
+    if not na(entry_l1) and high >= entry_l1 + be_pts
+        be_stop_l1 := entry_l1 + be_offset_pts
+        be1_triggered := true
+    if not na(entry_l2) and high >= entry_l2 + be_pts
+        be_stop_l2 := entry_l2 + be_offset_pts
+        be2_triggered := true
+
+if is_short_pos and use_be and strategy.opentrades.size() > 0
+    entry_s1 = strategy.opentrades.entry_price(0)
+    entry_s2 = strategy.opentrades.entry_price(1) if strategy.opentrades.size() > 1 else na
+    
+    if not na(entry_s1) and low <= entry_s1 - be_pts
+        be_stop_s1 := entry_s1 - be_offset_pts
+        be1_triggered := true
+    if not na(entry_s2) and low <= entry_s2 - be_pts
+        be_stop_s2 := entry_s2 - be_offset_pts
+        be2_triggered := true
+
+// ============================================================================
+// EXIT MANAGEMENT
+// ============================================================================
+
+if is_long
+    strategy.exit("XL1", from_entry="L1", profit=tp_ticks, loss=sl_ticks,
+         trail_points=trail_act_t, trail_offset=trail_ticks,
+         stop=be_stop_l1,
+         comment_profit="TP", comment_loss=be1_triggered ? "BE" : "SL")
+    strategy.exit("XL2", from_entry="L2", profit=tp_ticks, loss=sl_ticks,
+         trail_points=trail_act_t, trail_offset=trail_ticks,
+         stop=be_stop_l2,
+         comment_profit="TP", comment_loss=be2_triggered ? "BE" : "SL")
+
+if is_short_pos
+    strategy.exit("XS1", from_entry="S1", profit=tp_ticks, loss=sl_ticks,
+         trail_points=trail_act_t, trail_offset=trail_ticks,
+         stop=be_stop_s1,
+         comment_profit="TP", comment_loss=be1_triggered ? "BE" : "SL")
+    strategy.exit("XS2", from_entry="S2", profit=tp_ticks, loss=sl_ticks,
+         trail_points=trail_act_t, trail_offset=trail_ticks,
+         stop=be_stop_s2,
+         comment_profit="TP", comment_loss=be2_triggered ? "BE" : "SL")
+
+if flatten_outside and session_just_closed and not is_flat
+    strategy.close_all(comment="SESS END")
+
+// ============================================================================
+// WEBHOOKS & ALERTS
+// ============================================================================
+
+ql_entry_long  = '{"action":"buy","symbol":"'  + ql_symbol + '","price":' + str.tostring(close) + ',"grade":"' + grade_str + '","conf":' + str.tostring(conf_long)  + ',"sl":' + str.tostring(math.round(sl_pts,2))  + ',"tp":' + str.tostring(math.round(tp_pts,2))  + '}'
+ql_entry_short = '{"action":"sell","symbol":"' + ql_symbol + '","price":' + str.tostring(close) + ',"grade":"' + grade_str + '","conf":' + str.tostring(conf_short) + ',"sl":' + str.tostring(math.round(sl_pts,2))  + ',"tp":' + str.tostring(math.round(tp_pts,2))  + '}'
+ql_flatten     = '{"action":"flat","symbol":"' + ql_symbol + '"}'
+
+if long_signal
+    alert(ql_entry_long,  alert.freq_once_per_bar)
+if short_signal
+    alert(ql_entry_short, alert.freq_once_per_bar)
+if flatten_outside and session_just_closed and not is_flat
+    alert(ql_flatten, alert.freq_once_per_bar)
+
+alertcondition(long_signal,  "🟢 ROUTER: ANY LONG",  message="VES-SC LONG")
+alertcondition(short_signal, "🔴 ROUTER: ANY SHORT", message="VES-SC SHORT")
+
+// ============================================================================
+// CANDLE COLORING BY GRADE
+// ============================================================================
+
+candle_col = show_candle_colors ? (
+     is_a_plus_long  ? grade_aplus_long_color  :
+     is_a_plus_short ? grade_aplus_short_color :
+     is_a_long       ? grade_a_long_color       :
+     is_a_short      ? grade_a_short_color      :
+     na) : na
+
+barcolor(candle_col)
+
+_grade_marker_col_long  = is_a_plus_long  ? grade_aplus_long_color  : is_a_long ? grade_a_long_color : color.new(#00AA66, 0)
+_grade_marker_col_short = is_a_plus_short ? grade_aplus_short_color : is_a_short ? grade_a_short_color : color.new(#FF6B35, 0)
+
+if show_labels
+    if long_signal and (is_a_plus_long or is_a_long or is_a_minus_long or is_b_plus_long)
+        label.new(bar_index, low - atr_val * 0.3, grade_str,
+             style=label.style_label_up, color=color.new(_grade_marker_col_long, 100 - label_bg_opacity),
+             textcolor=label_text_color, size=label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small)
+
+    if short_signal and (is_a_plus_short or is_a_short or is_a_minus_short or is_b_plus_short)
+        label.new(bar_index, high + atr_val * 0.3, grade_str,
+             style=label.style_label_down, color=color.new(_grade_marker_col_short, 100 - label_bg_opacity),
+             textcolor=label_text_color, size=label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small)
+
+// ============================================================================
+// PLOTS & VISUAL ELEMENTS — DYNAMIC COLORS & VISIBILITY
+// ============================================================================
+
+// River bands
+if show_river
+    plot(river_low,  "River Low",  color=river_low_color,   linewidth=river_width)
+    plot(river_mid,  "River Mid",  color=river_mid_color,   linewidth=river_width, style=plot.style_cross)
+    plot(river_high, "River High", color=river_high_color,  linewidth=river_width)
+
+// EMA stack with dynamic colors (green if EMA above price, red if EMA below price)
+if show_ema
+    ema_21_color = close < ema_21_chart ? ema_above_color : ema_below_color
+    ema_34_color = close < ema_34_chart ? ema_above_color : ema_below_color
+    ema_50_color = close < ema_50_chart ? ema_above_color : ema_below_color
+    
+    plot(ema_21_chart, "EMA 21", color=ema_21_color, linewidth=ema_21_width)
+    plot(ema_34_chart, "EMA 34", color=ema_34_color, linewidth=ema_34_width)
+    plot(ema_50_chart, "EMA 50", color=ema_50_color, linewidth=ema_50_width)
+
+// HMA ribbon with dynamic colors (green if HMA above price, red if HMA below price)
+if show_hma
+    hma_6_color = close < hma_6 ? hma_above_color : hma_below_color
+    hma_21_color_plot = close < hma_21_val ? hma_above_color : hma_below_color
+    
+    plot(hma_6, "HMA 6", color=hma_6_color, linewidth=hma_6_width)
+    plot(hma_21_val, "HMA 21", color=hma_21_color_plot, linewidth=hma_21_width)
+
+// Bollinger Bands
+if show_bb
+    p_bb_upper = plot(bb_upper, "BB Upper", color=bb_band_color, linewidth=bb_width)
+    p_bb_lower = plot(bb_lower, "BB Lower", color=bb_band_color, linewidth=bb_width)
+    fill(p_bb_upper, p_bb_lower, color=bb_fill_color)
+
+// ============================================================================
+// SIGNAL TRACKING
+// ============================================================================
+
+if long_signal
+    last_sig_bar   := bar_index
+    last_sig_grade := grade_str
+    last_sig_dir   := 1
+if short_signal
+    last_sig_bar   := bar_index
+    last_sig_grade := grade_str
+    last_sig_dir   := -1
+
+bars_since_sig = na(last_sig_bar) ? na : bar_index - last_sig_bar
+mins_since_sig = na(last_sig_bar) ? na : (bar_index - last_sig_bar) * timeframe.in_minutes()
+
+// ============================================================================
+// DAILY P&L TRACKING
+// ============================================================================
+
+closed_pnl = strategy.netprofit
+if ta.change(time("D")) != 0
+    daily_pnl    := 0.0
+    daily_trades := 0
+    prev_closed  := closed_pnl
+
+if closed_pnl != prev_closed
+    daily_pnl    := daily_pnl + (closed_pnl - prev_closed)
+    daily_trades := daily_trades + 1
+    prev_closed  := closed_pnl
+
+// ============================================================================
+// DASHBOARD RENDERING — WITH OPACITY CONTROL
+// ============================================================================
+
+var table dash = table.new(_dpos, 2, 19, border_width=1)
+
+_c_green  = color.new(#00C853, 55)
+_c_red    = color.new(#D50000, 55)
+_c_gray   = color.new(#424242, math.round(70 * dash_opacity / 100))
+_c_yellow = color.new(#FFD600, 55)
+_c_white  = color.new(#FFFFFF, 0)
+_c_header = color.new(#212121, math.round(40 * dash_opacity / 100))
+_c_orange = color.new(#FF6D00, 55)
+
+if show_dash and barstate.islast
+    _row(r, lbl, val, bg) =>
+        table.cell(dash, 0, r, lbl, bgcolor=_c_header, text_color=_c_white, text_size=_dsize)
+        table.cell(dash, 1, r, val, bgcolor=bg,        text_color=_c_white, text_size=_dsize)
+
+    _row(0, "VES-SC", VER, _c_gray)
+
+    sess_bg = in_session ? _c_green : _c_red
+    sess_txt = in_session ? "IN  " + sess_win_name : "OUT " + sess_win_name
+    _row(1, "SESSION", sess_txt, sess_bg)
+
+    grade_bg_long  = is_a_plus_long  ? grade_aplus_long_color  : is_a_long ? grade_a_long_color : color.new(#00AA66, 55)
+    grade_bg_short = is_a_plus_short ? grade_aplus_short_color : is_a_short ? grade_a_short_color : color.new(#FF6B35, 55)
+    grade_bg       = grade_is_long ? grade_bg_long : grade_is_short ? grade_bg_short : _c_gray
+    grade_dir_str  = grade_is_long ? " ▲" : grade_is_short ? " ▼" : ""
+    _row(2, "GRADE", grade_str + grade_dir_str, grade_bg)
+
+    river_emoji = river_state == 1 ? "⬆" : river_state == -1 ? "⬇" : "⚪"
+    river_bg    = river_state == 1 ? _c_green : river_state == -1 ? _c_red : _c_white
+    _row(3, "RIVER", river_emoji, river_bg)
+
+    htf_str   = htf_bull ? "HTF:BULL" : htf_bear ? "HTF:BEAR" : "HTF:NEU"
+    htf_bg    = htf_bull ? _c_green : htf_bear ? _c_red : _c_gray
+    combined_stack = htf_str + " | " + chart_stack_str
+    _row(4, "BIAS+EMA", combined_stack, htf_bg)
+
+    hma_emoji = hma_ribbon_bull ? "🐮" : hma_ribbon_bear ? "🐻" : "—"
+    hma_bg    = hma_ribbon_bull ? _c_green : hma_ribbon_bear ? _c_red : _c_gray
+    _row(5, "HMA RIB", hma_emoji, hma_bg)
+
+    adx_icon = adx_value >= adx_thresh_aplus ? "🔥 STRONG" : adx_value >= adx_threshold ? "✓ GOOD" : "⚠ WEAK"
+    adx_bg   = adx_value >= adx_thresh_aplus ? _c_green : adx_value >= adx_threshold ? _c_yellow : _c_red
+    _row(6, "ADX", str.tostring(adx_value, "#.0") + " " + adx_icon, adx_bg)
+
+    sq_state_str = sq_fired ? "FIRED" : "COILING"
+    sq_dir_str2  = sq_signal == 1 ? "BULL" : sq_signal == -1 ? "BEAR" : "NEU"
+    sq_bg        = sq_signal == 1 ? _c_green : sq_signal == -1 ? _c_red : _c_gray
+    _row(7, "SQUEEZE", sq_state_str + " " + sq_dir_str2, sq_bg)
+
+    vol_emoji = vol_roc_dir == 1 ? "⬆" : vol_roc_dir == -1 ? "⬇" : "⚪"
+    vol_bg    = vol_roc_dir == 1 ? _c_green : vol_roc_dir == -1 ? _c_red : _c_white
+    _row(8, "VOL ROC", vol_emoji, vol_bg)
+
+    bb_emoji = conf_bb_long > 0 ? "⬆" : conf_bb_short > 0 ? "⬇" : "⚪"
+    bb_bg    = conf_bb_long > 0 ? _c_green : conf_bb_short > 0 ? _c_red : _c_white
+    _row(9, "BB", bb_emoji, bb_bg)
+
+    atr_txt = "ATR " + str.tostring(atr_val, "#.0") + " | SL " + str.tostring(math.round(sl_pts)) + " | TP " + str.tostring(math.round(tp_pts))
+    _row(10, "ATR EXITS", atr_txt, _c_gray)
+
+    adr_txt = str.tostring(adr_pct, "#.0") + "% " + (adr_ok ? "✅ OK" : "❌ EXHST")
+    adr_bg  = adr_ok ? _c_green : _c_red
+    _row(11, "ADR", adr_txt, adr_bg)
+
+    _day_lbl(active, enabled, lbl) =>
+        active ? (enabled ? "●" + lbl : "○" + lbl) : lbl
+    day_str = _day_lbl(_dow==dayofweek.monday,    trade_mon, "M") + " " +
+              _day_lbl(_dow==dayofweek.tuesday,   trade_tue, "T") + " " +
+              _day_lbl(_dow==dayofweek.wednesday, trade_wed, "W") + " " +
+              _day_lbl(_dow==dayofweek.thursday,  trade_thu, "Th") + " " +
+              _day_lbl(_dow==dayofweek.friday,    trade_fri, "F")
+    day_bg  = is_trade_day ? _c_green : _c_red
+    _row(12, "TRADE DAY", day_str, day_bg)
+
+    last_dir_str = last_sig_dir == 1 ? "▲" : last_sig_dir == -1 ? "▼" : ""
+    last_txt = na(last_sig_bar) ? "—" :
+         last_sig_grade + " " + last_dir_str + " | " +
+         str.tostring(bars_since_sig) + " bars | " +
+         str.tostring(math.round(mins_since_sig)) + " min"
+    _row(13, "LAST SIG", last_txt, _c_gray)
+
+    pnl_bg  = daily_pnl >= 0 ? _c_green : _c_red
+    pnl_txt = (daily_pnl >= 0 ? "+" : "") + str.tostring(daily_pnl, "$#,##0.00") + " (" + str.tostring(daily_trades) + " trades)"
+    _row(14, "PNL TODAY", pnl_txt, pnl_bg)
+
+    long_gate_str = "V" + (vol_roc_gate_long  ? "✅" : "❌") +
+                    " T" + (htf_bull           ? "✅" : "❌") +
+                    " A" + (adx_gate           ? "✅" : "❌") +
+                    " G" + (grade_long_ok      ? "✅" : "❌") +
+                    " S" + (squeeze_gate_long  ? "✅" : "❌")
+    long_gate_all = gate_long
+    long_gate_bg  = long_gate_all ? _c_green : _c_red
+    _row(15, "LONG GATE", long_gate_str, long_gate_bg)
+
+    short_gate_str = "V" + (vol_roc_gate_short ? "✅" : "❌") +
+                     " T" + (htf_bear           ? "✅" : "❌") +
+                     " A" + (adx_gate           ? "✅" : "❌") +
+                     " G" + (grade_short_ok     ? "✅" : "❌") +
+                     " S" + (squeeze_gate_short ? "✅" : "❌")
+    short_gate_all = gate_short
+    short_gate_bg  = short_gate_all ? _c_green : _c_red
+    _row(16, "SHORT GATE", short_gate_str, short_gate_bg)
+
+    debug_bg  = debug_mode ? _c_orange : _c_gray
+    debug_txt = debug_mode ? "⚠ ALL GATES BYPASSED" : "LIVE"
+    _row(17, "DEBUG", debug_txt, debug_bg)
