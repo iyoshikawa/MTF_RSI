@@ -1,22 +1,21 @@
 //@version=6
-strategy("Hybrid Signal Router v1.2 (QuantLynk Signal Generator)",
+strategy("Hybrid Signal Router v1.2 (QuantLynk ATM Multi-Target)",
      overlay=true,
      pyramiding=0,
      default_qty_type=strategy.fixed,
      default_qty_value=2,
      calc_on_every_tick=false,
      use_bar_magnifier=true,
-     calc_on_order_fills=false,
-     process_orders_on_close=false,
-     fill_orders_on_standard_ohlc=false,
+     calc_on_order_fills=true,
+     process_orders_on_close=true,
+     fill_orders_on_standard_ohlc=true,
      initial_capital=1000000,
      max_labels_count=500)
 
 // ============================================================================
-// HYBRID SIGNAL ROUTER v1.2 (QuantLynk Signal Generator)
+// HYBRID SIGNAL ROUTER v1.2 (QuantLynk ATM Multi-Target)
 // ============================================================================
-// Pure Signal Detection & QuantLynk Webhook Integration
-// NO STRATEGY ENTRIES/EXITS - All execution via QuantLynk OSO Brackets
+// Signal Detection + Pine Script Entry/Exit + QuantLynk Integration
 //
 // Architecture:
 // 1. VOL PEAK/BOTTOM fires → marker memory captures event
@@ -24,15 +23,19 @@ strategy("Hybrid Signal Router v1.2 (QuantLynk Signal Generator)",
 // 3. Chop/Neutral gate (Internal OR External)
 // 4. Scoring engine (8 slots with weights, required, veto)
 // 5. Session filter
-// 6. Signal Alert → QuantLynk JSON webhook → Execution (ATM brackets)
-// 7. QuantLynk manages all position lifecycle (no Pine Script exits)
+// 6. Entry signal → strategy.entry() + QuantLynk JSON alert
+// 7. Exit engine: trailing stops, static TP/SL, session flatten
+// 8. QuantLynk OSO brackets available as alternative execution
 //
 // Configuration (YM):
-// Entry: Webhook-driven via QuantLynk
-// Target 1: 50pt TP, 40pt SL (YM Con 1)
-// Target 2: 125pt TP, 40pt SL (YM Con 2, auto-trail enabled)
+// Entry: 2 contracts (1 lot × 2)
+// Target 1: 50pt TP, 40pt SL | Label: YM Con 1
+// Target 2: 125pt TP, 40pt SL | Label: YM Con 2 (auto-trail enabled)
 // Auto Breakeven: 30pt trigger, +10pt offset
 // Auto Trail (T2): 1-Step, 20pt distance, 30pt profit trigger
+//
+// Pine execution handles backtesting & live trading
+// QuantLynk integration available for webhook-driven execution
 // ============================================================================
 
 
@@ -874,14 +877,17 @@ bool is_short = strategy.position_size < 0
 
 
 // ============================================================================
-// QUANTLYNK SIGNAL ALERTS (WEBHOOK-DRIVEN ONLY, NO STRATEGY ENTRIES/EXITS)
+// ENTRY EXECUTION (With QuantLynk Alert)
 // ============================================================================
 
 string entry_long_msg = f_atm_target1_json("buy", "long_signal")
 string entry_short_msg = f_atm_target1_json("sell", "short_signal")
+string exit_long_msg = f_market_json("sell", "{{strategy.order.contracts}}", "exit_long")
+string exit_short_msg = f_market_json("buy", "{{strategy.order.contracts}}", "exit_short")
 
-// Alert on signal detection (QuantLynk webhook execution, no strategy.entry calls)
+// Entry on long signal
 if long_signal and is_flat and not day_halted
+    strategy.entry("Long", strategy.long, qty=entry_qty, comment="Long", alert_message=entry_long_msg)
     alert(entry_long_msg, alert.freq_once_per_bar)
     last_trade_bar := bar_index
     daily_trade_count += 1
@@ -890,7 +896,9 @@ if long_signal and is_flat and not day_halted
         day_halted := true
         halt_reason := "TRADE LIMIT"
 
+// Entry on short signal
 if short_signal and is_flat and not day_halted
+    strategy.entry("Short", strategy.short, qty=entry_qty, comment="Short", alert_message=entry_short_msg)
     alert(entry_short_msg, alert.freq_once_per_bar)
     last_trade_bar := bar_index
     daily_trade_count += 1
@@ -899,41 +907,152 @@ if short_signal and is_flat and not day_halted
         day_halted := true
         halt_reason := "TRADE LIMIT"
 
+// Flip on opposite
+if flip_on_opposite
+    if long_signal and is_short
+        strategy.close("Short", comment="Flip to Long", alert_message=exit_short_msg)
+        alert(exit_short_msg, alert.freq_once_per_bar)
+        last_trade_bar := bar_index
+        if allow_reentry_same_bar
+            strategy.entry("Long", strategy.long, qty=entry_qty, comment="Long", alert_message=entry_long_msg)
+            alert(entry_long_msg, alert.freq_once_per_bar)
+            daily_trade_count += 1
+            last_long_signal_marker_bar := last_bottom_bar
+
+    if short_signal and is_long
+        strategy.close("Long", comment="Flip to Short", alert_message=exit_long_msg)
+        alert(exit_long_msg, alert.freq_once_per_bar)
+        last_trade_bar := bar_index
+        if allow_reentry_same_bar
+            strategy.entry("Short", strategy.short, qty=entry_qty, comment="Short", alert_message=entry_short_msg)
+            alert(entry_short_msg, alert.freq_once_per_bar)
+            daily_trade_count += 1
+            last_short_signal_marker_bar := last_peak_bar
+
 
 // ============================================================================
-// EXIT ENGINE REMOVED - QuantLynk ATM Brackets Manage Exits
+// EXIT ENGINE (ATM Multi-Target with QuantLynk)
 // ============================================================================
-// All exit logic removed. QuantLynk OSO brackets handle:
+// QuantLynk OSO brackets manage primary exits:
 // - Target 1: 50pt TP, 40pt SL (YM Con 1)
 // - Target 2: 125pt TP, 40pt SL (YM Con 2, auto-trail)
 // - Auto Breakeven: 30pt trigger, +10pt offset
 //
-// This indicator sends SIGNAL ALERTS ONLY - execution is 100% QuantLynk
+// Pine Script position management stays active for session flatten
+// and provides backup exit logic if QuantLynk bracket doesn't execute
 // ============================================================================
 
 var float entry_price = na
-var bool trade_flagged_for_ql = false
+var float trail_stop = na
+var float peak_price = na
+var float trough_price = na
+var bool trail_frozen_at_be = false
+var int prev_pos_sign = 0
 
-// Flag when signal fires (for reference, not used in strategy execution)
-if long_signal and is_flat
-    trade_flagged_for_ql := true
-    entry_price := close
+cur_pos_sign = strategy.position_size > 0 ? 1 : strategy.position_size < 0 ? -1 : 0
+direction_changed = cur_pos_sign != 0 and prev_pos_sign != 0 and cur_pos_sign != prev_pos_sign
+skip_exit_checks = direction_changed
 
-if short_signal and is_flat
-    trade_flagged_for_ql := true
-    entry_price := close
-
-// Reset flag when signal clears
-if (not long_signal and not short_signal) or (long_signal and is_long) or (short_signal and is_short)
-    trade_flagged_for_ql := false
+if direction_changed
     entry_price := na
+    trail_stop := na
+    peak_price := na
+    trough_price := na
+    trail_frozen_at_be := false
+
+if strategy.opentrades > 0
+    if na(entry_price)
+        entry_price := strategy.position_avg_price
+        peak_price := close
+        trough_price := close
+        trail_stop := na
+        trail_frozen_at_be := false
+
+    peak_price := math.max(peak_price, close)
+    trough_price := math.min(trough_price, close)
+
+    // Long position trailing
+    if strategy.position_size > 0
+        moved = f_trail_moved(entry_price, peak_price, trough_price, true)
+        be_lock_price = entry_price + f_ticks_to_price(be_offset_ticks)
+
+        if enable_static_sl
+            trail_stop := entry_price - f_static_sl()
+        else
+            if trail_frozen_at_be
+                trail_stop := be_lock_price
+            else
+                if moved >= f_trail_start_threshold()
+                    new_ts = peak_price - f_trail_distance()
+                    trail_stop := na(trail_stop) ? new_ts : math.max(trail_stop, new_ts)
+                    if freeze_trail_at_be and trail_stop >= be_lock_price
+                        trail_stop := be_lock_price
+                        trail_frozen_at_be := true
+                else
+                    trail_stop := entry_price - f_initial_sl()
+
+        if not skip_exit_checks and close <= trail_stop
+            last_long_sl_bar := bar_index
+            strategy.close("Long", comment=enable_static_sl ? "Static SL" : "Trail SL",
+                 alert_message=exit_long_msg)
+            alert(exit_long_msg, alert.freq_once_per_bar)
+
+        if enable_static_tp and not skip_exit_checks and close >= entry_price + f_static_tp()
+            strategy.close("Long", comment="Static TP", alert_message=exit_long_msg)
+            alert(exit_long_msg, alert.freq_once_per_bar)
+
+    // Short position trailing
+    if strategy.position_size < 0
+        moved = f_trail_moved(entry_price, peak_price, trough_price, false)
+        be_lock_price = entry_price - f_ticks_to_price(be_offset_ticks)
+
+        if enable_static_sl
+            trail_stop := entry_price + f_static_sl()
+        else
+            if trail_frozen_at_be
+                trail_stop := be_lock_price
+            else
+                if moved >= f_trail_start_threshold()
+                    new_ts = trough_price + f_trail_distance()
+                    trail_stop := na(trail_stop) ? new_ts : math.min(trail_stop, new_ts)
+                    if freeze_trail_at_be and trail_stop <= be_lock_price
+                        trail_stop := be_lock_price
+                        trail_frozen_at_be := true
+                else
+                    trail_stop := entry_price + f_initial_sl()
+
+        if not skip_exit_checks and close >= trail_stop
+            last_short_sl_bar := bar_index
+            strategy.close("Short", comment=enable_static_sl ? "Static SL" : "Trail SL",
+                 alert_message=exit_short_msg)
+            alert(exit_short_msg, alert.freq_once_per_bar)
+
+        if enable_static_tp and not skip_exit_checks and close <= entry_price - f_static_tp()
+            strategy.close("Short", comment="Static TP", alert_message=exit_short_msg)
+            alert(exit_short_msg, alert.freq_once_per_bar)
+
+if strategy.opentrades == 0
+    entry_price := na
+    trail_stop := na
+    peak_price := na
+    trough_price := na
+    trail_frozen_at_be := false
 
 
 // ============================================================================
-// SESSION FLATTEN REMOVED - QuantLynk Manages Position Lifecycle
+// SESSION FLATTEN (QuantLynk can override, Pine Script backup)
 // ============================================================================
 
-prev_pos_sign := 0
+if flatten_evening and end_of_evening
+    strategy.close_all(comment="Flatten: Evening End", alert_message=f_flatten_json("session_evening"))
+
+if flatten_overnight and end_of_overnight
+    strategy.close_all(comment="Flatten: Overnight End", alert_message=f_flatten_json("session_overnight"))
+
+if flatten_ny and end_of_ny
+    strategy.close_all(comment="Flatten: NY End", alert_message=f_flatten_json("session_ny"))
+
+prev_pos_sign := cur_pos_sign
 
 
 // ============================================================================
