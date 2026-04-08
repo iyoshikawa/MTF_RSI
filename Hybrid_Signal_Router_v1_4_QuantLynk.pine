@@ -1408,7 +1408,7 @@ if barstate.islast and show_dashboard
         table.cell(t, 1, 1, "B " + str.tostring(bull_votes) + " / S " + str.tostring(bear_votes), text_color=color.white, bgcolor=table_value_bg)
 
         table.cell(t, 0, 2, "Markers", text_color=color.white)
-        table.cell(t, 1, 2, (short_marker_fresh ? "P" : "") + (long_marker_fresh ? "B" : ""), text_color=color.white,bgcolor=peak_bg if short_marker_fresh else bottom_bg if long_marker_fresh else table_bg_off)
+        table.cell(t, 1, 2, (short_marker_fresh ? "P" : "") + (long_marker_fresh ? "B" : ""), text_color=color.white, bgcolor=short_marker_fresh ? peak_bg : long_marker_fresh ? bottom_bg : table_bg_off)
 
         table.cell(t, 0, 3, "Qband", text_color=color.white)
         table.cell(t, 1, 3, qband_width_ok ? "OK" : "NARROW", bgcolor=qband_width_ok ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
