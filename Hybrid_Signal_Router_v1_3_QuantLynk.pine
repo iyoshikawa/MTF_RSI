@@ -1,5 +1,5 @@
 //@version=6
-strategy("Hybrid Signal Router v1.2 (QuantLynk ATM Multi-Target)",
+strategy("Hybrid Signal Router v1.3 (QuantLynk ATM Multi-Target)",
      overlay=true,
      pyramiding=0,
      default_qty_type=strategy.fixed,
@@ -13,7 +13,22 @@ strategy("Hybrid Signal Router v1.2 (QuantLynk ATM Multi-Target)",
      max_labels_count=500)
 
 // ============================================================================
-// HYBRID SIGNAL ROUTER v1.2 (QuantLynk ATM Multi-Target)
+// HYBRID SIGNAL ROUTER v1.3 (QuantLynk ATM Multi-Target)
+// ============================================================================
+// v1.3 CHANGES:
+//   - NEW: EMA River Qualifier for Vol Ribbon slots (7/8).
+//     Computes 20 EMA High, 20 EMA Low, and 34 EMA internally.
+//     Vol Ribbon Bull (Slot 7) bullish state only counts when
+//     close > EMA(high, 20) AND close > EMA(ohlc4, 34).
+//     Vol Ribbon Bear (Slot 8) bearish state only counts when
+//     close < EMA(low, 20) AND close < EMA(ohlc4, 34).
+//     When EMA position disagrees, slot raw state forced to 0 —
+//     scoring, required, extend, AND veto all cascade correctly.
+//   - New input group: "04i-b) EMA River Qualifier" with toggle,
+//     configurable lengths (20/34), 34 EMA source, and optional
+//     EMA river plot overlay.
+//   - Dashboard: Slot 7/8 rows show "~" suffix when EMA qualifier
+//     overrides the raw Vol Ribbon state to neutral.
 // ============================================================================
 // Signal Detection + Pine Script Entry/Exit + QuantLynk Integration
 //
@@ -331,6 +346,19 @@ short_score_needed = input.float(-4.0, "Short Score Threshold", step=0.25, group
 min_bull_votes = input.int(3, "Min Bull Votes For Long", minval=0, maxval=8, group=gScoring)
 min_bear_votes = input.int(3, "Min Bear Votes For Short", minval=0, maxval=8, group=gScoring)
 
+// EMA River Qualifier (for Vol Ribbon Slots 7/8)
+gEmaRiver = "04j) EMA River Qualifier"
+enable_ema_river = input.bool(true, "Enable EMA River Qualifier", group=gEmaRiver,
+     tooltip="When ON, Vol Ribbon Bull (Slot 7) only counts bullish if price is above 20 EMA High AND 34 EMA. Vol Ribbon Bear (Slot 8) only counts bearish if price is below 20 EMA Low AND 34 EMA. When price is NOT in the correct EMA zone, the slot reads neutral (0) — scoring, required, extend, and veto all cascade from the qualified state.")
+ema_river_length = input.int(20, "EMA River Length", minval=5, maxval=50, group=gEmaRiver,
+     tooltip="Length of the EMA High / EMA Low river. Default 20 matches GJBI methodology.")
+ema_trend_length = input.int(34, "EMA Trend Length", minval=5, maxval=100, group=gEmaRiver,
+     tooltip="Length of the trend EMA that must also be cleared. Default 34.")
+ema_trend_source = input.string("ohlc4", "EMA Trend Source", options=["close", "ohlc4", "hl2", "hlc3"], group=gEmaRiver,
+     tooltip="Source for the 34 EMA calculation. ohlc4 recommended for smoothness.")
+show_ema_river = input.bool(false, "Plot EMA River On Chart", group=gEmaRiver,
+     tooltip="Show 20 EMA High (green), 20 EMA Low (red), and 34 EMA (yellow) on the chart.")
+
 
 // ============================================================================
 // 05) EXIT ENGINE
@@ -595,6 +623,28 @@ bool long_marker_fresh = not na(last_bottom_bar) and last_long_signal_marker_bar
 
 
 // ============================================================================
+// EMA RIVER QUALIFIER (Internal Calculations)
+// ============================================================================
+
+// Resolve 34 EMA source
+float ema_trend_src_val = switch ema_trend_source
+    "close" => close
+    "ohlc4" => ohlc4
+    "hl2" => hl2
+    "hlc3" => hlc3
+    => ohlc4
+
+// Compute EMAs
+float ema_high_river = ta.ema(high, ema_river_length)
+float ema_low_river = ta.ema(low, ema_river_length)
+float ema_trend_line = ta.ema(ema_trend_src_val, ema_trend_length)
+
+// Spatial qualification: is price in the correct zone?
+bool ema_river_bull_ok = close > ema_high_river and close > ema_trend_line
+bool ema_river_bear_ok = close < ema_low_river and close < ema_trend_line
+
+
+// ============================================================================
 // SLOT STATES & SCORING
 // ============================================================================
 
@@ -607,6 +657,20 @@ int s5_state_raw = f_state(s5_src, s5_mode, s5_bull, s5_bear, s5_mid, s5_invert)
 int s6_state_raw = f_state(s6_src, s6_mode, s6_bull, s6_bear, s6_mid, s6_invert)
 int s7_state_raw = f_state(s7_src, s7_mode, s7_bull, s7_bear, s7_mid, s7_invert)
 int s8_state_raw = f_state(s8_src, s8_mode, s8_bull, s8_bear, s8_mid, s8_invert)
+
+// EMA River qualification: zero out Vol Ribbon states when price isn't in the correct zone
+// Tracks whether the qualifier overrode the raw state (for dashboard display)
+bool s7_ema_override = false
+bool s8_ema_override = false
+if enable_ema_river
+    // Slot 7 (Vol Ribbon Bull): bullish only valid above river + 34 EMA
+    if s7_state_raw == 1 and not ema_river_bull_ok
+        s7_state_raw := 0
+        s7_ema_override := true
+    // Slot 8 (Vol Ribbon Bear): bearish only valid below river + 34 EMA
+    if s8_state_raw == -1 and not ema_river_bear_ok
+        s8_state_raw := 0
+        s8_ema_override := true
 
 // Apply extend (for bull state = 1)
 var int s1_bull_ext = 0
@@ -1123,7 +1187,7 @@ color bottom_bg = long_marker_gate_ok ? (long_marker_fresh ? color.new(color.gre
 if barstate.islast and show_dashboard
     table.clear(t, 0, 0, 1, table_rows - 1)
 
-    table.cell(t, 0, 0, "Hybrid Router v1.1", text_color=color.white, bgcolor=table_header_bg)
+    table.cell(t, 0, 0, "Hybrid Router v1.3", text_color=color.white, bgcolor=table_header_bg)
     table.cell(t, 1, 0, str.tostring(total_score, "#.##"), text_color=color.white, bgcolor=table_value_bg)
 
     if dashboard_mode == "Full"
@@ -1147,10 +1211,12 @@ if barstate.islast and show_dashboard
         table.cell(t, 1, 6, s6_enabled ? f_state_text(s6_state) : "OFF", bgcolor=s6_enabled ? color.new(s6_state == 1 ? color.green : s6_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
 
         table.cell(t, 0, 7, s7_name, text_color=color.white)
-        table.cell(t, 1, 7, s7_enabled ? f_state_text(s7_state) : "OFF", bgcolor=s7_enabled ? color.new(s7_state == 1 ? color.green : s7_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+        string s7_disp = s7_enabled ? (f_state_text(s7_state) + (s7_ema_override ? "~" : "")) : "OFF"
+        table.cell(t, 1, 7, s7_disp, bgcolor=s7_enabled ? color.new(s7_state == 1 ? color.green : s7_state == -1 ? color.red : s7_ema_override ? color.orange : color.gray, table_opacity) : table_bg_off)
 
         table.cell(t, 0, 8, s8_name, text_color=color.white)
-        table.cell(t, 1, 8, s8_enabled ? f_state_text(s8_state) : "OFF", bgcolor=s8_enabled ? color.new(s8_state == 1 ? color.green : s8_state == -1 ? color.red : color.gray, table_opacity) : table_bg_off)
+        string s8_disp = s8_enabled ? (f_state_text(s8_state) + (s8_ema_override ? "~" : "")) : "OFF"
+        table.cell(t, 1, 8, s8_disp, bgcolor=s8_enabled ? color.new(s8_state == 1 ? color.green : s8_state == -1 ? color.red : s8_ema_override ? color.orange : color.gray, table_opacity) : table_bg_off)
 
         table.cell(t, 0, 9, "Votes", text_color=color.white)
         table.cell(t, 1, 9, "B " + str.tostring(bull_votes) + " / S " + str.tostring(bear_votes), text_color=color.white, bgcolor=table_value_bg)
@@ -1224,6 +1290,11 @@ if barstate.islast and show_dashboard
 // ============================================================================
 // PLOTS
 // ============================================================================
+
+// EMA River overlay (optional)
+plot(show_ema_river ? ema_high_river : na, "EMA High 20", color=color.new(color.green, 40), linewidth=1)
+plot(show_ema_river ? ema_low_river : na, "EMA Low 20", color=color.new(color.red, 40), linewidth=1)
+plot(show_ema_river ? ema_trend_line : na, "EMA 34", color=color.new(color.yellow, 40), linewidth=1, style=plot.style_line)
 
 plot(total_score, "Total Score", color=color.white, linewidth=2, display=display.pane)
 hline(long_score_needed, "Long Threshold", color=color.new(color.green, 50), linestyle=hline.style_dashed)
