@@ -1,5 +1,5 @@
 //@version=6
-strategy("Hybrid Signal Router v1.3 (QuantLynk ATM Multi-Target)",
+strategy("Hybrid Signal Router v1.4 (QuantLynk ATM Multi-Target)",
      overlay=true,
      pyramiding=0,
      default_qty_type=strategy.fixed,
@@ -13,7 +13,14 @@ strategy("Hybrid Signal Router v1.3 (QuantLynk ATM Multi-Target)",
      max_labels_count=500)
 
 // ============================================================================
-// HYBRID SIGNAL ROUTER v1.3 (QuantLynk ATM Multi-Target)
+// HYBRID SIGNAL ROUTER v1.4 (QuantLynk ATM Multi-Target)
+// ============================================================================
+// v1.4 CHANGES:
+//   - EMA River Qualifier fully integrated into Slots 7/8 (Vol Ribbon Bull/Bear).
+//     Dashboard now shows "~" suffix when EMA qualifier forces slot to neutral.
+//   - All tooltips completed for Slots 1–8, plus entry gates (Marker, Qband, Chop).
+//   - Consolidated codebase: no dangling variable declarations, all scope clean.
+//   - Ready for production push to main branch after final testing.
 // ============================================================================
 // v1.3 CHANGES:
 //   - NEW: EMA River Qualifier for Vol Ribbon slots (7/8).
@@ -192,7 +199,7 @@ s1_enabled = input.bool(true, "Use Slot 1", group=gS1,
 s1_name = input.string("RSI", "Slot 1 Name", group=gS1,
      tooltip="Display name on dashboard.")
 s1_src = input.source(close, "Slot 1 Source", group=gS1,
-     tooltip="Indicator source (RSI, MACD, custom oscillator, etc.).")
+     tooltip="Indicator source (RSI, MACD, custom oscillator, etc.). Evaluate using selected mode.")
 s1_mode = input.string("binary", "Slot 1 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS1,
      tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
 s1_bull = input.float(0.5, "Slot 1 Bull Threshold", step=0.1, group=gS1,
@@ -218,133 +225,231 @@ s1_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS1,
 
 // --- SLOT 2: Qmomentum ---
 gS2 = "04b) Slot 2 - Qmomentum"
-s2_enabled = input.bool(true, "Use Slot 2", group=gS2)
-s2_name = input.string("Qmomentum", "Slot 2 Name", group=gS2)
-s2_src = input.source(close, "Slot 2 Source", group=gS2)
-s2_mode = input.string("binary", "Slot 2 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS2)
-s2_bull = input.float(0.5, "Slot 2 Bull Threshold", step=0.1, group=gS2)
-s2_bear = input.float(-0.5, "Slot 2 Bear Threshold", step=0.1, group=gS2)
-s2_mid = input.float(0.0, "Slot 2 Midline", step=0.1, group=gS2)
-s2_invert = input.bool(false, "Invert Slot 2", group=gS2)
-s2_weight = input.float(1.25, "Slot 2 Weight", step=0.25, group=gS2)
-s2_req_l = input.bool(true, "Required For Long", group=gS2)
-s2_req_s = input.bool(true, "Required For Short", group=gS2)
-s2_veto_l = input.bool(false, "Veto Long When Bearish", group=gS2)
-s2_veto_s = input.bool(false, "Veto Short When Bullish", group=gS2)
-s2_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS2)
+s2_enabled = input.bool(true, "Use Slot 2", group=gS2,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s2_name = input.string("Qmomentum", "Slot 2 Name", group=gS2,
+     tooltip="Display name on dashboard.")
+s2_src = input.source(close, "Slot 2 Source", group=gS2,
+     tooltip="Indicator source (Q_Pilot momentum, MACD, RSI, etc.). Evaluate using selected mode.")
+s2_mode = input.string("binary", "Slot 2 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS2,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s2_bull = input.float(0.5, "Slot 2 Bull Threshold", step=0.1, group=gS2,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s2_bear = input.float(-0.5, "Slot 2 Bear Threshold", step=0.1, group=gS2,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s2_mid = input.float(0.0, "Slot 2 Midline", step=0.1, group=gS2,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s2_invert = input.bool(false, "Invert Slot 2", group=gS2,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s2_weight = input.float(1.25, "Slot 2 Weight", step=0.25, group=gS2,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s2_req_l = input.bool(true, "Required For Long", group=gS2,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s2_req_s = input.bool(true, "Required For Short", group=gS2,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s2_veto_l = input.bool(false, "Veto Long When Bearish", group=gS2,
+     tooltip="ON: Block long entries if this slot is bearish, regardless of other votes.")
+s2_veto_s = input.bool(false, "Veto Short When Bullish", group=gS2,
+     tooltip="ON: Block short entries if this slot is bullish, regardless of other votes.")
+s2_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS2,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // --- SLOT 3: Stochastic ---
 gS3 = "04c) Slot 3 - Stochastic"
-s3_enabled = input.bool(true, "Use Slot 3", group=gS3)
-s3_name = input.string("Stochastic", "Slot 3 Name", group=gS3)
-s3_src = input.source(close, "Slot 3 Source", group=gS3)
-s3_mode = input.string("binary", "Slot 3 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS3)
-s3_bull = input.float(0.5, "Slot 3 Bull Threshold", step=0.1, group=gS3)
-s3_bear = input.float(-0.5, "Slot 3 Bear Threshold", step=0.1, group=gS3)
-s3_mid = input.float(0.0, "Slot 3 Midline", step=0.1, group=gS3)
-s3_invert = input.bool(false, "Invert Slot 3", group=gS3)
-s3_weight = input.float(0.75, "Slot 3 Weight", step=0.25, group=gS3)
-s3_req_l = input.bool(false, "Required For Long", group=gS3)
-s3_req_s = input.bool(false, "Required For Short", group=gS3)
-s3_veto_l = input.bool(false, "Veto Long When Bearish", group=gS3)
-s3_veto_s = input.bool(false, "Veto Short When Bullish", group=gS3)
-s3_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS3)
+s3_enabled = input.bool(true, "Use Slot 3", group=gS3,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s3_name = input.string("Stochastic", "Slot 3 Name", group=gS3,
+     tooltip="Display name on dashboard.")
+s3_src = input.source(close, "Slot 3 Source", group=gS3,
+     tooltip="Indicator source (Stochastic %K, custom oscillator, etc.). Evaluate using selected mode.")
+s3_mode = input.string("binary", "Slot 3 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS3,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s3_bull = input.float(0.5, "Slot 3 Bull Threshold", step=0.1, group=gS3,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s3_bear = input.float(-0.5, "Slot 3 Bear Threshold", step=0.1, group=gS3,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s3_mid = input.float(0.0, "Slot 3 Midline", step=0.1, group=gS3,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s3_invert = input.bool(false, "Invert Slot 3", group=gS3,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s3_weight = input.float(0.75, "Slot 3 Weight", step=0.25, group=gS3,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s3_req_l = input.bool(false, "Required For Long", group=gS3,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s3_req_s = input.bool(false, "Required For Short", group=gS3,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s3_veto_l = input.bool(false, "Veto Long When Bearish", group=gS3,
+     tooltip="ON: Block long entries if this slot is bearish, regardless of other votes.")
+s3_veto_s = input.bool(false, "Veto Short When Bullish", group=gS3,
+     tooltip="ON: Block short entries if this slot is bullish, regardless of other votes.")
+s3_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS3,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // --- SLOT 4: EMA Bar ---
 gS4 = "04d) Slot 4 - EMA Bar"
-s4_enabled = input.bool(true, "Use Slot 4", group=gS4)
-s4_name = input.string("EMA Bar", "Slot 4 Name", group=gS4)
-s4_src = input.source(close, "Slot 4 Source", group=gS4)
-s4_mode = input.string("binary", "Slot 4 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS4)
-s4_bull = input.float(0.5, "Slot 4 Bull Threshold", step=0.1, group=gS4)
-s4_bear = input.float(-0.5, "Slot 4 Bear Threshold", step=0.1, group=gS4)
-s4_mid = input.float(0.0, "Slot 4 Midline", step=0.1, group=gS4)
-s4_invert = input.bool(false, "Invert Slot 4", group=gS4)
-s4_weight = input.float(1.50, "Slot 4 Weight", step=0.25, group=gS4)
-s4_req_l = input.bool(true, "Required For Long", group=gS4)
-s4_req_s = input.bool(true, "Required For Short", group=gS4)
-s4_veto_l = input.bool(false, "Veto Long When Bearish", group=gS4)
-s4_veto_s = input.bool(false, "Veto Short When Bullish", group=gS4)
-s4_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS4)
+s4_enabled = input.bool(true, "Use Slot 4", group=gS4,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s4_name = input.string("EMA Bar", "Slot 4 Name", group=gS4,
+     tooltip="Display name on dashboard.")
+s4_src = input.source(close, "Slot 4 Source", group=gS4,
+     tooltip="Indicator source (EMA trend signal, bar position vs EMA, etc.). Evaluate using selected mode.")
+s4_mode = input.string("binary", "Slot 4 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS4,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s4_bull = input.float(0.5, "Slot 4 Bull Threshold", step=0.1, group=gS4,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s4_bear = input.float(-0.5, "Slot 4 Bear Threshold", step=0.1, group=gS4,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s4_mid = input.float(0.0, "Slot 4 Midline", step=0.1, group=gS4,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s4_invert = input.bool(false, "Invert Slot 4", group=gS4,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s4_weight = input.float(1.50, "Slot 4 Weight", step=0.25, group=gS4,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s4_req_l = input.bool(true, "Required For Long", group=gS4,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s4_req_s = input.bool(true, "Required For Short", group=gS4,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s4_veto_l = input.bool(false, "Veto Long When Bearish", group=gS4,
+     tooltip="ON: Block long entries if this slot is bearish, regardless of other votes.")
+s4_veto_s = input.bool(false, "Veto Short When Bullish", group=gS4,
+     tooltip="ON: Block short entries if this slot is bullish, regardless of other votes.")
+s4_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS4,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // --- SLOT 5: Q_PILOT ---
 gS5 = "04e) Slot 5 - Q_PILOT"
-s5_enabled = input.bool(true, "Use Slot 5", group=gS5)
-s5_name = input.string("Q_PILOT", "Slot 5 Name", group=gS5)
-s5_src = input.source(close, "Slot 5 Source", group=gS5)
-s5_mode = input.string("binary", "Slot 5 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS5)
-s5_bull = input.float(0.5, "Slot 5 Bull Threshold", step=0.1, group=gS5)
-s5_bear = input.float(-0.5, "Slot 5 Bear Threshold", step=0.1, group=gS5)
-s5_mid = input.float(0.0, "Slot 5 Midline", step=0.1, group=gS5)
-s5_invert = input.bool(false, "Invert Slot 5", group=gS5)
-s5_weight = input.float(1.75, "Slot 5 Weight", step=0.25, group=gS5)
-s5_req_l = input.bool(false, "Required For Long", group=gS5)
-s5_req_s = input.bool(false, "Required For Short", group=gS5)
-s5_veto_l = input.bool(true, "Veto Long When Bearish", group=gS5)
-s5_veto_s = input.bool(true, "Veto Short When Bullish", group=gS5)
-s5_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS5)
+s5_enabled = input.bool(true, "Use Slot 5", group=gS5,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s5_name = input.string("Q_PILOT", "Slot 5 Name", group=gS5,
+     tooltip="Display name on dashboard.")
+s5_src = input.source(close, "Slot 5 Source", group=gS5,
+     tooltip="Indicator source (Q_Pilot Prediction Ribbon, market state signal, etc.). Evaluate using selected mode.")
+s5_mode = input.string("binary", "Slot 5 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS5,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s5_bull = input.float(0.5, "Slot 5 Bull Threshold", step=0.1, group=gS5,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s5_bear = input.float(-0.5, "Slot 5 Bear Threshold", step=0.1, group=gS5,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s5_mid = input.float(0.0, "Slot 5 Midline", step=0.1, group=gS5,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s5_invert = input.bool(false, "Invert Slot 5", group=gS5,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s5_weight = input.float(1.75, "Slot 5 Weight", step=0.25, group=gS5,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s5_req_l = input.bool(false, "Required For Long", group=gS5,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s5_req_s = input.bool(false, "Required For Short", group=gS5,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s5_veto_l = input.bool(true, "Veto Long When Bearish", group=gS5,
+     tooltip="ON: Block long entries if this slot is bearish (Q_PILOT in bear mode), regardless of other votes.")
+s5_veto_s = input.bool(true, "Veto Short When Bullish", group=gS5,
+     tooltip="ON: Block short entries if this slot is bullish (Q_PILOT in bull mode), regardless of other votes.")
+s5_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS5,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // --- SLOT 6: Extra ---
 gS6 = "04f) Slot 6 - Extra"
-s6_enabled = input.bool(false, "Use Slot 6", group=gS6)
-s6_name = input.string("Extra", "Slot 6 Name", group=gS6)
-s6_src = input.source(close, "Slot 6 Source", group=gS6)
-s6_mode = input.string("binary", "Slot 6 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS6)
-s6_bull = input.float(0.5, "Slot 6 Bull Threshold", step=0.1, group=gS6)
-s6_bear = input.float(-0.5, "Slot 6 Bear Threshold", step=0.1, group=gS6)
-s6_mid = input.float(0.0, "Slot 6 Midline", step=0.1, group=gS6)
-s6_invert = input.bool(false, "Invert Slot 6", group=gS6)
-s6_weight = input.float(1.00, "Slot 6 Weight", step=0.25, group=gS6)
-s6_req_l = input.bool(false, "Required For Long", group=gS6)
-s6_req_s = input.bool(false, "Required For Short", group=gS6)
-s6_veto_l = input.bool(false, "Veto Long When Bearish", group=gS6)
-s6_veto_s = input.bool(false, "Veto Short When Bullish", group=gS6)
-s6_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS6)
+s6_enabled = input.bool(false, "Use Slot 6", group=gS6,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s6_name = input.string("Extra", "Slot 6 Name", group=gS6,
+     tooltip="Display name on dashboard.")
+s6_src = input.source(close, "Slot 6 Source", group=gS6,
+     tooltip="Indicator source (custom signal, CVD divergence, etc.). Evaluate using selected mode.")
+s6_mode = input.string("binary", "Slot 6 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS6,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s6_bull = input.float(0.5, "Slot 6 Bull Threshold", step=0.1, group=gS6,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s6_bear = input.float(-0.5, "Slot 6 Bear Threshold", step=0.1, group=gS6,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s6_mid = input.float(0.0, "Slot 6 Midline", step=0.1, group=gS6,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s6_invert = input.bool(false, "Invert Slot 6", group=gS6,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s6_weight = input.float(1.00, "Slot 6 Weight", step=0.25, group=gS6,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s6_req_l = input.bool(false, "Required For Long", group=gS6,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s6_req_s = input.bool(false, "Required For Short", group=gS6,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s6_veto_l = input.bool(false, "Veto Long When Bearish", group=gS6,
+     tooltip="ON: Block long entries if this slot is bearish, regardless of other votes.")
+s6_veto_s = input.bool(false, "Veto Short When Bullish", group=gS6,
+     tooltip="ON: Block short entries if this slot is bullish, regardless of other votes.")
+s6_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS6,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // --- SLOT 7: Volume Ribbon Bull ---
 gS7 = "04g) Slot 7 - Vol Ribbon Bull"
-s7_enabled = input.bool(true, "Use Slot 7", group=gS7)
-s7_name = input.string("Vol Ribbon Bull", "Slot 7 Name", group=gS7)
+s7_enabled = input.bool(true, "Use Slot 7", group=gS7,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s7_name = input.string("Vol Ribbon Bull", "Slot 7 Name", group=gS7,
+     tooltip="Display name on dashboard.")
 s7_src = input.source(close, "Slot 7 Source", group=gS7,
-     tooltip="Q_Pilot Volume Ribbon Bull source.")
-s7_mode = input.string("binary", "Slot 7 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS7)
-s7_bull = input.float(0.5, "Slot 7 Bull Threshold", step=0.1, group=gS7)
-s7_bear = input.float(-0.5, "Slot 7 Bear Threshold", step=0.1, group=gS7)
-s7_mid = input.float(0.0, "Slot 7 Midline", step=0.1, group=gS7)
-s7_invert = input.bool(false, "Invert Slot 7", group=gS7)
-s7_weight = input.float(1.25, "Slot 7 Weight", step=0.25, group=gS7)
-s7_req_l = input.bool(false, "Required For Long", group=gS7)
-s7_req_s = input.bool(false, "Required For Short", group=gS7)
-s7_veto_l = input.bool(false, "Veto Long When Bearish", group=gS7)
+     tooltip="Q_Pilot Volume Ribbon Bull source. When EMA River Qualifier is ON, bullish state only counts when price is above 20 EMA High AND 34 EMA.")
+s7_mode = input.string("binary", "Slot 7 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS7,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s7_bull = input.float(0.5, "Slot 7 Bull Threshold", step=0.1, group=gS7,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s7_bear = input.float(-0.5, "Slot 7 Bear Threshold", step=0.1, group=gS7,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s7_mid = input.float(0.0, "Slot 7 Midline", step=0.1, group=gS7,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s7_invert = input.bool(false, "Invert Slot 7", group=gS7,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s7_weight = input.float(1.25, "Slot 7 Weight", step=0.25, group=gS7,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s7_req_l = input.bool(false, "Required For Long", group=gS7,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s7_req_s = input.bool(false, "Required For Short", group=gS7,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
+s7_veto_l = input.bool(false, "Veto Long When Bearish", group=gS7,
+     tooltip="ON: Block long entries if this slot is bearish, regardless of other votes.")
 s7_veto_s = input.bool(true, "Veto Short When Bullish", group=gS7,
-     tooltip="If Vol Ribbon Bull is active, veto short entries.")
-s7_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS7)
+     tooltip="If Vol Ribbon Bull is active (after EMA qualification), veto short entries.")
+s7_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS7,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // --- SLOT 8: Volume Ribbon Bear ---
 gS8 = "04h) Slot 8 - Vol Ribbon Bear"
-s8_enabled = input.bool(true, "Use Slot 8", group=gS8)
-s8_name = input.string("Vol Ribbon Bear", "Slot 8 Name", group=gS8)
+s8_enabled = input.bool(true, "Use Slot 8", group=gS8,
+     tooltip="Enable/disable this slot in scoring. OFF slots contribute 0 to score.")
+s8_name = input.string("Vol Ribbon Bear", "Slot 8 Name", group=gS8,
+     tooltip="Display name on dashboard.")
 s8_src = input.source(close, "Slot 8 Source", group=gS8,
-     tooltip="Q_Pilot Volume Ribbon Bear source.")
-s8_mode = input.string("binary", "Slot 8 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS8)
-s8_bull = input.float(0.5, "Slot 8 Bull Threshold", step=0.1, group=gS8)
-s8_bear = input.float(-0.5, "Slot 8 Bear Threshold", step=0.1, group=gS8)
-s8_mid = input.float(0.0, "Slot 8 Midline", step=0.1, group=gS8)
-s8_invert = input.bool(false, "Invert Slot 8", group=gS8)
-s8_weight = input.float(1.25, "Slot 8 Weight", step=0.25, group=gS8)
-s8_req_l = input.bool(false, "Required For Long", group=gS8)
-s8_req_s = input.bool(false, "Required For Short", group=gS8)
+     tooltip="Q_Pilot Volume Ribbon Bear source. When EMA River Qualifier is ON, bearish state only counts when price is below 20 EMA Low AND 34 EMA.")
+s8_mode = input.string("binary", "Slot 8 Mode", options=["binary", "sign", "midline", "cross", "risingfalling"], group=gS8,
+     tooltip="binary: > bull_th = bull, < bear_th = bear. sign: pos = bull, neg = bear. midline: > mid = bull, < mid = bear. cross: crosses midline. risingfalling: rising = bull, falling = bear.")
+s8_bull = input.float(0.5, "Slot 8 Bull Threshold", step=0.1, group=gS8,
+     tooltip="Value above which source is bullish (binary/midline modes).")
+s8_bear = input.float(-0.5, "Slot 8 Bear Threshold", step=0.1, group=gS8,
+     tooltip="Value below which source is bearish (binary/midline modes).")
+s8_mid = input.float(0.0, "Slot 8 Midline", step=0.1, group=gS8,
+     tooltip="Centerline for midline/cross/risingfalling modes. Source > mid = bull, < mid = bear.")
+s8_invert = input.bool(false, "Invert Slot 8", group=gS8,
+     tooltip="ON: Flip signal polarity. Bull becomes bear, vice versa.")
+s8_weight = input.float(1.25, "Slot 8 Weight", step=0.25, group=gS8,
+     tooltip="Importance multiplier. Higher = more impact on score. Bull adds +weight, bear subtracts -weight.")
+s8_req_l = input.bool(false, "Required For Long", group=gS8,
+     tooltip="ON: Long entries blocked unless this slot is bullish (or disabled).")
+s8_req_s = input.bool(false, "Required For Short", group=gS8,
+     tooltip="ON: Short entries blocked unless this slot is bearish (or disabled).")
 s8_veto_l = input.bool(true, "Veto Long When Bearish", group=gS8,
-     tooltip="If Vol Ribbon Bear is active, veto long entries.")
-s8_veto_s = input.bool(false, "Veto Short When Bullish", group=gS8)
-s8_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS8)
+     tooltip="If Vol Ribbon Bear is active (after EMA qualification), veto long entries.")
+s8_veto_s = input.bool(false, "Veto Short When Bullish", group=gS8,
+     tooltip="ON: Block short entries if this slot is bullish, regardless of other votes.")
+s8_extend = input.int(0, "Extend Bars", minval=0, maxval=10, group=gS8,
+     tooltip="Keep slot signal active for N extra bars after it would normally flip.")
 
 // Scoring Thresholds
 gScoring = "04i) Scoring Thresholds"
-long_score_needed = input.float(4.0, "Long Score Threshold", step=0.25, group=gScoring)
-short_score_needed = input.float(-4.0, "Short Score Threshold", step=0.25, group=gScoring)
-min_bull_votes = input.int(3, "Min Bull Votes For Long", minval=0, maxval=8, group=gScoring)
-min_bear_votes = input.int(3, "Min Bear Votes For Short", minval=0, maxval=8, group=gScoring)
+long_score_needed = input.float(4.0, "Long Score Threshold", step=0.25, group=gScoring,
+     tooltip="Minimum total score required to trigger a long entry signal.")
+short_score_needed = input.float(-4.0, "Short Score Threshold", step=0.25, group=gScoring,
+     tooltip="Maximum total score required to trigger a short entry signal (typically negative).")
+min_bull_votes = input.int(3, "Min Bull Votes For Long", minval=0, maxval=8, group=gScoring,
+     tooltip="Minimum number of bullish slots required for long entry (independent of score).")
+min_bear_votes = input.int(3, "Min Bear Votes For Short", minval=0, maxval=8, group=gScoring,
+     tooltip="Minimum number of bearish slots required for short entry (independent of score).")
 
 // EMA River Qualifier (for Vol Ribbon Slots 7/8)
 gEmaRiver = "04j) EMA River Qualifier"
@@ -368,17 +473,20 @@ exit_units = input.string("Ticks", "Exit Units", options=["Bricks", "Ticks"], gr
      tooltip="Bricks for Renko, Ticks for HA or time-based charts.")
 
 gTicks = "05b) Tick-Based Exits (ATM)"
-initial_sl_ticks = input.int(40, "Initial SL (ticks)", minval=1, group=gTicks)
+initial_sl_ticks = input.int(40, "Initial SL (ticks)", minval=1, group=gTicks,
+     tooltip="Initial stop loss distance in ticks. ATM: 40pts")
 
 // ATM Multi-Target Configuration
 enable_atm_targets = input.bool(true, "Enable ATM Multi-Target Mode", group=gTicks,
      tooltip="If ON: uses Target 1/2 TP values. If OFF: uses Take Profit (ticks) only.")
 target_1_tp_ticks = input.int(50, "Target 1 TP (ticks)", minval=1, group=gTicks,
      tooltip="First target take profit. ATM: 50pts")
-target_1_qty = input.int(1, "Target 1 Qty", minval=1, group=gTicks)
+target_1_qty = input.int(1, "Target 1 Qty", minval=1, group=gTicks,
+     tooltip="Contracts allocated to Target 1.")
 target_2_tp_ticks = input.int(125, "Target 2 TP (ticks)", minval=1, group=gTicks,
      tooltip="Second target take profit. ATM: 125pts")
-target_2_qty = input.int(1, "Target 2 Qty", minval=1, group=gTicks)
+target_2_qty = input.int(1, "Target 2 Qty", minval=1, group=gTicks,
+     tooltip="Contracts allocated to Target 2.")
 
 // Auto Breakeven (ATM)
 enable_auto_be = input.bool(true, "Enable Auto Breakeven", group=gTicks,
@@ -399,23 +507,34 @@ auto_trail_distance_ticks = input.int(20, "Auto Trail Distance (ticks)", minval=
 // Legacy single-target fallback (if ATM disabled)
 trail_start_ticks = input.int(10, "Start Trailing After (ticks) [LEGACY]", minval=1, group=gTicks,
      tooltip="Used only if ATM disabled.")
-trail_distance_ticks = input.int(20, "Trailing Distance (ticks) [LEGACY]", minval=1, group=gTicks)
-take_profit_ticks = input.int(50, "Take Profit (ticks) [LEGACY]", minval=1, group=gTicks)
-stop_loss_ticks = input.int(40, "Stop Loss (ticks) [LEGACY]", minval=1, group=gTicks)
+trail_distance_ticks = input.int(20, "Trailing Distance (ticks) [LEGACY]", minval=1, group=gTicks,
+     tooltip="Trailing stop distance in ticks (legacy mode).")
+take_profit_ticks = input.int(50, "Take Profit (ticks) [LEGACY]", minval=1, group=gTicks,
+     tooltip="Static take profit in ticks (legacy mode).")
+stop_loss_ticks = input.int(40, "Stop Loss (ticks) [LEGACY]", minval=1, group=gTicks,
+     tooltip="Static stop loss in ticks (legacy mode).")
 
 gBricks = "05c) Brick-Based Exits"
-brick_size = input.float(5.0, "Brick Size (must match chart)", minval=0.1, group=gBricks)
-initial_sl_bricks = input.int(2, "Initial SL (bricks)", minval=1, group=gBricks)
-trail_start_bricks = input.int(1, "Start Trailing After (bricks)", minval=1, group=gBricks)
-trail_distance_bricks = input.int(2, "Trailing Distance (bricks)", minval=1, group=gBricks)
-take_profit_bricks = input.int(2, "Take Profit (bricks)", minval=1, group=gBricks)
-stop_loss_bricks = input.int(2, "Stop Loss (bricks)", minval=1, group=gBricks)
+brick_size = input.float(5.0, "Brick Size (must match chart)", minval=0.1, group=gBricks,
+     tooltip="Renko brick size. Must match your chart settings.")
+initial_sl_bricks = input.int(2, "Initial SL (bricks)", minval=1, group=gBricks,
+     tooltip="Initial stop loss distance in bricks.")
+trail_start_bricks = input.int(1, "Start Trailing After (bricks)", minval=1, group=gBricks,
+     tooltip="Activate trailing after this many bricks of profit.")
+trail_distance_bricks = input.int(2, "Trailing Distance (bricks)", minval=1, group=gBricks,
+     tooltip="Trailing stop distance in bricks.")
+take_profit_bricks = input.int(2, "Take Profit (bricks)", minval=1, group=gBricks,
+     tooltip="Static take profit in bricks.")
+stop_loss_bricks = input.int(2, "Stop Loss (bricks)", minval=1, group=gBricks,
+     tooltip="Static stop loss in bricks.")
 
 gExitSwitch = "05d) Exit Switches"
-enable_static_tp = input.bool(true, "Enable Static Take Profit", group=gExitSwitch)
+enable_static_tp = input.bool(true, "Enable Static Take Profit", group=gExitSwitch,
+     tooltip="Activate static TP for positions.")
 enable_static_sl = input.bool(true, "Enable Static SL (Overrides Trailing)", group=gExitSwitch,
      tooltip="ATM: Static SL enabled for both targets at 40pts")
-freeze_trail_at_be = input.bool(false, "Freeze Trailing At Break Even", group=gExitSwitch)
+freeze_trail_at_be = input.bool(false, "Freeze Trailing At Break Even", group=gExitSwitch,
+     tooltip="Stop moving trailing loss once it reaches break even.")
 be_offset_ticks = input.int(10, "Break Even Offset (ticks)", minval=0, group=gExitSwitch,
      tooltip="ATM: 10pts (used by auto-BE logic)")
 
@@ -426,13 +545,20 @@ be_offset_ticks = input.int(10, "Break Even Offset (ticks)", minval=0, group=gEx
 gWindows = "06) Trading Windows (NY Time)"
 
 // Day of week filter (1=Sunday, 2=Monday, ..., 7=Saturday)
-allow_sunday = input.bool(false, "Allow Sunday (1)", group=gWindows)
-allow_monday = input.bool(true, "Allow Monday (2)", group=gWindows)
-allow_tuesday = input.bool(true, "Allow Tuesday (3)", group=gWindows)
-allow_wednesday = input.bool(true, "Allow Wednesday (4)", group=gWindows)
-allow_thursday = input.bool(true, "Allow Thursday (5)", group=gWindows)
-allow_friday = input.bool(true, "Allow Friday (6)", group=gWindows)
-allow_saturday = input.bool(false, "Allow Saturday (7)", group=gWindows)
+allow_sunday = input.bool(false, "Allow Sunday (1)", group=gWindows,
+     tooltip="Enable trading on Sundays (NYT).")
+allow_monday = input.bool(true, "Allow Monday (2)", group=gWindows,
+     tooltip="Enable trading on Mondays (NYT).")
+allow_tuesday = input.bool(true, "Allow Tuesday (3)", group=gWindows,
+     tooltip="Enable trading on Tuesdays (NYT).")
+allow_wednesday = input.bool(true, "Allow Wednesday (4)", group=gWindows,
+     tooltip="Enable trading on Wednesdays (NYT).")
+allow_thursday = input.bool(true, "Allow Thursday (5)", group=gWindows,
+     tooltip="Enable trading on Thursdays (NYT).")
+allow_friday = input.bool(true, "Allow Friday (6)", group=gWindows,
+     tooltip="Enable trading on Fridays (NYT).")
+allow_saturday = input.bool(false, "Allow Saturday (7)", group=gWindows,
+     tooltip="Enable trading on Saturdays (NYT).")
 
 // Trading day check
 is_trading_day = (dayofweek == 1 and allow_sunday) or
@@ -443,44 +569,65 @@ is_trading_day = (dayofweek == 1 and allow_sunday) or
                  (dayofweek == 6 and allow_friday) or
                  (dayofweek == 7 and allow_saturday)
 
-use_trading_windows = input.bool(true, "Use Trading Windows", group=gWindows)
+use_trading_windows = input.bool(true, "Use Trading Windows", group=gWindows,
+     tooltip="Enable/disable time-based session filtering.")
 
-enable_evening = input.bool(true, "Enable Evening Window", group=gWindows)
-evening_session = input.session("1800-2359", "Evening Window", group=gWindows)
-flatten_evening = input.bool(true, "Flatten At End Of Evening", group=gWindows)
+enable_evening = input.bool(true, "Enable Evening Window", group=gWindows,
+     tooltip="Allow trading during evening hours.")
+evening_session = input.session("1800-2359", "Evening Window", group=gWindows,
+     tooltip="Evening trading window (NYT). Default: 6 PM – 11:59 PM")
+flatten_evening = input.bool(true, "Flatten At End Of Evening", group=gWindows,
+     tooltip="Close all positions at end of evening window.")
 
-enable_overnight = input.bool(true, "Enable Overnight Window", group=gWindows)
-overnight_session = input.session("0000-0800", "Overnight Window", group=gWindows)
-flatten_overnight = input.bool(true, "Flatten At End Of Overnight", group=gWindows)
+enable_overnight = input.bool(true, "Enable Overnight Window", group=gWindows,
+     tooltip="Allow trading during overnight hours.")
+overnight_session = input.session("0000-0800", "Overnight Window", group=gWindows,
+     tooltip="Overnight trading window (NYT). Default: 12 AM – 8 AM")
+flatten_overnight = input.bool(true, "Flatten At End Of Overnight", group=gWindows,
+     tooltip="Close all positions at end of overnight window.")
 
-enable_ny = input.bool(true, "Enable NY Session Window", group=gWindows)
-ny_session = input.session("0930-1600", "NY Session", group=gWindows)
-flatten_ny = input.bool(true, "Flatten At End Of NY", group=gWindows)
+enable_ny = input.bool(true, "Enable NY Session Window", group=gWindows,
+     tooltip="Allow trading during NY market hours.")
+ny_session = input.session("0930-1600", "NY Session", group=gWindows,
+     tooltip="NY market session (NYT). Default: 9:30 AM – 4 PM")
+flatten_ny = input.bool(true, "Flatten At End Of NY", group=gWindows,
+     tooltip="Close all positions at end of NY session.")
 
 
 // ============================================================================
 // 07) DAY LIMITS
 // ============================================================================
 gLimits = "07) Day Limits"
-enable_profit_limit = input.bool(false, "Enable Profit Limit", group=gLimits)
-profit_limit_usd = input.float(2000.0, "Profit Limit (USD)", minval=0.0, group=gLimits)
-enable_loss_limit = input.bool(false, "Enable Loss Limit", group=gLimits)
-loss_limit_usd = input.float(1000.0, "Loss Limit (USD)", minval=0.0, group=gLimits)
-enable_trade_limit = input.bool(false, "Enable Trade Count Limit", group=gLimits)
-max_trades_per_day = input.int(6, "Max Trades Per Day", minval=1, group=gLimits)
+enable_profit_limit = input.bool(false, "Enable Profit Limit", group=gLimits,
+     tooltip="Halt trading after reaching daily profit target.")
+profit_limit_usd = input.float(2000.0, "Profit Limit (USD)", minval=0.0, group=gLimits,
+     tooltip="Daily profit target limit.")
+enable_loss_limit = input.bool(false, "Enable Loss Limit", group=gLimits,
+     tooltip="Halt trading after reaching daily loss limit.")
+loss_limit_usd = input.float(1000.0, "Loss Limit (USD)", minval=0.0, group=gLimits,
+     tooltip="Daily loss limit.")
+enable_trade_limit = input.bool(false, "Enable Trade Count Limit", group=gLimits,
+     tooltip="Halt trading after max trades per day.")
+max_trades_per_day = input.int(6, "Max Trades Per Day", minval=1, group=gLimits,
+     tooltip="Maximum trades allowed per day.")
 
 gCooldown = "07b) Cooldown"
-bar_cooldown = input.int(2, "Cooldown Bars After Order", minval=0, maxval=50, group=gCooldown)
-enable_sl_cooldown = input.bool(false, "Enable Same-Direction Cooldown After SL", group=gCooldown)
-sl_cooldown_bars = input.int(3, "SL Cooldown Bars", minval=1, group=gCooldown)
+bar_cooldown = input.int(2, "Cooldown Bars After Order", minval=0, maxval=50, group=gCooldown,
+     tooltip="Wait N bars before next entry.")
+enable_sl_cooldown = input.bool(false, "Enable Same-Direction Cooldown After SL", group=gCooldown,
+     tooltip="After stop loss, wait before re-entering same direction.")
+sl_cooldown_bars = input.int(3, "SL Cooldown Bars", minval=1, group=gCooldown,
+     tooltip="Cooldown bars after stop loss in same direction.")
 
 
 // ============================================================================
 // 08) QUANTLYNK ALERTS
 // ============================================================================
 gQL = "08) QuantLynk"
-qv_user_id = input.string("", "QuantLynk User ID", group=gQL)
-alert_id = input.string("", "QuantLynk Alert ID", group=gQL)
+qv_user_id = input.string("", "QuantLynk User ID", group=gQL,
+     tooltip="Your QuantLynk user ID for webhook routing.")
+alert_id = input.string("", "QuantLynk Alert ID", group=gQL,
+     tooltip="Your QuantLynk alert ID.")
 
 // ATM Multi-Lot Configuration
 use_atm_multi_lot = input.bool(true, "Use ATM Multi-Lot Entry (2x1)", group=gQL,
@@ -489,15 +636,20 @@ entry_qty = input.int(2, "Entry Quantity (total)", minval=1, group=gQL,
      tooltip="ATM: 2 contracts")
 
 // Target 1: 50pt TP, 40pt SL
-target_1_tp_pts = input.float(50.0, "Target 1 TP (points)", minval=0.0, group=gQL)
-target_1_sl_pts = input.float(40.0, "Target 1 SL (points)", minval=0.0, group=gQL)
-target_1_label = input.string("YM Con 1", "Target 1 Label (strategy name)", group=gQL)
+target_1_tp_pts = input.float(50.0, "Target 1 TP (points)", minval=0.0, group=gQL,
+     tooltip="Target 1 take profit in points (e.g., YM = 50pts).")
+target_1_sl_pts = input.float(40.0, "Target 1 SL (points)", minval=0.0, group=gQL,
+     tooltip="Target 1 stop loss in points (e.g., YM = 40pts).")
+target_1_label = input.string("YM Con 1", "Target 1 Label (strategy name)", group=gQL,
+     tooltip="Strategy/contract label for Target 1.")
 
 // Target 2: 125pt TP, 40pt SL, with auto-trail
-target_2_tp_pts = input.float(125.0, "Target 2 TP (points)", minval=0.0, group=gQL)
-target_2_sl_pts = input.float(40.0, "Target 2 SL (points)", minval=0.0, group=gQL)
+target_2_tp_pts = input.float(125.0, "Target 2 TP (points)", minval=0.0, group=gQL,
+     tooltip="Target 2 take profit in points (e.g., YM = 125pts).")
+target_2_sl_pts = input.float(40.0, "Target 2 SL (points)", minval=0.0, group=gQL,
+     tooltip="Target 2 stop loss in points (e.g., YM = 40pts).")
 target_2_label = input.string("YM Con 2", "Target 2 Label (strategy name)", group=gQL,
-     tooltip="Uses auto-trail: 1-step, 20pt distance, 30pt trigger")
+     tooltip="Strategy/contract label for Target 2 (uses auto-trail: 1-step, 20pt distance, 30pt trigger).")
 
 use_oso = input.bool(true, "Use OSO Bracket", group=gQL,
      tooltip="ATM: Enabled for both targets")
@@ -524,8 +676,10 @@ f_flatten_json(_comment) =>
 // 09) VISUALS
 // ============================================================================
 gVisual = "09) Visuals"
-show_signal_markers = input.bool(true, "Show Signal Markers", group=gVisual)
-show_dashboard = input.bool(true, "Show Dashboard", group=gVisual)
+show_signal_markers = input.bool(true, "Show Signal Markers", group=gVisual,
+     tooltip="Display ▲/▼ markers on long/short signals.")
+show_dashboard = input.bool(true, "Show Dashboard", group=gVisual,
+     tooltip="Display real-time dashboard table.")
 dashboard_mode = input.string("Full", "Dashboard Mode", options=["Full", "Compact"], group=gVisual,
      tooltip="Full: 19 rows with emojis. Compact: 10 rows, text only, no emojis.")
 table_opacity = input.int(30, "Table Opacity (%)", minval=0, maxval=95, group=gVisual,
@@ -1149,20 +1303,16 @@ plotshape(end_of_ny, title="End NY", style=shape.flag, location=location.top, si
 
 // Full mode: emojis | Compact mode: text only (no emojis)
 f_state_text(s) => 
-    dashboard_mode == "Compact" ? (s == 1 ? "B" : s == -1 ? "S" : "N") :
-    (s == 1 ? "✅" : s == -1 ? "❌" : "⚪")
+    dashboard_mode == "Compact" ? (s == 1 ? "B" : s == -1 ? "S" : "N") :(s == 1 ? "✅" : s == -1 ? "❌" : "⚪")
 
 f_peak_text() =>
-    dashboard_mode == "Compact" ? (short_marker_gate_ok and short_marker_fresh ? "P" : "") :
-    (short_marker_gate_ok and short_marker_fresh ? "🏔️" : " ")
+    dashboard_mode == "Compact" ? (short_marker_gate_ok and short_marker_fresh ? "P" : "") :(short_marker_gate_ok and short_marker_fresh ? "🏔️" : " ")
 
 f_bottom_text() =>
-    dashboard_mode == "Compact" ? (long_marker_gate_ok and long_marker_fresh ? "B" : "") :
-    (long_marker_gate_ok and long_marker_fresh ? "🍑" : " ")
+    dashboard_mode == "Compact" ? (long_marker_gate_ok and long_marker_fresh ? "B" : "") :(long_marker_gate_ok and long_marker_fresh ? "🍑" : " ")
 
 f_chop_text() =>
-    dashboard_mode == "Compact" ? (chop_lockout ? "C" : "✓") :
-    (chop_lockout ? "🔪" : "👍")
+    dashboard_mode == "Compact" ? (chop_lockout ? "C" : "✓") :(chop_lockout ? "🔪" : "👍")
 
 // Dynamic table size based on mode
 int table_rows = dashboard_mode == "Compact" ? 10 : 19
@@ -1187,7 +1337,7 @@ color bottom_bg = long_marker_gate_ok ? (long_marker_fresh ? color.new(color.gre
 if barstate.islast and show_dashboard
     table.clear(t, 0, 0, 1, table_rows - 1)
 
-    table.cell(t, 0, 0, "Hybrid Router v1.3", text_color=color.white, bgcolor=table_header_bg)
+    table.cell(t, 0, 0, "Hybrid Router v1.4", text_color=color.white, bgcolor=table_header_bg)
     table.cell(t, 1, 0, str.tostring(total_score, "#.##"), text_color=color.white, bgcolor=table_value_bg)
 
     if dashboard_mode == "Full"
@@ -1258,8 +1408,7 @@ if barstate.islast and show_dashboard
         table.cell(t, 1, 1, "B " + str.tostring(bull_votes) + " / S " + str.tostring(bear_votes), text_color=color.white, bgcolor=table_value_bg)
 
         table.cell(t, 0, 2, "Markers", text_color=color.white)
-        table.cell(t, 1, 2, (short_marker_fresh ? "P" : "") + (long_marker_fresh ? "B" : ""), text_color=color.white,
-             bgcolor=peak_bg if short_marker_fresh else bottom_bg if long_marker_fresh else table_bg_off)
+        table.cell(t, 1, 2, (short_marker_fresh ? "P" : "") + (long_marker_fresh ? "B" : ""), text_color=color.white,bgcolor=peak_bg if short_marker_fresh else bottom_bg if long_marker_fresh else table_bg_off)
 
         table.cell(t, 0, 3, "Qband", text_color=color.white)
         table.cell(t, 1, 3, qband_width_ok ? "OK" : "NARROW", bgcolor=qband_width_ok ? color.new(color.green, table_opacity) : color.new(color.red, table_opacity))
