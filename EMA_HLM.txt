@@ -7,14 +7,14 @@ indicator("EMA High/Low/Median Ribbon", overlay=true)
 // INPUTS
 // ─────────────────────────────────────────────
 
-// ── EMA 9 Settings ──
-grp_ema9          = "EMA 9"
-show_ema9         = input.bool(true, "Show EMA 9", group=grp_ema9)
-ema9_offset       = input.float(0, "Offset Width (points)", minval=0, step=0.5, group=grp_ema9)
-ema9_bull_col     = input.color(color.new(#00FF00, 0), "Bullish Color", group=grp_ema9)
-ema9_bear_col     = input.color(color.new(#FF0000, 0), "Bearish Color", group=grp_ema9)
-ema9_fill_col     = input.color(color.new(#00FF00, 85), "Band Fill Color", group=grp_ema9)
-ema9_fill_show    = input.bool(true, "Show Band Fill", group=grp_ema9)
+// ── HMA 9 Settings ──
+grp_hma9          = "HMA 9"
+show_hma9         = input.bool(true, "Show HMA 9", group=grp_hma9)
+hma9_offset       = input.float(0, "Offset Width (points)", minval=0, step=0.5, group=grp_hma9)
+hma9_bull_col     = input.color(color.new(#00FF00, 0), "Bullish Color", group=grp_hma9)
+hma9_bear_col     = input.color(color.new(#FF0000, 0), "Bearish Color", group=grp_hma9)
+hma9_fill_col     = input.color(color.new(#00FF00, 85), "Band Fill Color", group=grp_hma9)
+hma9_fill_show    = input.bool(true, "Show Band Fill", group=grp_hma9)
 
 // ── EMA 16 Settings (HLCC/4) ──
 grp_ema16         = "EMA 16 (HLCC/4)"
@@ -25,14 +25,14 @@ ema16_bear_col    = input.color(color.new(#FF6600, 0), "Bearish Color", group=gr
 ema16_fill_col    = input.color(color.new(#0099FF, 85), "Band Fill Color", group=grp_ema16)
 ema16_fill_show   = input.bool(true, "Show Band Fill", group=grp_ema16)
 
-// ── EMA 21 Settings ──
-grp_ema21         = "EMA 21"
-show_ema21        = input.bool(true, "Show EMA 21", group=grp_ema21)
-ema21_offset      = input.float(0, "Offset Width (points)", minval=0, step=0.5, group=grp_ema21)
-ema21_bull_col    = input.color(color.new(#00CCFF, 0), "Bullish Color", group=grp_ema21)
-ema21_bear_col    = input.color(color.new(#FF3333, 0), "Bearish Color", group=grp_ema21)
-ema21_fill_col    = input.color(color.new(#00CCFF, 85), "Band Fill Color", group=grp_ema21)
-ema21_fill_show   = input.bool(true, "Show Band Fill", group=grp_ema21)
+// ── HMA 21 Settings ──
+grp_hma21         = "HMA 21"
+show_hma21        = input.bool(true, "Show HMA 21", group=grp_hma21)
+hma21_offset      = input.float(0, "Offset Width (points)", minval=0, step=0.5, group=grp_hma21)
+hma21_bull_col    = input.color(color.new(#00CCFF, 0), "Bullish Color", group=grp_hma21)
+hma21_bear_col    = input.color(color.new(#FF3333, 0), "Bearish Color", group=grp_hma21)
+hma21_fill_col    = input.color(color.new(#00CCFF, 85), "Band Fill Color", group=grp_hma21)
+hma21_fill_show   = input.bool(true, "Show Band Fill", group=grp_hma21)
 
 // ── EMA 34 Settings ──
 grp_ema34         = "EMA 34"
@@ -54,7 +54,7 @@ ema50_fill_show   = input.bool(true, "Show Band Fill", group=grp_ema50)
 
 // ── Background Settings ──
 grp_bg            = "Background"
-show_ema_crossover_bg = input.bool(true, "Show EMA 9/21 Crossover BG", group=grp_bg)
+show_hma_crossover_bg = input.bool(true, "Show HMA 9/21 Crossover BG", group=grp_bg)
 show_rsi_momentum_bg  = input.bool(true, "Show RSI Momentum BG", group=grp_bg)
 rsi_bull_bg_col   = input.color(color.new(#00FF00, 90), "RSI Bullish BG", group=grp_bg)
 rsi_bear_bg_col   = input.color(color.new(#FF0000, 90), "RSI Bearish BG", group=grp_bg)
@@ -71,12 +71,12 @@ rsi_thresh        = input.int(10, "RSI Difference Threshold", minval=1, group=gr
 // CALCULATIONS
 // ─────────────────────────────────────────────
 
-// ── EMA 9 Calculation ──
-ema9_base  = ta.ema(hl2, 9)
-ema9_upper = ema9_base + ema9_offset
-ema9_lower = ema9_base - ema9_offset
-ema9_color = close > ema9_base ? ema9_bull_col : ema9_bear_col
-ema9_fill_color = ema9_offset > 0 and ema9_fill_show ? (close > ema9_base ? color.new(ema9_fill_col, 85) : color.new(ema9_bear_col, 85)) : na
+// ── HMA 9 Calculation ──
+hma9_base  = ta.hma(hl2, 9)
+hma9_upper = hma9_base + hma9_offset
+hma9_lower = hma9_base - hma9_offset
+hma9_color = close > hma9_base ? hma9_bull_col : hma9_bear_col
+hma9_fill_color = hma9_offset > 0 and hma9_fill_show ? (close > hma9_base ? color.new(hma9_fill_col, 85) : color.new(hma9_bear_col, 85)) : na
 
 // ── EMA 16 Calculation (HLCC/4) ──
 hlcc4 = (high + low + close + close) / 4
@@ -86,12 +86,12 @@ ema16_lower = ema16_base - ema16_offset
 ema16_color = close > ema16_base ? ema16_bull_col : ema16_bear_col
 ema16_fill_color = ema16_offset > 0 and ema16_fill_show ? (close > ema16_base ? color.new(ema16_fill_col, 85) : color.new(ema16_bear_col, 85)) : na
 
-// ── EMA 21 Calculation ──
-ema21_base  = ta.ema(hl2, 21)
-ema21_upper = ema21_base + ema21_offset
-ema21_lower = ema21_base - ema21_offset
-ema21_color = close > ema21_base ? ema21_bull_col : ema21_bear_col
-ema21_fill_color = ema21_offset > 0 and ema21_fill_show ? (close > ema21_base ? color.new(ema21_fill_col, 85) : color.new(ema21_bear_col, 85)) : na
+// ── HMA 21 Calculation ──
+hma21_base  = ta.hma(hl2, 21)
+hma21_upper = hma21_base + hma21_offset
+hma21_lower = hma21_base - hma21_offset
+hma21_color = close > hma21_base ? hma21_bull_col : hma21_bear_col
+hma21_fill_color = hma21_offset > 0 and hma21_fill_show ? (close > hma21_base ? color.new(hma21_fill_col, 85) : color.new(hma21_bear_col, 85)) : na
 
 // ── EMA 34 Calculation ──
 ema34_base  = ta.ema(hl2, 34)
@@ -107,12 +107,12 @@ ema50_lower = ema50_base - ema50_offset
 ema50_color = close > ema50_base ? ema50_bull_col : ema50_bear_col
 ema50_fill_color = ema50_offset > 0 and ema50_fill_show ? (close > ema50_base ? color.new(ema50_fill_col, 85) : color.new(ema50_bear_col, 85)) : na
 
-// ── EMA 9/21 Crossover Detection ──
-ema9_above_21 = ema9_base > ema21_base
- ema9_below_21 = ema9_base < ema21_base
-crossover_bull = ema9_above_21 and ema9_below_21[1]  // 9 crosses above 21
-crossover_bear = ema9_below_21 and ema9_above_21[1]  // 9 crosses below 21
-ema_crossover_bg = show_ema_crossover_bg ? (crossover_bull ? color.new(ema9_bull_col, 80) : crossover_bear ? color.new(ema9_bear_col, 80) : na) : na
+// ── HMA 9/21 Crossover Detection ──
+hma9_above_21 = hma9_base > hma21_base
+hma9_below_21 = hma9_base < hma21_base
+crossover_bull = hma9_above_21 and hma9_below_21[1]  // 9 crosses above 21
+crossover_bear = hma9_below_21 and hma9_above_21[1]  // 9 crosses below 21
+hma_crossover_bg = show_hma_crossover_bg ? (crossover_bull ? color.new(hma9_bull_col, 80) : crossover_bear ? color.new(hma9_bear_col, 80) : na) : na
 
 // ── RSI Momentum Background Calculation ──
 rsi_val = ta.rsi(close, rsi_period)
@@ -128,8 +128,8 @@ is_rsi_neutral = not is_rsi_bullish and not is_rsi_bearish
 rsi_momentum_bg = show_rsi_momentum_bg ? (is_rsi_bullish ? rsi_bull_bg_col : is_rsi_bearish ? rsi_bear_bg_col : rsi_neutral_bg_col) : na
 
 // ── Combined Background Logic ──
-// Priority: EMA Crossover > RSI Momentum
-final_bg_color = show_ema_crossover_bg and (crossover_bull or crossover_bear) ? ema_crossover_bg : rsi_momentum_bg
+// Priority: HMA Crossover > RSI Momentum
+final_bg_color = show_hma_crossover_bg and (crossover_bull or crossover_bear) ? hma_crossover_bg : rsi_momentum_bg
 
 // ─────────────────────────────────────────────
 // PLOTTING
@@ -138,11 +138,11 @@ final_bg_color = show_ema_crossover_bg and (crossover_bull or crossover_bear) ? 
 // ── Background Coloring ──
 bgcolor(final_bg_color, title="Background Signals")
 
-// ── EMA 9 Plotting ──
-p_ema9_upper = plot(show_ema9 ? ema9_upper : na, "EMA 9 Upper", ema9_color, 1)
-              plot(show_ema9 ? ema9_base : na, "EMA 9 Center", ema9_color, 2)
-p_ema9_lower = plot(show_ema9 ? ema9_lower : na, "EMA 9 Lower", ema9_color, 1)
-fill(p_ema9_upper, p_ema9_lower, ema9_fill_color, title="EMA 9 Band Fill")
+// ── HMA 9 Plotting ──
+p_hma9_upper = plot(show_hma9 ? hma9_upper : na, "HMA 9 Upper", hma9_color, 1)
+              plot(show_hma9 ? hma9_base : na, "HMA 9 Center", hma9_color, 2)
+p_hma9_lower = plot(show_hma9 ? hma9_lower : na, "HMA 9 Lower", hma9_color, 1)
+fill(p_hma9_upper, p_hma9_lower, hma9_fill_color, title="HMA 9 Band Fill")
 
 // ── EMA 16 Plotting ──
 p_ema16_upper = plot(show_ema16 ? ema16_upper : na, "EMA 16 Upper", ema16_color, 1)
@@ -150,11 +150,11 @@ p_ema16_upper = plot(show_ema16 ? ema16_upper : na, "EMA 16 Upper", ema16_color,
 p_ema16_lower = plot(show_ema16 ? ema16_lower : na, "EMA 16 Lower", ema16_color, 1)
 fill(p_ema16_upper, p_ema16_lower, ema16_fill_color, title="EMA 16 Band Fill")
 
-// ── EMA 21 Plotting ──
-p_ema21_upper = plot(show_ema21 ? ema21_upper : na, "EMA 21 Upper", ema21_color, 1)
-               plot(show_ema21 ? ema21_base : na, "EMA 21 Center", ema21_color, 2)
-p_ema21_lower = plot(show_ema21 ? ema21_lower : na, "EMA 21 Lower", ema21_color, 1)
-fill(p_ema21_upper, p_ema21_lower, ema21_fill_color, title="EMA 21 Band Fill")
+// ── HMA 21 Plotting ──
+p_hma21_upper = plot(show_hma21 ? hma21_upper : na, "HMA 21 Upper", hma21_color, 1)
+               plot(show_hma21 ? hma21_base : na, "HMA 21 Center", hma21_color, 2)
+p_hma21_lower = plot(show_hma21 ? hma21_lower : na, "HMA 21 Lower", hma21_color, 1)
+fill(p_hma21_upper, p_hma21_lower, hma21_fill_color, title="HMA 21 Band Fill")
 
 // ── EMA 34 Plotting ──
 p_ema34_upper = plot(show_ema34 ? ema34_upper : na, "EMA 34 Upper", ema34_color, 1)
