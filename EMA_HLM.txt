@@ -36,6 +36,7 @@ hma21_fill_show   = input.bool(true, "Show Band Fill", group=grp_hma21)
 
 // ── EMA 34 Settings ──
 grp_ema34         = "EMA 34"
+ema34_len         = input.int(34, "EMA 34 Length", minval=1, group=grp_ema34)
 show_ema34        = input.bool(true, "Show EMA 34", group=grp_ema34)
 ema34_offset      = input.float(0, "Offset Width (points)", minval=0, step=0.5, group=grp_ema34)
 ema34_bull_col    = input.color(color.new(#99FF00, 0), "Bullish Color", group=grp_ema34)
@@ -96,10 +97,12 @@ hma21_color = close > hma21_base ? hma21_bull_col : hma21_bear_col
 hma21_fill_color = hma21_offset > 0 and hma21_fill_show ? (close > hma21_base ? color.new(hma21_fill_col, 85) : color.new(hma21_bear_col, 85)) : na
 
 // ── EMA 34 Calculation ──
-ema34_base  = ta.ema(hl2, 34)
+ema34_base  = ta.ema(hl2, ema34_len)
 ema34_upper = ema34_base + ema34_offset
 ema34_lower = ema34_base - ema34_offset
 ema34_color = close > ema34_base ? ema34_bull_col : ema34_bear_col
+ema34_upper_color = close > ema34_upper ? ema34_bull_col : ema34_bear_col
+ema34_lower_color = close > ema34_lower ? ema34_bull_col : ema34_bear_col
 ema34_fill_color = ema34_offset > 0 and ema34_fill_show ? (close > ema34_base ? color.new(ema34_fill_col, 85) : color.new(ema34_bear_col, 85)) : na
 
 // ── EMA 50 Calculation ──
@@ -159,9 +162,9 @@ p_hma21_lower = plot(show_hma21 ? hma21_lower : na, "HMA 21 Lower", hma21_color,
 fill(p_hma21_upper, p_hma21_lower, hma21_fill_color, title="HMA 21 Band Fill")
 
 // ── EMA 34 Plotting ──
-p_ema34_upper = plot(show_ema34 ? ema34_upper : na, "EMA 34 Upper", ema34_color, 1)
+p_ema34_upper = plot(show_ema34 ? ema34_upper : na, "EMA 34 Upper", ema34_upper_color, 1)
                plot(show_ema34 ? ema34_base : na, "EMA 34 Center", ema34_color, 2)
-p_ema34_lower = plot(show_ema34 ? ema34_lower : na, "EMA 34 Lower", ema34_color, 1)
+p_ema34_lower = plot(show_ema34 ? ema34_lower : na, "EMA 34 Lower", ema34_lower_color, 1)
 fill(p_ema34_upper, p_ema34_lower, ema34_fill_color, title="EMA 34 Band Fill")
 
 // ── EMA 50 Plotting ──
