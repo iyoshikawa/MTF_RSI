@@ -84,6 +84,8 @@ ema16_base  = ta.ema(hlcc4, 16)
 ema16_upper = ema16_base + ema16_offset
 ema16_lower = ema16_base - ema16_offset
 ema16_color = close > ema16_base ? ema16_bull_col : ema16_bear_col
+ema16_upper_color = close > ema16_upper ? ema16_bull_col : ema16_bear_col
+ema16_lower_color = close > ema16_lower ? ema16_bull_col : ema16_bear_col
 ema16_fill_color = ema16_offset > 0 and ema16_fill_show ? (close > ema16_base ? color.new(ema16_fill_col, 85) : color.new(ema16_bear_col, 85)) : na
 
 // ── HMA 21 Calculation ──
@@ -145,9 +147,9 @@ p_hma9_lower = plot(show_hma9 ? hma9_lower : na, "HMA 9 Lower", hma9_color, 1)
 fill(p_hma9_upper, p_hma9_lower, hma9_fill_color, title="HMA 9 Band Fill")
 
 // ── EMA 16 Plotting ──
-p_ema16_upper = plot(show_ema16 ? ema16_upper : na, "EMA 16 Upper", ema16_color, 1)
+p_ema16_upper = plot(show_ema16 ? ema16_upper : na, "EMA 16 Upper", ema16_upper_color, 1)
                plot(show_ema16 ? ema16_base : na, "EMA 16 Center", ema16_color, 2)
-p_ema16_lower = plot(show_ema16 ? ema16_lower : na, "EMA 16 Lower", ema16_color, 1)
+p_ema16_lower = plot(show_ema16 ? ema16_lower : na, "EMA 16 Lower", ema16_lower_color, 1)
 fill(p_ema16_upper, p_ema16_lower, ema16_fill_color, title="EMA 16 Band Fill")
 
 // ── HMA 21 Plotting ──
