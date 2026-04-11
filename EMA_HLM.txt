@@ -68,9 +68,51 @@ rsi_fast_len      = input.int(5, "RSI Fast Length", minval=2, group=grp_rsi)
 rsi_slow_len      = input.int(21, "RSI Slow Length", minval=2, group=grp_rsi)
 rsi_thresh        = input.int(10, "RSI Difference Threshold", minval=1, group=grp_rsi)
 
+// ── Trading Hours Settings ──
+grp_hours         = "Trading Hours"
+use_trading_hours = input.bool(false, "Use Trading Hours Filter", group=grp_hours)
+trading_schedule  = input.string("", "Trading Schedule (format: HH1-HH2,HH3-HH4:days)", tooltip="Example: 1801-1930,0700-0800,0900-1600:123456\nDays: 1=Sun, 2=Mon, ... 7=Sat", group=grp_hours)
+
 // ─────────────────────────────────────────────
 // CALCULATIONS
 // ─────────────────────────────────────────────
+
+// ── Trading Hours Helper Functions ──
+f_is_trading_hours() =>
+    if not use_trading_hours or trading_schedule == ""
+        true
+    else
+        current_time = time("1440")
+        current_day = dayofweek(current_time)
+        current_hm = hour(current_time) * 100 + minute(current_time)
+
+        // Parse schedule string: time_ranges:days
+        schedule_parts = str.split(trading_schedule, ":")
+        if array.size(schedule_parts) != 2
+            true  // Invalid format, allow all times
+
+        days_str = array.get(schedule_parts, 1)
+        times_str = array.get(schedule_parts, 0)
+        time_ranges = str.split(times_str, ",")
+
+        // Check if current day is in allowed days
+        day_allowed = str.contains(days_str, str.tostring(current_day))
+
+        // Check if current time is in any allowed range
+        time_allowed = false
+        for i = 0 to array.size(time_ranges) - 1
+            range = array.get(time_ranges, i)
+            parts = str.split(range, "-")
+            if array.size(parts) == 2
+                start_time = str.tonumber(array.get(parts, 0))
+                end_time = str.tonumber(array.get(parts, 1))
+                if current_hm >= start_time and current_hm < end_time
+                    time_allowed := true
+                    break
+
+        day_allowed and time_allowed
+
+is_trading_time = f_is_trading_hours()
 
 // ── HMA 9 Calculation ──
 hma9_base  = ta.hma(hl2, 9)
@@ -141,34 +183,34 @@ final_bg_color = show_hma_crossover_bg and (crossover_bull or crossover_bear) ? 
 // ─────────────────────────────────────────────
 
 // ── Background Coloring ──
-bgcolor(final_bg_color, title="Background Signals")
+bgcolor(is_trading_time ? final_bg_color : na, title="Background Signals")
 
 // ── HMA 9 Plotting ──
-p_hma9_upper = plot(show_hma9 ? hma9_upper : na, "HMA 9 Upper", hma9_color, 1)
-              plot(show_hma9 ? hma9_base : na, "HMA 9 Center", hma9_color, 2)
-p_hma9_lower = plot(show_hma9 ? hma9_lower : na, "HMA 9 Lower", hma9_color, 1)
-fill(p_hma9_upper, p_hma9_lower, hma9_fill_color, title="HMA 9 Band Fill")
+p_hma9_upper = plot(show_hma9 and is_trading_time ? hma9_upper : na, "HMA 9 Upper", hma9_color, 1)
+              plot(show_hma9 and is_trading_time ? hma9_base : na, "HMA 9 Center", hma9_color, 2)
+p_hma9_lower = plot(show_hma9 and is_trading_time ? hma9_lower : na, "HMA 9 Lower", hma9_color, 1)
+fill(p_hma9_upper, p_hma9_lower, show_hma9 and is_trading_time ? hma9_fill_color : na, title="HMA 9 Band Fill")
 
 // ── EMA 16 Plotting ──
-p_ema16_upper = plot(show_ema16 ? ema16_upper : na, "EMA 16 Upper", ema16_upper_color, 1)
-               plot(show_ema16 ? ema16_base : na, "EMA 16 Center", ema16_color, 2)
-p_ema16_lower = plot(show_ema16 ? ema16_lower : na, "EMA 16 Lower", ema16_lower_color, 1)
-fill(p_ema16_upper, p_ema16_lower, ema16_fill_color, title="EMA 16 Band Fill")
+p_ema16_upper = plot(show_ema16 and is_trading_time ? ema16_upper : na, "EMA 16 Upper", ema16_upper_color, 1)
+               plot(show_ema16 and is_trading_time ? ema16_base : na, "EMA 16 Center", ema16_color, 2)
+p_ema16_lower = plot(show_ema16 and is_trading_time ? ema16_lower : na, "EMA 16 Lower", ema16_lower_color, 1)
+fill(p_ema16_upper, p_ema16_lower, show_ema16 and is_trading_time ? ema16_fill_color : na, title="EMA 16 Band Fill")
 
 // ── HMA 21 Plotting ──
-p_hma21_upper = plot(show_hma21 ? hma21_upper : na, "HMA 21 Upper", hma21_color, 1)
-               plot(show_hma21 ? hma21_base : na, "HMA 21 Center", hma21_color, 2)
-p_hma21_lower = plot(show_hma21 ? hma21_lower : na, "HMA 21 Lower", hma21_color, 1)
-fill(p_hma21_upper, p_hma21_lower, hma21_fill_color, title="HMA 21 Band Fill")
+p_hma21_upper = plot(show_hma21 and is_trading_time ? hma21_upper : na, "HMA 21 Upper", hma21_color, 1)
+               plot(show_hma21 and is_trading_time ? hma21_base : na, "HMA 21 Center", hma21_color, 2)
+p_hma21_lower = plot(show_hma21 and is_trading_time ? hma21_lower : na, "HMA 21 Lower", hma21_color, 1)
+fill(p_hma21_upper, p_hma21_lower, show_hma21 and is_trading_time ? hma21_fill_color : na, title="HMA 21 Band Fill")
 
 // ── EMA 34 Plotting ──
-p_ema34_upper = plot(show_ema34 ? ema34_upper : na, "EMA 34 Upper", ema34_upper_color, 1)
-               plot(show_ema34 ? ema34_base : na, "EMA 34 Center", ema34_color, 2)
-p_ema34_lower = plot(show_ema34 ? ema34_lower : na, "EMA 34 Lower", ema34_lower_color, 1)
-fill(p_ema34_upper, p_ema34_lower, ema34_fill_color, title="EMA 34 Band Fill")
+p_ema34_upper = plot(show_ema34 and is_trading_time ? ema34_upper : na, "EMA 34 Upper", ema34_upper_color, 1)
+               plot(show_ema34 and is_trading_time ? ema34_base : na, "EMA 34 Center", ema34_color, 2)
+p_ema34_lower = plot(show_ema34 and is_trading_time ? ema34_lower : na, "EMA 34 Lower", ema34_lower_color, 1)
+fill(p_ema34_upper, p_ema34_lower, show_ema34 and is_trading_time ? ema34_fill_color : na, title="EMA 34 Band Fill")
 
 // ── EMA 50 Plotting ──
-p_ema50_upper = plot(show_ema50 ? ema50_upper : na, "EMA 50 Upper", ema50_color, 1)
-               plot(show_ema50 ? ema50_base : na, "EMA 50 Center", ema50_color, 2)
-p_ema50_lower = plot(show_ema50 ? ema50_lower : na, "EMA 50 Lower", ema50_color, 1)
-fill(p_ema50_upper, p_ema50_lower, ema50_fill_color, title="EMA 50 Band Fill")
+p_ema50_upper = plot(show_ema50 and is_trading_time ? ema50_upper : na, "EMA 50 Upper", ema50_color, 1)
+               plot(show_ema50 and is_trading_time ? ema50_base : na, "EMA 50 Center", ema50_color, 2)
+p_ema50_lower = plot(show_ema50 and is_trading_time ? ema50_lower : na, "EMA 50 Lower", ema50_color, 1)
+fill(p_ema50_upper, p_ema50_lower, show_ema50 and is_trading_time ? ema50_fill_color : na, title="EMA 50 Band Fill")
