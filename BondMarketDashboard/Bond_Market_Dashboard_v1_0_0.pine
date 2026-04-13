@@ -1,0 +1,312 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © iyoshikawa
+//@version=6
+
+// ============================================================================
+// BOND MARKET DASHBOARD  v1.0.0
+// ----------------------------------------------------------------------------
+// Standalone Pine Script v6 indicator — overlay=true, no chart impact
+// Standalone confluence context panel for equity futures trading (YM/ES/NQ)
+//
+// ROWS (6-row compact table):
+//   1. 10Y Yield      — live value + direction (▲/▼/—)
+//   2. 10Y ROC        — rate-of-change label: FLAT / MILD / SHARP
+//   3. 2Y  Yield      — live value + direction
+//   4. Yield Curve    — spread label (NORMAL/FLAT/INVERTED) + slope (STEEPEN/FLATTEN/STABLE)
+//   5. ZN Price       — ZN futures direction (BIDDING / SELLING / FLAT)
+//   6. Eq Confirm     — bond/equity relationship (CONFIRMED / DIVERGING / NEUTRAL)
+//
+// All data pulled via request.security() on 5-min bars (configurable).
+// Table position: 8 selectable positions.
+// Future: alertcondition on DIVERGING, VIX row, library export for VES/Hybrid Router.
+// ============================================================================
+
+indicator("Bond Market Dashboard v1.0.0", shorttitle="BMD v1.0", overlay=true, max_lines_count=0, max_labels_count=0)
+
+// ============================================================================
+// VERSION
+// ============================================================================
+VER = "v1.0.0"
+
+// ============================================================================
+// INPUTS — DISPLAY
+// ============================================================================
+var grp_disp = "01. Display"
+show_dash = input.bool(true,  "Show Dashboard", group=grp_disp)
+dash_pos  = input.string("Top Right", "Position",
+     options=["Top Right","Top Left","Bottom Right","Bottom Left",
+              "Top Center","Middle Right","Middle Left","Bottom Center"],
+     group=grp_disp)
+
+// ============================================================================
+// INPUTS — DATA SOURCE
+// ============================================================================
+var grp_src = "02. Data Source"
+data_tf  = input.string("5", "Data Timeframe (minutes)", group=grp_src,
+     tooltip="All bond/equity data is fetched on this timeframe. 5 = default.")
+sym_10y  = input.string("TVC:US10Y",      "10Y Yield Symbol",    group=grp_src)
+sym_2y   = input.string("TVC:US02Y",      "2Y Yield Symbol",     group=grp_src)
+sym_zn   = input.string("CBOT:ZN1!",      "ZN Futures Symbol",   group=grp_src)
+sym_eq   = input.string("CME_MINI:ES1!",  "Equity Symbol (ES1!)", group=grp_src,
+     tooltip="Used for bond/equity relationship confirmation. ES1! default.")
+
+// ============================================================================
+// INPUTS — THRESHOLDS
+// ============================================================================
+var grp_thr = "03. Thresholds"
+dir_lb       = input.int  (3,     "Direction Lookback (bars)",     minval=1, maxval=30, group=grp_thr,
+     tooltip="N bars back to compare for yield/ZN/equity direction detection.")
+roc_lb       = input.int  (5,     "ROC Lookback (bars)",           minval=1, maxval=50, group=grp_thr,
+     tooltip="N bars back for 10Y Rate-of-Change calculation.")
+curve_lb     = input.int  (10,    "Curve Slope Lookback (bars)",   minval=2, maxval=100, group=grp_thr,
+     tooltip="N bars back to compare spread for steepening/flattening detection.")
+roc_flat_bps = input.float(2.0,   "ROC — FLAT  Threshold (bps)",  minval=0.1, step=0.5, group=grp_thr,
+     tooltip="Absolute 10Y yield change below this = FLAT. Unit: basis points (0.01% = 1 bps).")
+roc_mild_bps = input.float(5.0,   "ROC — MILD  Threshold (bps)",  minval=0.5, step=0.5, group=grp_thr,
+     tooltip="Absolute 10Y yield change below this = MILD, above = SHARP.")
+curve_norm   = input.float(0.25,  "Curve — NORMAL  (spread > X%)",   step=0.05, group=grp_thr,
+     tooltip="10Y-2Y spread above this threshold = NORMAL (upward-sloping curve).")
+curve_inv    = input.float(-0.10, "Curve — INVERTED (spread < X%)",   step=0.05, group=grp_thr,
+     tooltip="10Y-2Y spread below this threshold = INVERTED (recession signal).")
+curve_slope_bps = input.float(1.0, "Curve Slope Min Change (bps)",   minval=0.1, step=0.5, group=grp_thr,
+     tooltip="Minimum spread move to classify as STEEPEN or FLATTEN vs STABLE.")
+yield_dir_bps = input.float(0.5,  "Yield Direction Min (bps)",     minval=0.1, step=0.1, group=grp_thr,
+     tooltip="Minimum yield move over direction lookback to register as directional.")
+zn_dir_ticks  = input.float(0.03125, "ZN Direction Min (ticks)",   minval=0.01, step=0.03125, group=grp_thr,
+     tooltip="Minimum ZN price move over lookback to register as directional. 1 tick = 0.015625.")
+eq_dir_pts    = input.float(1.0,  "Equity Direction Min (pts)",    minval=0.1, step=0.5, group=grp_thr,
+     tooltip="Minimum equity move over lookback to register as directional.")
+
+// ============================================================================
+// DATA — 5-MIN REQUEST.SECURITY PULLS
+// ============================================================================
+// Yield data — in % (e.g. 4.25 = 4.25%)
+// Spread and ROC logic operates in percentage-point terms (1% = 100 bps)
+
+[y10_now, y10_dir_ago, y10_roc_ago, y10_curve_ago] =
+     request.security(sym_10y, data_tf,
+     [close, close[dir_lb], close[roc_lb], close[curve_lb]],
+     lookahead=barmerge.lookahead_off)
+
+[y2_now, y2_dir_ago, y2_curve_ago] =
+     request.security(sym_2y, data_tf,
+     [close, close[dir_lb], close[curve_lb]],
+     lookahead=barmerge.lookahead_off)
+
+[zn_now, zn_dir_ago] =
+     request.security(sym_zn, data_tf,
+     [close, close[dir_lb]],
+     lookahead=barmerge.lookahead_off)
+
+[eq_now, eq_dir_ago] =
+     request.security(sym_eq, data_tf,
+     [close, close[dir_lb]],
+     lookahead=barmerge.lookahead_off)
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// bps conversion helper — yields are in %, so 0.01 = 1 bps
+pct_to_bps(pct_delta) =>
+    pct_delta * 100.0
+
+// --- 10Y Yield Direction ---
+y10_delta_bps = pct_to_bps(y10_now - y10_dir_ago)
+y10_dir_int   = y10_delta_bps >  yield_dir_bps ? 1 :
+                y10_delta_bps < -yield_dir_bps ? -1 : 0
+
+// --- 10Y ROC (basis points over N bars) ---
+y10_roc_bps  = math.abs(pct_to_bps(y10_now - y10_roc_ago))
+y10_roc_lbl  = y10_roc_bps >= roc_mild_bps ? "SHARP" :
+               y10_roc_bps >= roc_flat_bps  ? "MILD"  : "FLAT"
+y10_roc_sign = pct_to_bps(y10_now - y10_roc_ago)  // signed version for display
+
+// --- 2Y Yield Direction ---
+y2_delta_bps  = pct_to_bps(y2_now - y2_dir_ago)
+y2_dir_int    = y2_delta_bps >  yield_dir_bps ? 1 :
+                y2_delta_bps < -yield_dir_bps ? -1 : 0
+
+// --- Yield Curve (10Y - 2Y) ---
+spread_now    = y10_now      - y2_now
+spread_ago    = y10_curve_ago - y2_curve_ago
+spread_chg_bps = pct_to_bps(spread_now - spread_ago)
+
+curve_shape_lbl = spread_now >= curve_norm ? "NORMAL"   :
+                  spread_now <= curve_inv  ? "INVERTED" : "FLAT"
+
+curve_slope_lbl = spread_chg_bps >=  curve_slope_bps ? "▲ STEEPEN" :
+                  spread_chg_bps <= -curve_slope_bps  ? "▼ FLATTEN" : "→ STABLE"
+
+// --- ZN Futures Direction ---
+zn_delta    = zn_now - zn_dir_ago
+zn_dir_int  = zn_delta >  zn_dir_ticks ? 1 :
+              zn_delta < -zn_dir_ticks  ? -1 : 0
+
+// --- Equity Direction ---
+eq_delta    = eq_now - eq_dir_ago
+eq_dir_int  = eq_delta >  eq_dir_pts ? 1 :
+              eq_delta < -eq_dir_pts  ? -1 : 0
+
+// --- Equity Confirmation ---
+// Normal macro relationship: bonds BID (ZN ▲) ↔ equities SELL (ES ▼) = risk-off coherent
+//                            bonds SELL (ZN ▼) ↔ equities BID (ES ▲) = risk-on coherent
+// Inverse ZN/EQ direction = CONFIRMED (normal relationship holding)
+// Same direction = DIVERGING (correlation breakdown — macro stress or dislocation)
+// Either flat = NEUTRAL
+eq_conf_lbl = zn_dir_int == 0 or eq_dir_int == 0 ? "NEUTRAL"   :
+              zn_dir_int != eq_dir_int              ? "CONFIRMED" : "DIVERGING"
+
+// ============================================================================
+// HELPERS — pure functions (top scope, usable in table block)
+// ============================================================================
+dir_arrow(d) =>
+    d > 0 ? " ▲" : d < 0 ? " ▼" : " —"
+
+// ============================================================================
+// DASHBOARD TABLE (3 cols × 8 rows)
+// Row 0 : Header
+// Row 1 : 10Y Yield
+// Row 2 : 10Y ROC
+// Row 3 : 2Y Yield
+// Row 4 : Yield Curve
+// Row 5 : ZN Futures
+// Row 6 : Eq Confirm
+// Row 7 : Footer
+// ============================================================================
+dash_position = switch dash_pos
+    "Top Right"     => position.top_right
+    "Top Left"      => position.top_left
+    "Bottom Right"  => position.bottom_right
+    "Bottom Left"   => position.bottom_left
+    "Top Center"    => position.top_center
+    "Middle Right"  => position.middle_right
+    "Middle Left"   => position.middle_left
+    "Bottom Center" => position.bottom_center
+    => position.top_right
+
+var table dash = table.new(dash_position, 3, 8,
+     border_width=1,
+     frame_color=color.new(color.white, 75),
+     border_color=color.new(color.gray, 82))
+
+if show_dash and barstate.islast
+
+    // ---------- theme ----------
+    bg_hdr = color.new(#0a0a1a, 0)
+    bg_row = color.new(#111122, 0)
+    c_txt  = color.new(color.white, 5)
+    c_dim  = color.new(color.gray,  25)
+
+    // ---------- reusable color palettes ----------
+    c_bull   = color.new(#00C853, 35)   // green — bullish / risk-on
+    c_bear   = color.new(#FF1744, 30)   // red   — bearish / risk-off
+    c_warn   = color.new(#FF6D00, 25)   // orange — sharp / alert
+    c_mild   = color.new(#FFD600, 35)   // yellow — mild / caution
+    c_flat   = color.new(#455A64, 55)   // slate — flat / neutral
+    c_conf   = color.new(#00BCD4, 35)   // cyan  — confirmed / normal curve
+    c_div    = color.new(#FF1744, 25)   // red   — diverging
+    c_neut   = color.new(#546E7A, 55)   // grey  — neutral
+
+    // ---------- ROW 0: HEADER ----------
+    table.cell(dash, 0, 0, "BOND MKT",   bgcolor=bg_hdr, text_color=color.new(#00BFFF, 0),
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 0, "VALUE",      bgcolor=bg_hdr, text_color=c_dim, text_size=size.small)
+    table.cell(dash, 2, 0, "STATUS",     bgcolor=bg_hdr, text_color=c_dim, text_size=size.small)
+
+    // ---------- ROW 1: 10Y YIELD ----------
+    // Yield UP = red (higher rates = tighter conditions = bearish equities)
+    // Yield DN = green (lower rates = easier conditions = bullish equities)
+    y10_val_str  = str.tostring(y10_now, "#.000") + "%" + dir_arrow(y10_dir_int)
+    y10_stat_str = y10_dir_int > 0 ? "RISING" : y10_dir_int < 0 ? "FALLING" : "FLAT"
+    y10_dir_col  = y10_dir_int > 0 ? c_bear   : y10_dir_int < 0 ? c_bull    : c_flat
+
+    table.cell(dash, 0, 1, "10Y Yield",  bgcolor=bg_row, text_color=c_dim, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 1, y10_val_str,  bgcolor=bg_row, text_color=y10_dir_col, text_size=size.small)
+    table.cell(dash, 2, 1, y10_stat_str, bgcolor=y10_dir_col, text_color=c_txt, text_size=size.small)
+
+    // ---------- ROW 2: 10Y ROC ----------
+    roc_sign_str = y10_roc_sign >= 0 ? "+" : ""
+    roc_val_str  = roc_sign_str + str.tostring(y10_roc_sign, "#.0") + " bps"
+    roc_bg       = y10_roc_lbl == "SHARP" ? c_warn  :
+                   y10_roc_lbl == "MILD"  ? c_mild  : c_flat
+    roc_val_col  = y10_roc_lbl == "SHARP" ? c_warn  :
+                   y10_roc_lbl == "MILD"  ? c_mild  : c_dim
+
+    table.cell(dash, 0, 2, "10Y ROC",    bgcolor=bg_row, text_color=c_dim, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 2, roc_val_str,  bgcolor=bg_row, text_color=roc_val_col, text_size=size.small)
+    table.cell(dash, 2, 2, y10_roc_lbl,  bgcolor=roc_bg, text_color=c_txt, text_size=size.small)
+
+    // ---------- ROW 3: 2Y YIELD ----------
+    y2_val_str   = str.tostring(y2_now, "#.000") + "%" + dir_arrow(y2_dir_int)
+    y2_stat_str  = y2_dir_int > 0 ? "RISING" : y2_dir_int < 0 ? "FALLING" : "FLAT"
+    y2_dir_col   = y2_dir_int > 0 ? c_bear   : y2_dir_int < 0 ? c_bull    : c_flat
+
+    table.cell(dash, 0, 3, "2Y Yield",   bgcolor=bg_row, text_color=c_dim, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 3, y2_val_str,   bgcolor=bg_row, text_color=y2_dir_col, text_size=size.small)
+    table.cell(dash, 2, 3, y2_stat_str,  bgcolor=y2_dir_col, text_color=c_txt, text_size=size.small)
+
+    // ---------- ROW 4: YIELD CURVE ----------
+    spread_str     = (spread_now >= 0 ? "+" : "") + str.tostring(spread_now, "#.000") + "%"
+    curve_shape_bg = curve_shape_lbl == "NORMAL"   ? c_conf :
+                     curve_shape_lbl == "INVERTED" ? c_bear : c_mild
+    curve_slope_bg = str.contains(curve_slope_lbl, "STEEP") ? color.new(#00C853, 45) :
+                     str.contains(curve_slope_lbl, "FLAT")  ? color.new(#FF1744, 40) :
+                     c_flat
+    // Cell 1 shows spread + shape label together
+    curve_shape_full = spread_str + "  " + curve_shape_lbl
+
+    table.cell(dash, 0, 4, "Yld Curve",      bgcolor=bg_row, text_color=c_dim, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 4, curve_shape_full, bgcolor=curve_shape_bg, text_color=c_txt, text_size=size.small)
+    table.cell(dash, 2, 4, curve_slope_lbl,  bgcolor=curve_slope_bg, text_color=c_txt, text_size=size.small)
+
+    // ---------- ROW 5: ZN FUTURES ----------
+    // ZN UP = bonds bid = risk-off pressure on equities (show cyan — informational)
+    // ZN DN = bonds sold = risk-on (show neutral)
+    zn_val_str  = str.tostring(zn_now, "#.000") + dir_arrow(zn_dir_int)
+    zn_stat_str = zn_dir_int > 0 ? "BIDDING" : zn_dir_int < 0 ? "SELLING" : "FLAT"
+    zn_dir_col  = zn_dir_int > 0 ? c_conf    : zn_dir_int < 0 ? c_warn    : c_flat
+
+    table.cell(dash, 0, 5, "ZN Futures", bgcolor=bg_row, text_color=c_dim, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 5, zn_val_str,   bgcolor=bg_row, text_color=zn_dir_col, text_size=size.small)
+    table.cell(dash, 2, 5, zn_stat_str,  bgcolor=zn_dir_col, text_color=c_txt, text_size=size.small)
+
+    // ---------- ROW 6: EQUITY CONFIRMATION ----------
+    eq_conf_bg  = eq_conf_lbl == "CONFIRMED" ? c_conf :
+                  eq_conf_lbl == "DIVERGING" ? c_div  : c_neut
+    eq_icon_str = eq_conf_lbl == "CONFIRMED" ? "✓ CONFIRMED" :
+                  eq_conf_lbl == "DIVERGING" ? "⚠ DIVERGING" : "— NEUTRAL"
+    // Sub-label shows actual directions for quick verification
+    zn_eq_dirs  = "ZN" + dir_arrow(zn_dir_int) + "  ES" + dir_arrow(eq_dir_int)
+
+    table.cell(dash, 0, 6, "Eq Confirm", bgcolor=bg_row, text_color=c_dim, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 6, zn_eq_dirs,   bgcolor=bg_row, text_color=c_dim, text_size=size.small)
+    table.cell(dash, 2, 6, eq_icon_str,  bgcolor=eq_conf_bg, text_color=c_txt, text_size=size.small)
+
+    // ---------- ROW 7: FOOTER ----------
+    table.cell(dash, 0, 7, "TF: " + data_tf + "m", bgcolor=bg_hdr, text_color=c_dim, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 7, "BMD " + VER,            bgcolor=bg_hdr, text_color=c_dim, text_size=size.tiny)
+    table.cell(dash, 2, 7, "iyoshikawa",             bgcolor=bg_hdr, text_color=c_dim, text_size=size.tiny)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+alertcondition(eq_conf_lbl == "DIVERGING",
+     "⚠ Bond/Equity DIVERGING",
+     "Bond-Equity relationship is DIVERGING — macro dislocation or stress event. ZN and ES moving in same direction.")
+
+alertcondition(y10_roc_lbl == "SHARP",
+     "⚠ 10Y Yield ROC SHARP",
+     "10Y Yield Rate-of-Change is SHARP — potential macro catalyst in play. Check news calendar.")
+
+alertcondition(curve_shape_lbl == "INVERTED",
+     "⚠ Yield Curve INVERTED",
+     "Yield Curve is INVERTED (10Y < 2Y) — recession signal active. Reduce risk-on conviction.")
+
+alertcondition(curve_shape_lbl == "INVERTED" and eq_conf_lbl == "DIVERGING",
+     "🚨 Curve INVERTED + Bond/Equity DIVERGING",
+     "CRITICAL: Yield curve inverted AND bond/equity relationship breaking down. High macro risk.")
+
+alertcondition(y10_dir_int > 0 and y10_roc_lbl == "SHARP" and eq_conf_lbl == "DIVERGING",
+     "🚨 Yield SURGING + Equity DIVERGING",
+     "10Y yield spiking SHARP while bond/equity relationship is diverging. Potential disorderly move.")
