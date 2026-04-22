@@ -1,0 +1,755 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ian Yoshikawa
+// ORB-Donchian Retest Indicator v1.1
+//
+// Based on Robert Anderson's multi-part futures strategy
+// (Open Box Range Trades — corrected video version, Mar 2026):
+//   1) 15-min Opening Range Breakout (ORB) with Gold Line — drawn as shaded BOX
+//   2) 60-period Donchian Channel break + retest detection
+//   3) EMA retest after breakout
+//   4) Candlestick pattern confirmation
+//   5) Swing Indicator (period 5) for pivot break detection
+//   6) Multi-confluence scoring with dashboard
+//
+// Bob's exact NinjaTrader indicator list (from video description):
+//   1) Bar Timer  2) Current Day OHL  3) EMA 9  4) SMA 105
+//   5) Donchian 60  6) Swing period 5  7) PriorDay OHLC
+//   All on a 1-minute chart.
+//
+// Ian's additions on top of Bob's base:
+//   45 EMA, 55 EMA T-Line with envelope, 233 EMA, VWAP,
+//   candlestick patterns, confluence dashboard, Gate+Trigger plots.
+//
+// Outputs display.none Gate+Trigger plots for Galgoom Alert Builder integration.
+//
+// CHANGELOG:
+//   v1.0 — Initial build. Full ORB + Donchian + EMA retest + candle patterns
+//           + confluence dashboard + Gate/Trigger plots.
+//   v1.1 — Added: Swing Indicator (period 5) with pivot labels.
+//           Added: Prior Day Close level.
+//           Added: ORB drawn as shaded BOX (not just lines).
+//           Added: Swing break as confluence gate.
+//
+//@version=6
+indicator("ORB-Donchian Retest v1.1", shorttitle="ORB-DC v1.1", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ============================================================================
+// VERSION
+// ============================================================================
+VER = "1.1"
+
+// ============================================================================
+// 01) ORB SETTINGS
+// ============================================================================
+g_orb = "01) Opening Range Breakout"
+orb_start_hour   = input.int(9,  "ORB Start Hour (ET, 24h)",  minval=0, maxval=23, group=g_orb)
+orb_start_min    = input.int(30, "ORB Start Minute",           minval=0, maxval=59, group=g_orb)
+orb_end_hour     = input.int(9,  "ORB End Hour (ET, 24h)",    minval=0, maxval=23, group=g_orb)
+orb_end_min      = input.int(45, "ORB End Minute",             minval=0, maxval=59, group=g_orb)
+orb_show_lines   = input.bool(true, "Show ORB Lines",          group=g_orb)
+orb_show_gold    = input.bool(true, "Show Gold Line (Midline)", group=g_orb)
+orb_show_box     = input.bool(true, "Show ORB Box (shaded)",   group=g_orb, tooltip="Draws a shaded rectangle around the 15-min opening range.")
+orb_box_col      = input.color(color.new(color.yellow, 88), "ORB Box Fill Color", group=g_orb)
+orb_box_border   = input.color(color.new(color.yellow, 50), "ORB Box Border Color", group=g_orb)
+orb_extend_lines = input.bool(true, "Extend ORB Lines Right",  group=g_orb)
+orb_break_color  = input.color(color.white, "Breakout Candle Color", group=g_orb, tooltip="Color of the first candle that breaks the ORB high or low after the ORB window closes.")
+orb_cross_color  = input.color(color.new(color.purple, 0), "Cross-the-Box Candle Color", group=g_orb, tooltip="Color of the candle that crosses the ENTIRE ORB range (failed breakout reversal).")
+
+// ============================================================================
+// 02) MOVING AVERAGES
+// ============================================================================
+g_ma = "02) Moving Averages"
+show_9ema   = input.bool(true, "Show 9 EMA",   group=g_ma)
+show_45ema  = input.bool(true, "Show 45 EMA",  group=g_ma)
+show_55ema  = input.bool(true, "Show 55 EMA (T-Line)", group=g_ma)
+show_105sma = input.bool(true, "Show 105 SMA", group=g_ma)
+show_233ema = input.bool(true, "Show 233 EMA", group=g_ma)
+
+len_9ema   = input.int(9,   "9 EMA Length",   minval=1, group=g_ma)
+len_45ema  = input.int(45,  "45 EMA Length",  minval=1, group=g_ma)
+len_55ema  = input.int(55,  "55 EMA Length (T-Line)", minval=1, group=g_ma)
+len_105sma = input.int(105, "105 SMA Length", minval=1, group=g_ma)
+len_233ema = input.int(233, "233 EMA Length", minval=1, group=g_ma)
+
+col_9ema   = input.color(color.yellow,  "9 EMA Color",         group=g_ma)
+col_45ema  = input.color(color.orange,  "45 EMA Color",        group=g_ma)
+col_55ema  = input.color(color.fuchsia, "55 EMA (T-Line) Color", group=g_ma)
+col_105sma = input.color(color.aqua,    "105 SMA Color",       group=g_ma)
+col_233ema = input.color(color.gray,    "233 EMA Color",       group=g_ma)
+
+// ============================================================================
+// 02b) T-LINE ENVELOPE
+// ============================================================================
+g_tline = "02b) T-Line Envelope (55 EMA)"
+tline_show_band  = input.bool(true, "Show T-Line Width Band", group=g_tline)
+tline_width_type = input.string("ATR", "Width Type", options=["ATR", "Fixed Points"], group=g_tline)
+tline_atr_mult   = input.float(1.0, "ATR Multiplier", minval=0.1, step=0.1, group=g_tline, tooltip="Width = ATR(14) × this multiplier")
+tline_atr_len    = input.int(14, "ATR Length", minval=1, group=g_tline)
+tline_fixed_pts  = input.float(10.0, "Fixed Points Width", minval=0.1, step=0.5, group=g_tline, tooltip="Used when Width Type = Fixed Points")
+tline_band_opacity = input.int(85, "Band Fill Opacity", minval=0, maxval=100, group=g_tline)
+
+// ============================================================================
+// 03) DONCHIAN CHANNEL
+// ============================================================================
+g_dc = "03) Donchian Channel"
+dc_length    = input.int(60, "Donchian Period", minval=1, group=g_dc)
+dc_show      = input.bool(true, "Show Donchian Channel", group=g_dc)
+dc_show_mid  = input.bool(true, "Show Donchian Midline", group=g_dc)
+dc_col_upper = input.color(color.new(color.teal, 30),  "Upper Band Color", group=g_dc)
+dc_col_lower = input.color(color.new(color.teal, 30),  "Lower Band Color", group=g_dc)
+dc_col_mid   = input.color(color.new(color.teal, 60),  "Midline Color",    group=g_dc)
+dc_fill_opacity = input.int(92, "Fill Opacity", minval=0, maxval=100, group=g_dc)
+
+// ============================================================================
+// 04) VWAP
+// ============================================================================
+g_vwap = "04) VWAP"
+show_vwap = input.bool(true, "Show VWAP", group=g_vwap)
+col_vwap  = input.color(color.new(color.blue, 20), "VWAP Color", group=g_vwap)
+
+// ============================================================================
+// 05) DAY LEVELS (Prior + Current)
+// ============================================================================
+g_levels = "05) Day Levels"
+show_prior_high  = input.bool(true, "Show Prior Day High",  group=g_levels)
+show_prior_low   = input.bool(true, "Show Prior Day Low",   group=g_levels)
+show_prior_open  = input.bool(true, "Show Prior Day Open",  group=g_levels)
+show_prior_close = input.bool(true, "Show Prior Day Close", group=g_levels)
+show_curr_open   = input.bool(true, "Show Current Day Open", group=g_levels)
+show_curr_high   = input.bool(true, "Show Current Day High", group=g_levels)
+show_curr_low    = input.bool(true, "Show Current Day Low",  group=g_levels)
+col_prior_high   = input.color(color.new(color.lime, 40),   "Prior Day High Color", group=g_levels)
+col_prior_low    = input.color(color.new(color.red, 40),     "Prior Day Low Color",  group=g_levels)
+col_prior_open   = input.color(color.new(color.yellow, 40),  "Prior Day Open Color", group=g_levels)
+col_prior_close  = input.color(color.new(color.orange, 40),  "Prior Day Close Color", group=g_levels)
+col_curr_open    = input.color(color.new(color.white, 40),   "Current Day Open Color", group=g_levels)
+col_curr_high    = input.color(color.new(color.lime, 60),    "Current Day High Color", group=g_levels)
+col_curr_low     = input.color(color.new(color.red, 60),     "Current Day Low Color",  group=g_levels)
+
+// ============================================================================
+// 05b) SWING INDICATOR
+// ============================================================================
+g_swing = "05b) Swing Indicator"
+swing_show    = input.bool(true, "Show Swing Pivots",   group=g_swing)
+swing_period  = input.int(5, "Swing Period",            minval=1, maxval=50, group=g_swing, tooltip="Number of bars on each side to confirm a pivot high/low. Bob uses 5.")
+swing_show_labels = input.bool(true, "Show Swing Labels (SH/SL)", group=g_swing)
+swing_col_high = input.color(color.new(color.lime, 30), "Swing High Color",  group=g_swing)
+swing_col_low  = input.color(color.new(color.red, 30),  "Swing Low Color",   group=g_swing)
+
+// ============================================================================
+// 06) CANDLESTICK PATTERNS
+// ============================================================================
+g_candle = "06) Candlestick Patterns"
+candle_engulf  = input.bool(true, "Detect Engulfing",       group=g_candle)
+candle_hammer  = input.bool(true, "Detect Hammer / Shooting Star", group=g_candle)
+candle_pinbar  = input.bool(true, "Detect Pin Bar",         group=g_candle)
+candle_show_labels = input.bool(true, "Show Pattern Labels", group=g_candle)
+
+// ============================================================================
+// 07) RETEST DETECTION
+// ============================================================================
+g_retest = "07) Retest Detection"
+retest_lookback = input.int(10, "Retest Lookback (bars after break)", minval=2, maxval=30, group=g_retest, tooltip="How many bars after a Donchian break to watch for a retest of the broken level.")
+retest_tolerance_pts = input.float(3.0, "Retest Tolerance (points)", minval=0.1, step=0.5, group=g_retest, tooltip="How close price must come to the broken level to qualify as a retest.")
+ema_retest_tolerance = input.float(3.0, "EMA Retest Tolerance (points)", minval=0.1, step=0.5, group=g_retest, tooltip="How close price must come to an EMA to qualify as a retest.")
+
+// ============================================================================
+// 08) SESSION FILTER
+// ============================================================================
+g_session = "08) Session Filter"
+sess_enable      = input.bool(true, "Enable Session Filter", group=g_session)
+sess1_start_hour = input.int(9,  "Window 1 Start Hour (ET)", minval=0, maxval=23, group=g_session)
+sess1_start_min  = input.int(30, "Window 1 Start Minute",    minval=0, maxval=59, group=g_session)
+sess1_end_hour   = input.int(11, "Window 1 End Hour (ET)",   minval=0, maxval=23, group=g_session)
+sess1_end_min    = input.int(45, "Window 1 End Minute",      minval=0, maxval=59, group=g_session)
+sess2_start_hour = input.int(13, "Window 2 Start Hour (ET)", minval=0, maxval=23, group=g_session)
+sess2_start_min  = input.int(30, "Window 2 Start Minute",    minval=0, maxval=59, group=g_session)
+sess2_end_hour   = input.int(16, "Window 2 End Hour (ET)",   minval=0, maxval=23, group=g_session)
+sess2_end_min    = input.int(0,  "Window 2 End Minute",      minval=0, maxval=59, group=g_session)
+
+// ============================================================================
+// 09) CONFLUENCE & DASHBOARD
+// ============================================================================
+g_conf = "09) Confluence Scoring"
+gate_orb_break      = input.bool(true, "Gate: ORB Breakout",              group=g_conf)
+gate_dc_break       = input.bool(true, "Gate: Donchian Break",            group=g_conf)
+gate_dc_retest      = input.bool(true, "Gate: Donchian Retest",           group=g_conf)
+gate_ema_retest     = input.bool(true, "Gate: EMA Retest",                group=g_conf)
+gate_candle_pattern = input.bool(true, "Gate: Candlestick Confirmation",  group=g_conf)
+gate_vwap_filter    = input.bool(true, "Gate: VWAP Directional Filter",   group=g_conf)
+gate_ma_alignment   = input.bool(true, "Gate: MA Alignment (9/45/55)",    group=g_conf)
+gate_233_trend      = input.bool(true, "Gate: 233 EMA Trend Filter",      group=g_conf)
+gate_swing_align    = input.bool(true, "Gate: Swing Direction Alignment",  group=g_conf, tooltip="Checks that the most recent swing structure supports trade direction (higher SL for longs, lower SH for shorts).")
+gate_cross_box      = input.bool(true, "Gate: Cross-the-Box (ORB Reversal)", group=g_conf, tooltip="Failed ORB breakout reversal — price breaks one side then crosses entire range to close beyond the opposite side.")
+min_confluence      = input.int(5, "Min Confluence for Signal", minval=1, maxval=10, group=g_conf)
+
+g_dash = "09b) Dashboard"
+dash_show     = input.bool(true, "Show Dashboard", group=g_dash)
+dash_position = input.string("Top Right", "Dashboard Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Middle Left", "Middle Right", "Top Center", "Bottom Center"], group=g_dash)
+dash_size     = input.string("small", "Dashboard Size", options=["tiny", "small", "normal"], group=g_dash)
+table_opacity = input.int(30, "Table Opacity", minval=0, maxval=95, group=g_dash)
+
+// ============================================================================
+// CALCULATIONS — TIME HELPERS
+// ============================================================================
+et_hour   = hour
+et_minute = minute
+bar_mins  = et_hour * 60 + et_minute
+
+orb_start_mins = orb_start_hour * 60 + orb_start_min
+orb_end_mins   = orb_end_hour   * 60 + orb_end_min
+
+sess1_start_mins = sess1_start_hour * 60 + sess1_start_min
+sess1_end_mins   = sess1_end_hour   * 60 + sess1_end_min
+sess2_start_mins = sess2_start_hour * 60 + sess2_start_min
+sess2_end_mins   = sess2_end_hour   * 60 + sess2_end_min
+
+in_orb_window = bar_mins >= orb_start_mins and bar_mins < orb_end_mins
+orb_just_ended = bar_mins >= orb_end_mins and bar_mins[1] < orb_end_mins
+
+in_session_1 = bar_mins >= sess1_start_mins and bar_mins < sess1_end_mins
+in_session_2 = bar_mins >= sess2_start_mins and bar_mins < sess2_end_mins
+in_any_session = not sess_enable or in_session_1 or in_session_2
+
+// ============================================================================
+// CALCULATIONS — NEW DAY DETECTION
+// ============================================================================
+is_new_day = ta.change(time("D")) != 0
+
+// ============================================================================
+// CALCULATIONS — ORB
+// ============================================================================
+var float orb_high = na
+var float orb_low  = na
+var float orb_gold = na
+var bool  orb_locked = false
+var bool  orb_break_bull_fired = false
+var bool  orb_break_bear_fired = false
+var int   orb_box_left = na
+
+if is_new_day
+    orb_high := na
+    orb_low  := na
+    orb_gold := na
+    orb_locked := false
+    orb_break_bull_fired := false
+    orb_break_bear_fired := false
+    orb_box_left := na
+
+if in_orb_window and not orb_locked
+    if na(orb_box_left)
+        orb_box_left := bar_index
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low  := na(orb_low)  ? low  : math.min(orb_low, low)
+    orb_gold := (orb_high + orb_low) / 2.0
+
+if not in_orb_window and not na(orb_high) and not orb_locked
+    orb_locked := true
+
+// ORB breakout detection — first candle after ORB that closes beyond range
+orb_bull_break = orb_locked and not orb_break_bull_fired and close > orb_high
+orb_bear_break = orb_locked and not orb_break_bear_fired and close < orb_low
+
+if orb_bull_break
+    orb_break_bull_fired := true
+if orb_bear_break
+    orb_break_bear_fired := true
+
+// Current ORB bias (held state after first break)
+var int orb_bias = 0  // +1 bull, -1 bear, 0 no break yet
+if is_new_day
+    orb_bias := 0
+if orb_bull_break and orb_bias == 0
+    orb_bias := 1
+if orb_bear_break and orb_bias == 0
+    orb_bias := -1
+
+// ============================================================================
+// CALCULATIONS — CROSS THE BOX (failed breakout reversal)
+// ============================================================================
+// Cross-the-box BULL: price first broke BELOW ORB Low, then crosses entire
+// range and closes ABOVE ORB High → trapped shorts become fuel for longs.
+// Cross-the-box BEAR: price first broke ABOVE ORB High, then crosses entire
+// range and closes BELOW ORB Low → trapped longs become fuel for shorts.
+var bool orb_cross_bull_fired = false
+var bool orb_cross_bear_fired = false
+
+if is_new_day
+    orb_cross_bull_fired := false
+    orb_cross_bear_fired := false
+
+// Bull cross: must have previously broken bearish, now closing above ORB High
+orb_cross_bull = orb_locked and orb_break_bear_fired and not orb_cross_bull_fired and close > orb_high
+// Bear cross: must have previously broken bullish, now closing below ORB Low
+orb_cross_bear = orb_locked and orb_break_bull_fired and not orb_cross_bear_fired and close < orb_low
+
+if orb_cross_bull
+    orb_cross_bull_fired := true
+    orb_bias := 1   // flip bias — the cross overrides the original break
+if orb_cross_bear
+    orb_cross_bear_fired := true
+    orb_bias := -1  // flip bias
+
+// ============================================================================
+// CALCULATIONS — ORB BOX (visual shaded rectangle)
+// ============================================================================
+var box orb_box_obj = na
+
+if orb_show_box and orb_locked and orb_just_ended and not na(orb_box_left)
+    // Delete previous box if exists (new day resets)
+    if not na(orb_box_obj)
+        box.delete(orb_box_obj)
+    orb_box_obj := box.new(
+         left   = orb_box_left,
+         top    = orb_high,
+         right  = orb_extend_lines ? bar_index + 500 : bar_index,
+         bottom = orb_low,
+         border_color = orb_box_border,
+         border_width = 1,
+         bgcolor      = orb_box_col,
+         extend       = orb_extend_lines ? extend.right : extend.none)
+
+// Keep extending the box right edge on each bar if not using extend.right
+if orb_show_box and orb_locked and not orb_extend_lines and not na(orb_box_obj)
+    box.set_right(orb_box_obj, bar_index)
+
+// ============================================================================
+// CALCULATIONS — MOVING AVERAGES
+// ============================================================================
+ema9   = ta.ema(close, len_9ema)
+ema45  = ta.ema(close, len_45ema)
+ema55  = ta.ema(close, len_55ema)   // T-Line
+sma105 = ta.sma(close, len_105sma)
+ema233 = ta.ema(close, len_233ema)
+
+// T-Line envelope
+tline_atr    = ta.atr(tline_atr_len)
+tline_offset = tline_width_type == "ATR" ? tline_atr * tline_atr_mult : tline_fixed_pts
+tline_upper  = ema55 + tline_offset
+tline_lower  = ema55 - tline_offset
+
+// ============================================================================
+// CALCULATIONS — DONCHIAN CHANNEL
+// ============================================================================
+dc_upper = ta.highest(high, dc_length)
+dc_lower = ta.lowest(low, dc_length)
+dc_mid   = (dc_upper + dc_lower) / 2.0
+
+// Donchian break detection
+dc_bull_break = close > dc_upper[1] and close[1] <= dc_upper[2]
+dc_bear_break = close < dc_lower[1] and close[1] >= dc_lower[2]
+
+// Track Donchian break state for retest detection
+var int   dc_break_dir     = 0      // +1 bull break, -1 bear break
+var float dc_break_level   = na     // the level that was broken
+var int   dc_break_bar     = 0      // bar_index when break occurred
+var bool  dc_retest_found  = false  // has retest been detected this cycle
+
+if dc_bull_break
+    dc_break_dir    := 1
+    dc_break_level  := dc_upper[1]
+    dc_break_bar    := bar_index
+    dc_retest_found := false
+
+if dc_bear_break
+    dc_break_dir    := -1
+    dc_break_level  := dc_lower[1]
+    dc_break_bar    := bar_index
+    dc_retest_found := false
+
+// Donchian retest detection
+bars_since_dc_break = bar_index - dc_break_bar
+dc_retest_active = dc_break_dir != 0 and bars_since_dc_break > 0 and bars_since_dc_break <= retest_lookback and not dc_retest_found
+
+dc_bull_retest = dc_retest_active and dc_break_dir == 1 and low <= dc_break_level + retest_tolerance_pts and close > dc_break_level
+dc_bear_retest = dc_retest_active and dc_break_dir == -1 and high >= dc_break_level - retest_tolerance_pts and close < dc_break_level
+
+if dc_bull_retest or dc_bear_retest
+    dc_retest_found := true
+
+// ============================================================================
+// CALCULATIONS — EMA RETEST
+// ============================================================================
+ema_touch_9_bull   = low <= ema9  + ema_retest_tolerance and close > ema9  and close > open
+ema_touch_45_bull  = low <= ema45 + ema_retest_tolerance and close > ema45 and close > open
+ema_touch_55_bull  = low <= tline_upper and low >= tline_lower - ema_retest_tolerance and close > ema55 and close > open
+
+ema_touch_9_bear   = high >= ema9  - ema_retest_tolerance and close < ema9  and close < open
+ema_touch_45_bear  = high >= ema45 - ema_retest_tolerance and close < ema45 and close < open
+ema_touch_55_bear  = high >= tline_lower and high <= tline_upper + ema_retest_tolerance and close < ema55 and close < open
+
+ema_retest_bull = ema_touch_9_bull or ema_touch_45_bull or ema_touch_55_bull
+ema_retest_bear = ema_touch_9_bear or ema_touch_45_bear or ema_touch_55_bear
+
+// ============================================================================
+// CALCULATIONS — VWAP
+// ============================================================================
+vwap_val  = ta.vwap(hlc3)
+above_vwap = close > vwap_val
+below_vwap = close < vwap_val
+
+// ============================================================================
+// CALCULATIONS — PRIOR DAY / CURRENT DAY LEVELS
+// ============================================================================
+var float prior_day_high  = na
+var float prior_day_low   = na
+var float prior_day_open  = na
+var float prior_day_close = na
+var float curr_day_open   = na
+var float curr_day_high   = na
+var float curr_day_low    = na
+
+// Working values for current session
+var float _cd_high  = na
+var float _cd_low   = na
+var float _cd_close = na
+
+if is_new_day
+    prior_day_high  := _cd_high
+    prior_day_low   := _cd_low
+    prior_day_open  := curr_day_open
+    prior_day_close := _cd_close
+    curr_day_open   := open
+    _cd_high        := high
+    _cd_low         := low
+    _cd_close       := close
+else
+    _cd_high  := na(_cd_high) ? high : math.max(_cd_high, high)
+    _cd_low   := na(_cd_low)  ? low  : math.min(_cd_low, low)
+    _cd_close := close
+
+curr_day_high := _cd_high
+curr_day_low  := _cd_low
+
+// ============================================================================
+// CALCULATIONS — SWING INDICATOR (Pivot Highs / Lows)
+// ============================================================================
+// ta.pivothigh / ta.pivotlow return the pivot price if confirmed, na otherwise.
+// Pivots are confirmed swing_period bars AFTER they occur (lagging by design).
+swing_hi = ta.pivothigh(high, swing_period, swing_period)
+swing_lo = ta.pivotlow(low, swing_period, swing_period)
+
+// Track the last two swing highs and swing lows for structure analysis
+var float last_swing_hi_1  = na   // most recent
+var float last_swing_hi_2  = na   // previous
+var float last_swing_lo_1  = na
+var float last_swing_lo_2  = na
+
+if not na(swing_hi)
+    last_swing_hi_2 := last_swing_hi_1
+    last_swing_hi_1 := swing_hi
+
+if not na(swing_lo)
+    last_swing_lo_2 := last_swing_lo_1
+    last_swing_lo_1 := swing_lo
+
+// Swing structure direction:
+// Higher highs + higher lows = bullish structure
+// Lower highs + lower lows = bearish structure
+swing_bull_struct = not na(last_swing_hi_2) and not na(last_swing_lo_2) and last_swing_hi_1 > last_swing_hi_2 and last_swing_lo_1 > last_swing_lo_2
+swing_bear_struct = not na(last_swing_hi_2) and not na(last_swing_lo_2) and last_swing_hi_1 < last_swing_hi_2 and last_swing_lo_1 < last_swing_lo_2
+
+// Swing break detection (price breaking a prior pivot against your direction)
+// Break below last swing low = bearish break signal
+// Break above last swing high = bullish break signal
+swing_break_bull = not na(last_swing_hi_1) and close > last_swing_hi_1 and close[1] <= last_swing_hi_1
+swing_break_bear = not na(last_swing_lo_1) and close < last_swing_lo_1 and close[1] >= last_swing_lo_1
+
+// ============================================================================
+// CALCULATIONS — CANDLESTICK PATTERNS
+// ============================================================================
+body      = math.abs(close - open)
+upper_wick = high - math.max(close, open)
+lower_wick = math.min(close, open) - low
+full_range = high - low
+is_green  = close > open
+is_red    = close < open
+
+// Bullish Engulfing
+bull_engulf = candle_engulf and is_green and is_red[1] and close > open[1] and open < close[1] and body > body[1]
+// Bearish Engulfing
+bear_engulf = candle_engulf and is_red and is_green[1] and close < open[1] and open > close[1] and body > body[1]
+
+// Hammer (bullish reversal)
+hammer = candle_hammer and is_green and lower_wick > body * 2.0 and upper_wick < body * 0.5 and full_range > 0
+
+// Shooting Star (bearish reversal)
+shooting_star = candle_hammer and is_red and upper_wick > body * 2.0 and lower_wick < body * 0.5 and full_range > 0
+
+// Pin Bar
+bull_pinbar = candle_pinbar and body < full_range * 0.25 and lower_wick > full_range * 0.6 and full_range > 0
+bear_pinbar = candle_pinbar and body < full_range * 0.25 and upper_wick > full_range * 0.6 and full_range > 0
+
+// Combined candle signals
+candle_bull = bull_engulf or hammer or bull_pinbar
+candle_bear = bear_engulf or shooting_star or bear_pinbar
+
+// ============================================================================
+// CALCULATIONS — MA ALIGNMENT
+// ============================================================================
+ma_align_bull = ema9 > ema45 and ema45 > ema55
+ma_align_bear = ema9 < ema45 and ema45 < ema55
+
+// 233 EMA trend filter
+trend_233_bull = close > ema233
+trend_233_bear = close < ema233
+
+// ============================================================================
+// CONFLUENCE SCORING
+// ============================================================================
+// Bull score
+bull_score = 0
+bull_score += (gate_orb_break      and orb_bias == 1)                          ? 1 : 0
+bull_score += (gate_dc_break       and dc_break_dir == 1 and bars_since_dc_break <= retest_lookback) ? 1 : 0
+bull_score += (gate_dc_retest      and dc_bull_retest)                         ? 1 : 0
+bull_score += (gate_ema_retest     and ema_retest_bull)                        ? 1 : 0
+bull_score += (gate_candle_pattern and candle_bull)                             ? 1 : 0
+bull_score += (gate_vwap_filter    and above_vwap)                             ? 1 : 0
+bull_score += (gate_ma_alignment   and ma_align_bull)                          ? 1 : 0
+bull_score += (gate_233_trend      and trend_233_bull)                         ? 1 : 0
+bull_score += (gate_swing_align    and swing_bull_struct)                      ? 1 : 0
+bull_score += (gate_cross_box      and orb_cross_bull_fired)                   ? 1 : 0
+
+// Bear score
+bear_score = 0
+bear_score += (gate_orb_break      and orb_bias == -1)                         ? 1 : 0
+bear_score += (gate_dc_break       and dc_break_dir == -1 and bars_since_dc_break <= retest_lookback) ? 1 : 0
+bear_score += (gate_dc_retest      and dc_bear_retest)                         ? 1 : 0
+bear_score += (gate_ema_retest     and ema_retest_bear)                        ? 1 : 0
+bear_score += (gate_candle_pattern and candle_bear)                             ? 1 : 0
+bear_score += (gate_vwap_filter    and below_vwap)                             ? 1 : 0
+bear_score += (gate_ma_alignment   and ma_align_bear)                          ? 1 : 0
+bear_score += (gate_233_trend      and trend_233_bear)                         ? 1 : 0
+bear_score += (gate_swing_align    and swing_bear_struct)                      ? 1 : 0
+bear_score += (gate_cross_box      and orb_cross_bear_fired)                   ? 1 : 0
+
+// Signal fires
+bull_signal = bull_score >= min_confluence and in_any_session
+bear_signal = bear_score >= min_confluence and in_any_session
+
+// ============================================================================
+// GATE + TRIGGER OUTPUTS (for Galgoom)
+// ============================================================================
+// Bull Gate: held state — directional confluences aligned bullish
+bull_gate_val = (orb_bias >= 0 and ma_align_bull and above_vwap and trend_233_bull and swing_bull_struct) ? 1.0 : 0.0
+// Bear Gate: held state — directional confluences aligned bearish
+bear_gate_val = (orb_bias <= 0 and ma_align_bear and below_vwap and trend_233_bear and swing_bear_struct) ? 1.0 : 0.0
+
+// Bull Trigger: pulse — fresh actionable signal (retest + candle at confluence)
+bull_trigger_val = (bull_signal and (dc_bull_retest or ema_retest_bull) and candle_bull) ? 1.0 : 0.0
+// Bear Trigger: pulse — fresh actionable signal
+bear_trigger_val = (bear_signal and (dc_bear_retest or ema_retest_bear) and candle_bear) ? 1.0 : 0.0
+
+// ============================================================================
+// PLOTS — GATE + TRIGGER (display.none for Galgoom)
+// ============================================================================
+plot(bull_gate_val,    "Bull Gate",    color=color.green,  display=display.none)
+plot(bear_gate_val,    "Bear Gate",    color=color.red,    display=display.none)
+plot(bull_trigger_val, "Bull Trigger", color=color.lime,   display=display.none)
+plot(bear_trigger_val, "Bear Trigger", color=color.maroon, display=display.none)
+
+// Individual confluence states for external wiring
+plot(orb_bias == 1  ? 1.0 : 0.0, "ORB Bull",         display=display.none)
+plot(orb_bias == -1 ? 1.0 : 0.0, "ORB Bear",         display=display.none)
+plot(dc_bull_retest ? 1.0 : 0.0,  "DC Retest Bull",   display=display.none)
+plot(dc_bear_retest ? 1.0 : 0.0,  "DC Retest Bear",   display=display.none)
+plot(ema_retest_bull ? 1.0 : 0.0, "EMA Retest Bull",  display=display.none)
+plot(ema_retest_bear ? 1.0 : 0.0, "EMA Retest Bear",  display=display.none)
+plot(candle_bull ? 1.0 : 0.0,     "Candle Bull",       display=display.none)
+plot(candle_bear ? 1.0 : 0.0,     "Candle Bear",       display=display.none)
+plot(swing_bull_struct ? 1.0 : 0.0, "Swing Bull",      display=display.none)
+plot(swing_bear_struct ? 1.0 : 0.0, "Swing Bear",      display=display.none)
+plot(orb_cross_bull ? 1.0 : 0.0,    "Cross Box Bull",   display=display.none)
+plot(orb_cross_bear ? 1.0 : 0.0,    "Cross Box Bear",   display=display.none)
+plot(orb_cross_bull_fired ? 1.0 : 0.0, "Cross Box Bull State", display=display.none)
+plot(orb_cross_bear_fired ? 1.0 : 0.0, "Cross Box Bear State", display=display.none)
+plot(float(bull_score),            "Bull Score",        display=display.none)
+plot(float(bear_score),            "Bear Score",        display=display.none)
+
+// ============================================================================
+// PLOTS — MOVING AVERAGES
+// ============================================================================
+plot(show_9ema   ? ema9   : na, "9 EMA",    color=col_9ema,   linewidth=1)
+plot(show_45ema  ? ema45  : na, "45 EMA",   color=col_45ema,  linewidth=1)
+plot(show_105sma ? sma105 : na, "105 SMA",  color=col_105sma, linewidth=1)
+plot(show_233ema ? ema233 : na, "233 EMA",  color=col_233ema, linewidth=2)
+
+// T-Line (55 EMA) + envelope
+p_tline   = plot(show_55ema ? ema55 : na, "55 EMA (T-Line)", color=col_55ema, linewidth=2)
+p_tline_u = plot(show_55ema and tline_show_band ? tline_upper : na, "T-Line Upper", color=color.new(col_55ema, 70), linewidth=1)
+p_tline_l = plot(show_55ema and tline_show_band ? tline_lower : na, "T-Line Lower", color=color.new(col_55ema, 70), linewidth=1)
+fill(p_tline_u, p_tline_l, color=color.new(col_55ema, tline_band_opacity), title="T-Line Fill")
+
+// ============================================================================
+// PLOTS — DONCHIAN CHANNEL
+// ============================================================================
+p_dc_u = plot(dc_show ? dc_upper : na, "DC Upper", color=dc_col_upper, linewidth=1)
+p_dc_l = plot(dc_show ? dc_lower : na, "DC Lower", color=dc_col_lower, linewidth=1)
+plot(dc_show and dc_show_mid ? dc_mid : na, "DC Mid", color=dc_col_mid, linewidth=1, style=plot.style_circles)
+fill(p_dc_u, p_dc_l, color=color.new(color.teal, dc_fill_opacity), title="DC Fill")
+
+// ============================================================================
+// PLOTS — VWAP
+// ============================================================================
+plot(show_vwap ? vwap_val : na, "VWAP", color=col_vwap, linewidth=2)
+
+// ============================================================================
+// PLOTS — ORB LINES (persistent horizontal references after box locks)
+// ============================================================================
+plot(orb_show_lines and orb_locked ? orb_high : na, "ORB High", color=color.new(color.lime, 20), linewidth=2, style=plot.style_linebr)
+plot(orb_show_lines and orb_locked ? orb_low  : na, "ORB Low",  color=color.new(color.red, 20),  linewidth=2, style=plot.style_linebr)
+plot(orb_show_gold  and orb_locked ? orb_gold : na, "ORB Gold Line", color=color.new(color.yellow, 10), linewidth=2, style=plot.style_linebr)
+
+// ============================================================================
+// PLOTS — PRIOR DAY / CURRENT DAY LEVELS
+// ============================================================================
+plot(show_prior_high  ? prior_day_high  : na, "Prior Day High",  color=col_prior_high,  linewidth=1, style=plot.style_linebr)
+plot(show_prior_low   ? prior_day_low   : na, "Prior Day Low",   color=col_prior_low,   linewidth=1, style=plot.style_linebr)
+plot(show_prior_open  ? prior_day_open  : na, "Prior Day Open",  color=col_prior_open,  linewidth=1, style=plot.style_linebr)
+plot(show_prior_close ? prior_day_close : na, "Prior Day Close", color=col_prior_close, linewidth=1, style=plot.style_linebr)
+plot(show_curr_open   ? curr_day_open   : na, "Current Day Open", color=col_curr_open,  linewidth=1, style=plot.style_cross)
+plot(show_curr_high   ? curr_day_high   : na, "Current Day High", color=col_curr_high,  linewidth=1, style=plot.style_cross)
+plot(show_curr_low    ? curr_day_low    : na, "Current Day Low",  color=col_curr_low,   linewidth=1, style=plot.style_cross)
+
+// ============================================================================
+// ORB BREAKOUT + CROSS-THE-BOX CANDLE COLORING
+// ============================================================================
+orb_break_candle = orb_bull_break or orb_bear_break
+orb_cross_candle = orb_cross_bull or orb_cross_bear
+// Cross-the-box takes priority over breakout if both fire same bar
+barcolor(orb_cross_candle ? orb_cross_color : orb_break_candle ? orb_break_color : na, title="ORB Candle Color")
+
+// Cross-the-box signal markers (diamond shape to distinguish from regular signals)
+plotshape(orb_cross_bull, "Cross Box Bull", shape.diamond, location.belowbar, color=color.new(color.purple, 0), size=size.small, text="CTB", textcolor=color.white)
+plotshape(orb_cross_bear, "Cross Box Bear", shape.diamond, location.abovebar, color=color.new(color.purple, 0), size=size.small, text="CTB", textcolor=color.white)
+
+// ============================================================================
+// SWING PIVOT LABELS
+// ============================================================================
+if swing_show and not na(swing_hi)
+    if swing_show_labels
+        label.new(bar_index - swing_period, swing_hi, "SH", style=label.style_label_down, color=swing_col_high, textcolor=color.white, size=size.tiny)
+    else
+        label.new(bar_index - swing_period, swing_hi, "•", style=label.style_label_down, color=swing_col_high, textcolor=swing_col_high, size=size.tiny)
+
+if swing_show and not na(swing_lo)
+    if swing_show_labels
+        label.new(bar_index - swing_period, swing_lo, "SL", style=label.style_label_up, color=swing_col_low, textcolor=color.white, size=size.tiny)
+    else
+        label.new(bar_index - swing_period, swing_lo, "•", style=label.style_label_up, color=swing_col_low, textcolor=swing_col_low, size=size.tiny)
+
+// ============================================================================
+// CANDLESTICK PATTERN LABELS
+// ============================================================================
+if candle_show_labels and bull_engulf
+    label.new(bar_index, low, "BE", style=label.style_label_up, color=color.new(color.green, 40), textcolor=color.white, size=size.tiny)
+if candle_show_labels and bear_engulf
+    label.new(bar_index, high, "BE", style=label.style_label_down, color=color.new(color.red, 40), textcolor=color.white, size=size.tiny)
+if candle_show_labels and hammer
+    label.new(bar_index, low, "H", style=label.style_label_up, color=color.new(color.green, 40), textcolor=color.white, size=size.tiny)
+if candle_show_labels and shooting_star
+    label.new(bar_index, high, "SS", style=label.style_label_down, color=color.new(color.red, 40), textcolor=color.white, size=size.tiny)
+if candle_show_labels and bull_pinbar and not hammer
+    label.new(bar_index, low, "PB", style=label.style_label_up, color=color.new(color.green, 40), textcolor=color.white, size=size.tiny)
+if candle_show_labels and bear_pinbar and not shooting_star
+    label.new(bar_index, high, "PB", style=label.style_label_down, color=color.new(color.red, 40), textcolor=color.white, size=size.tiny)
+
+// ============================================================================
+// SIGNAL MARKERS
+// ============================================================================
+plotshape(bull_signal and not bull_signal[1], "Bull Signal", shape.triangleup, location.belowbar, color=color.lime, size=size.small)
+plotshape(bear_signal and not bear_signal[1], "Bear Signal", shape.triangledown, location.abovebar, color=color.red, size=size.small)
+
+// ============================================================================
+// DASHBOARD
+// ============================================================================
+if dash_show and barstate.islast
+    dash_pos = switch dash_position
+        "Top Left"      => position.top_left
+        "Top Right"     => position.top_right
+        "Bottom Left"   => position.bottom_left
+        "Bottom Right"  => position.bottom_right
+        "Middle Left"   => position.middle_left
+        "Middle Right"  => position.middle_right
+        "Top Center"    => position.top_center
+        "Bottom Center" => position.bottom_center
+        => position.top_right
+
+    txt_size = switch dash_size
+        "tiny"   => size.tiny
+        "small"  => size.small
+        "normal" => size.normal
+        => size.small
+
+    var table t = table.new(position.top_right, 3, 16, border_width=1)
+    table.delete(t)
+    t := table.new(dash_pos, 3, 16, border_width=1)
+
+    hdr_bg  = color.new(color.gray, 15)
+    val_bg  = color.new(color.gray, table_opacity)
+    on_bg   = color.new(color.green, table_opacity)
+    off_bg  = color.new(color.gray, table_opacity + 15)
+    warn_bg = color.new(color.red, table_opacity)
+    ctb_bg  = color.new(color.purple, table_opacity)
+
+    // Header
+    table.cell(t, 0, 0, "ORB-DC v" + VER, text_color=color.white, bgcolor=hdr_bg, text_size=txt_size)
+    table.cell(t, 1, 0, "Bull", text_color=color.lime,  bgcolor=hdr_bg, text_size=txt_size)
+    table.cell(t, 2, 0, "Bear", text_color=color.red,   bgcolor=hdr_bg, text_size=txt_size)
+
+    // Row helper
+    row_gate(int r, string lbl, bool b_on, bool s_on) =>
+        table.cell(t, 0, r, lbl, text_color=color.white, bgcolor=val_bg, text_size=txt_size)
+        table.cell(t, 1, r, b_on ? "ON" : "—", text_color=b_on ? color.lime : color.gray, bgcolor=b_on ? on_bg : off_bg, text_size=txt_size)
+        table.cell(t, 2, r, s_on ? "ON" : "—", text_color=s_on ? color.red : color.gray, bgcolor=s_on ? warn_bg : off_bg, text_size=txt_size)
+
+    row_gate(1,  "ORB Break",    orb_bias == 1,   orb_bias == -1)
+    row_gate(2,  "DC Break",     dc_break_dir == 1 and bars_since_dc_break <= retest_lookback, dc_break_dir == -1 and bars_since_dc_break <= retest_lookback)
+    row_gate(3,  "DC Retest",    dc_bull_retest,   dc_bear_retest)
+    row_gate(4,  "EMA Retest",   ema_retest_bull,  ema_retest_bear)
+    row_gate(5,  "Candle Conf",  candle_bull,       candle_bear)
+    row_gate(6,  "VWAP Filter",  above_vwap,        below_vwap)
+    row_gate(7,  "MA Stack",     ma_align_bull,     ma_align_bear)
+    row_gate(8,  "233 Trend",    trend_233_bull,    trend_233_bear)
+    row_gate(9,  "Swing Struct", swing_bull_struct,  swing_bear_struct)
+
+    // Cross-the-box row (special purple highlight)
+    table.cell(t, 0, 10, "Cross Box", text_color=color.white, bgcolor=val_bg, text_size=txt_size)
+    table.cell(t, 1, 10, orb_cross_bull_fired ? "CTB" : "—", text_color=orb_cross_bull_fired ? color.white : color.gray, bgcolor=orb_cross_bull_fired ? ctb_bg : off_bg, text_size=txt_size)
+    table.cell(t, 2, 10, orb_cross_bear_fired ? "CTB" : "—", text_color=orb_cross_bear_fired ? color.white : color.gray, bgcolor=orb_cross_bear_fired ? ctb_bg : off_bg, text_size=txt_size)
+
+    // Score row
+    table.cell(t, 0, 11, "Score", text_color=color.white, bgcolor=hdr_bg, text_size=txt_size)
+    table.cell(t, 1, 11, str.tostring(bull_score) + "/" + str.tostring(min_confluence), text_color=bull_score >= min_confluence ? color.lime : color.gray, bgcolor=bull_score >= min_confluence ? on_bg : val_bg, text_size=txt_size)
+    table.cell(t, 2, 11, str.tostring(bear_score) + "/" + str.tostring(min_confluence), text_color=bear_score >= min_confluence ? color.red : color.gray, bgcolor=bear_score >= min_confluence ? warn_bg : val_bg, text_size=txt_size)
+
+    // Decision row
+    string decision = bull_signal ? "→ LONG" : bear_signal ? "→ SHORT" : "WAIT"
+    color dec_bg = bull_signal ? color.new(color.green, table_opacity) : bear_signal ? color.new(color.red, table_opacity) : color.new(color.gray, table_opacity + 12)
+    table.cell(t, 0, 12, "Decision", text_color=color.white, bgcolor=hdr_bg, text_size=txt_size)
+    table.cell(t, 1, 12, decision, text_color=color.white, bgcolor=dec_bg, text_size=txt_size)
+    table.cell(t, 2, 12, in_any_session ? "IN SESSION" : "OFF", text_color=in_any_session ? color.lime : color.orange, bgcolor=in_any_session ? on_bg : warn_bg, text_size=txt_size)
+
+    // ORB levels row
+    table.cell(t, 0, 13, "ORB", text_color=color.white, bgcolor=hdr_bg, text_size=txt_size)
+    table.cell(t, 1, 13, not na(orb_high) ? "H:" + str.tostring(orb_high, format.mintick) : "—", text_color=color.lime, bgcolor=val_bg, text_size=txt_size)
+    table.cell(t, 2, 13, not na(orb_low) ? "L:" + str.tostring(orb_low, format.mintick) : "—", text_color=color.red, bgcolor=val_bg, text_size=txt_size)
+
+    // Swing levels row
+    table.cell(t, 0, 14, "Swing", text_color=color.white, bgcolor=hdr_bg, text_size=txt_size)
+    table.cell(t, 1, 14, not na(last_swing_hi_1) ? "SH:" + str.tostring(last_swing_hi_1, format.mintick) : "—", text_color=color.lime, bgcolor=val_bg, text_size=txt_size)
+    table.cell(t, 2, 14, not na(last_swing_lo_1) ? "SL:" + str.tostring(last_swing_lo_1, format.mintick) : "—", text_color=color.red, bgcolor=val_bg, text_size=txt_size)
+
+// ============================================================================
+// ALERT CONDITIONS
+// ============================================================================
+alertcondition(bull_signal and not bull_signal[1], "Bull Confluence Signal", "ORB-DC: Bullish confluence reached — {{ticker}} @ {{close}}")
+alertcondition(bear_signal and not bear_signal[1], "Bear Confluence Signal", "ORB-DC: Bearish confluence reached — {{ticker}} @ {{close}}")
+alertcondition(orb_bull_break, "ORB Bullish Breakout", "ORB: Bullish breakout — {{ticker}} closed above ORB High @ {{close}}")
+alertcondition(orb_bear_break, "ORB Bearish Breakout", "ORB: Bearish breakout — {{ticker}} closed below ORB Low @ {{close}}")
+alertcondition(orb_cross_bull, "Cross-the-Box Bull", "ORB: Cross-the-box BULLISH reversal — {{ticker}} @ {{close}}")
+alertcondition(orb_cross_bear, "Cross-the-Box Bear", "ORB: Cross-the-box BEARISH reversal — {{ticker}} @ {{close}}")
+alertcondition(dc_bull_retest, "Donchian Bull Retest", "DC: Bullish retest of broken upper band — {{ticker}} @ {{close}}")
+alertcondition(dc_bear_retest, "Donchian Bear Retest", "DC: Bearish retest of broken lower band — {{ticker}} @ {{close}}")
+alertcondition(swing_break_bull, "Swing High Break", "Swing: Price broke above last swing high — {{ticker}} @ {{close}}")
+alertcondition(swing_break_bear, "Swing Low Break", "Swing: Price broke below last swing low — {{ticker}} @ {{close}}")
