@@ -1,6 +1,6 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Ian Yoshikawa
-// ORB-Donchian Retest Indicator v1.1
+// ORB-Donchian Retest Indicator v1.2
 //
 // Based on Robert Anderson's multi-part futures strategy
 // (Open Box Range Trades — corrected video version, Mar 2026):
@@ -25,18 +25,22 @@
 // CHANGELOG:
 //   v1.0 — Initial build. Full ORB + Donchian + EMA retest + candle patterns
 //           + confluence dashboard + Gate/Trigger plots.
-//   v1.1 — Added: Swing Indicator (period 5) with pivot labels.
-//           Added: Prior Day Close level.
-//           Added: ORB drawn as shaded BOX (not just lines).
-//           Added: Swing break as confluence gate.
+//   v1.1 — Added: Swing Indicator (period 5), Prior Day Close, ORB Box visual,
+//           Cross-the-Box detection + gate + alertconditions.
+//   v1.2 — Added: CTB Setup early warning system (3 phases).
+//           Phase 1 "RE-ENTRY": ⚠ dot when price re-enters box after failed break.
+//           Phase 2 "GOLD CROSS": GL triangle when price crosses Gold Line toward opposite side.
+//           Phase 3 "COMPLETION": existing purple diamond CTB marker.
+//           Background highlight while CTB setup active. Dashboard shows SETUP → GOLD → CTB.
+//           6 new display.none plots + 4 new alertconditions for setup/gold phases.
 //
 //@version=6
-indicator("ORB-Donchian Retest v1.1", shorttitle="ORB-DC v1.1", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+indicator("ORB-Donchian Retest v1.2", shorttitle="ORB-DC v1.2", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
 // ============================================================================
 // VERSION
 // ============================================================================
-VER = "1.1"
+VER = "1.2"
 
 // ============================================================================
 // 01) ORB SETTINGS
@@ -54,6 +58,8 @@ orb_box_border   = input.color(color.new(color.yellow, 50), "ORB Box Border Colo
 orb_extend_lines = input.bool(true, "Extend ORB Lines Right",  group=g_orb)
 orb_break_color  = input.color(color.white, "Breakout Candle Color", group=g_orb, tooltip="Color of the first candle that breaks the ORB high or low after the ORB window closes.")
 orb_cross_color  = input.color(color.new(color.purple, 0), "Cross-the-Box Candle Color", group=g_orb, tooltip="Color of the candle that crosses the ENTIRE ORB range (failed breakout reversal).")
+orb_ctb_setup_color = input.color(color.new(color.purple, 70), "CTB Setup BG Color", group=g_orb, tooltip="Background highlight color while a Cross-the-Box setup is active (price back inside box after failed break).")
+orb_ctb_setup_marker = input.bool(true, "Show CTB Setup Marker", group=g_orb, tooltip="Plots a warning dot on the bar where price re-enters the box after a failed breakout — early CTB heads-up.")
 
 // ============================================================================
 // 02) MOVING AVERAGES
@@ -289,6 +295,89 @@ if orb_cross_bull
 if orb_cross_bear
     orb_cross_bear_fired := true
     orb_bias := -1  // flip bias
+
+// ============================================================================
+// CALCULATIONS — CTB SETUP (early warning before cross completes)
+// ============================================================================
+// CTB Setup phases:
+//   Phase 1 "RE-ENTRY": Price broke one side, now closes back INSIDE the box.
+//           This is the failed breakout — the initial break didn't hold.
+//           → Warning dot plotted, setup becomes active.
+//   Phase 2 "GOLD CROSS": Price crosses the Gold Line heading toward opposite side.
+//           → Stronger warning — momentum building for full cross.
+//   Phase 3 "COMPLETION": Price closes beyond opposite side → existing CTB diamond fires.
+//
+// Setup deactivates if: CTB completes, or price re-breaks the original side
+// (break holds after all — false alarm).
+
+var bool  ctb_bull_setup_active = false   // broke bear, now back in box heading up
+var bool  ctb_bear_setup_active = false   // broke bull, now back in box heading down
+var bool  ctb_bull_gold_crossed = false   // crossed gold line heading to ORB High
+var bool  ctb_bear_gold_crossed = false   // crossed gold line heading to ORB Low
+var bool  ctb_bull_reentry_fired = false  // one-shot for re-entry marker
+var bool  ctb_bear_reentry_fired = false
+
+if is_new_day
+    ctb_bull_setup_active  := false
+    ctb_bear_setup_active  := false
+    ctb_bull_gold_crossed  := false
+    ctb_bear_gold_crossed  := false
+    ctb_bull_reentry_fired := false
+    ctb_bear_reentry_fired := false
+
+// --- BULL CTB SETUP (broke bear first, reversing upward) ---
+// Activate: broke below ORB Low, now closing back inside box, CTB not yet complete
+ctb_bull_reentry = orb_locked and orb_break_bear_fired and not orb_cross_bull_fired and not ctb_bull_setup_active and close > orb_low and close <= orb_high
+
+if ctb_bull_reentry
+    ctb_bull_setup_active  := true
+    ctb_bull_reentry_fired := false  // allow re-entry marker
+
+// Gold line cross while setup active
+if ctb_bull_setup_active and not ctb_bull_gold_crossed and close > orb_gold and not na(orb_gold)
+    ctb_bull_gold_crossed := true
+
+// Deactivate if price breaks back below ORB Low (original break holds)
+if ctb_bull_setup_active and close < orb_low
+    ctb_bull_setup_active  := false
+    ctb_bull_gold_crossed  := false
+
+// Deactivate on completion
+if orb_cross_bull_fired
+    ctb_bull_setup_active := false
+
+// --- BEAR CTB SETUP (broke bull first, reversing downward) ---
+ctb_bear_reentry = orb_locked and orb_break_bull_fired and not orb_cross_bear_fired and not ctb_bear_setup_active and close < orb_high and close >= orb_low
+
+if ctb_bear_reentry
+    ctb_bear_setup_active  := true
+    ctb_bear_reentry_fired := false
+
+if ctb_bear_setup_active and not ctb_bear_gold_crossed and close < orb_gold and not na(orb_gold)
+    ctb_bear_gold_crossed := true
+
+if ctb_bear_setup_active and close > orb_high
+    ctb_bear_setup_active  := false
+    ctb_bear_gold_crossed  := false
+
+if orb_cross_bear_fired
+    ctb_bear_setup_active := false
+
+// Re-entry pulse (one-shot for marker)
+ctb_bull_reentry_pulse = ctb_bull_reentry and not ctb_bull_reentry_fired
+ctb_bear_reentry_pulse = ctb_bear_reentry and not ctb_bear_reentry_fired
+
+if ctb_bull_reentry_pulse
+    ctb_bull_reentry_fired := true
+if ctb_bear_reentry_pulse
+    ctb_bear_reentry_fired := true
+
+// Gold line cross pulse
+ctb_bull_gold_pulse = ctb_bull_setup_active and ctb_bull_gold_crossed and not ctb_bull_gold_crossed[1]
+ctb_bear_gold_pulse = ctb_bear_setup_active and ctb_bear_gold_crossed and not ctb_bear_gold_crossed[1]
+
+// Combined setup active state (for background highlight)
+ctb_any_setup_active = ctb_bull_setup_active or ctb_bear_setup_active
 
 // ============================================================================
 // CALCULATIONS — ORB BOX (visual shaded rectangle)
@@ -563,6 +652,12 @@ plot(orb_cross_bull ? 1.0 : 0.0,    "Cross Box Bull",   display=display.none)
 plot(orb_cross_bear ? 1.0 : 0.0,    "Cross Box Bear",   display=display.none)
 plot(orb_cross_bull_fired ? 1.0 : 0.0, "Cross Box Bull State", display=display.none)
 plot(orb_cross_bear_fired ? 1.0 : 0.0, "Cross Box Bear State", display=display.none)
+plot(ctb_bull_setup_active ? 1.0 : 0.0, "CTB Setup Bull Active", display=display.none)
+plot(ctb_bear_setup_active ? 1.0 : 0.0, "CTB Setup Bear Active", display=display.none)
+plot(ctb_bull_reentry_pulse ? 1.0 : 0.0, "CTB Setup Bull Re-Entry", display=display.none)
+plot(ctb_bear_reentry_pulse ? 1.0 : 0.0, "CTB Setup Bear Re-Entry", display=display.none)
+plot(ctb_bull_gold_pulse ? 1.0 : 0.0, "CTB Bull Gold Cross", display=display.none)
+plot(ctb_bear_gold_pulse ? 1.0 : 0.0, "CTB Bear Gold Cross", display=display.none)
 plot(float(bull_score),            "Bull Score",        display=display.none)
 plot(float(bear_score),            "Bear Score",        display=display.none)
 
@@ -622,6 +717,20 @@ barcolor(orb_cross_candle ? orb_cross_color : orb_break_candle ? orb_break_color
 // Cross-the-box signal markers (diamond shape to distinguish from regular signals)
 plotshape(orb_cross_bull, "Cross Box Bull", shape.diamond, location.belowbar, color=color.new(color.purple, 0), size=size.small, text="CTB", textcolor=color.white)
 plotshape(orb_cross_bear, "Cross Box Bear", shape.diamond, location.abovebar, color=color.new(color.purple, 0), size=size.small, text="CTB", textcolor=color.white)
+
+// ============================================================================
+// CTB SETUP VISUALS (early warning before cross completes)
+// ============================================================================
+// Phase 1: Re-entry marker — warning dot when price re-enters box after failed break
+plotshape(orb_ctb_setup_marker and ctb_bull_reentry_pulse, "CTB Setup Bull Re-Entry", shape.circle, location.belowbar, color=color.new(color.purple, 40), size=size.tiny, text="⚠", textcolor=color.new(color.purple, 0))
+plotshape(orb_ctb_setup_marker and ctb_bear_reentry_pulse, "CTB Setup Bear Re-Entry", shape.circle, location.abovebar, color=color.new(color.purple, 40), size=size.tiny, text="⚠", textcolor=color.new(color.purple, 0))
+
+// Phase 2: Gold Line cross marker — momentum building toward full CTB
+plotshape(orb_ctb_setup_marker and ctb_bull_gold_pulse, "CTB Bull Gold Cross", shape.triangleup, location.belowbar, color=color.new(color.purple, 20), size=size.tiny, text="GL", textcolor=color.new(color.purple, 0))
+plotshape(orb_ctb_setup_marker and ctb_bear_gold_pulse, "CTB Bear Gold Cross", shape.triangledown, location.abovebar, color=color.new(color.purple, 20), size=size.tiny, text="GL", textcolor=color.new(color.purple, 0))
+
+// Background highlight while CTB setup is active (price inside box after failed break)
+bgcolor(ctb_any_setup_active ? orb_ctb_setup_color : na, title="CTB Setup Background")
 
 // ============================================================================
 // SWING PIVOT LABELS
@@ -713,10 +822,19 @@ if dash_show and barstate.islast
     row_gate(8,  "233 Trend",    trend_233_bull,    trend_233_bear)
     row_gate(9,  "Swing Struct", swing_bull_struct,  swing_bear_struct)
 
-    // Cross-the-box row (special purple highlight)
+    // Cross-the-box row (shows phase: SETUP → GOLD → CTB)
+    ctb_setup_bg = color.new(color.purple, table_opacity + 20)
+    string ctb_bull_txt = orb_cross_bull_fired ? "CTB" : ctb_bull_gold_crossed ? "GOLD" : ctb_bull_setup_active ? "SETUP" : "—"
+    color  ctb_bull_bg  = orb_cross_bull_fired ? ctb_bg : ctb_bull_gold_crossed ? ctb_setup_bg : ctb_bull_setup_active ? ctb_setup_bg : off_bg
+    color  ctb_bull_tc  = orb_cross_bull_fired ? color.white : ctb_bull_setup_active ? color.new(color.purple, 0) : color.gray
+
+    string ctb_bear_txt = orb_cross_bear_fired ? "CTB" : ctb_bear_gold_crossed ? "GOLD" : ctb_bear_setup_active ? "SETUP" : "—"
+    color  ctb_bear_bg  = orb_cross_bear_fired ? ctb_bg : ctb_bear_gold_crossed ? ctb_setup_bg : ctb_bear_setup_active ? ctb_setup_bg : off_bg
+    color  ctb_bear_tc  = orb_cross_bear_fired ? color.white : ctb_bear_setup_active ? color.new(color.purple, 0) : color.gray
+
     table.cell(t, 0, 10, "Cross Box", text_color=color.white, bgcolor=val_bg, text_size=txt_size)
-    table.cell(t, 1, 10, orb_cross_bull_fired ? "CTB" : "—", text_color=orb_cross_bull_fired ? color.white : color.gray, bgcolor=orb_cross_bull_fired ? ctb_bg : off_bg, text_size=txt_size)
-    table.cell(t, 2, 10, orb_cross_bear_fired ? "CTB" : "—", text_color=orb_cross_bear_fired ? color.white : color.gray, bgcolor=orb_cross_bear_fired ? ctb_bg : off_bg, text_size=txt_size)
+    table.cell(t, 1, 10, ctb_bull_txt, text_color=ctb_bull_tc, bgcolor=ctb_bull_bg, text_size=txt_size)
+    table.cell(t, 2, 10, ctb_bear_txt, text_color=ctb_bear_tc, bgcolor=ctb_bear_bg, text_size=txt_size)
 
     // Score row
     table.cell(t, 0, 11, "Score", text_color=color.white, bgcolor=hdr_bg, text_size=txt_size)
@@ -749,6 +867,10 @@ alertcondition(orb_bull_break, "ORB Bullish Breakout", "ORB: Bullish breakout �
 alertcondition(orb_bear_break, "ORB Bearish Breakout", "ORB: Bearish breakout — {{ticker}} closed below ORB Low @ {{close}}")
 alertcondition(orb_cross_bull, "Cross-the-Box Bull", "ORB: Cross-the-box BULLISH reversal — {{ticker}} @ {{close}}")
 alertcondition(orb_cross_bear, "Cross-the-Box Bear", "ORB: Cross-the-box BEARISH reversal — {{ticker}} @ {{close}}")
+alertcondition(ctb_bull_reentry_pulse, "CTB Setup Bull (Re-Entry)", "ORB: CTB SETUP — failed bear break, price re-entered box heading UP — {{ticker}} @ {{close}}")
+alertcondition(ctb_bear_reentry_pulse, "CTB Setup Bear (Re-Entry)", "ORB: CTB SETUP — failed bull break, price re-entered box heading DOWN — {{ticker}} @ {{close}}")
+alertcondition(ctb_bull_gold_pulse, "CTB Bull Gold Line Cross", "ORB: CTB building — price crossed Gold Line heading toward ORB High — {{ticker}} @ {{close}}")
+alertcondition(ctb_bear_gold_pulse, "CTB Bear Gold Line Cross", "ORB: CTB building — price crossed Gold Line heading toward ORB Low — {{ticker}} @ {{close}}")
 alertcondition(dc_bull_retest, "Donchian Bull Retest", "DC: Bullish retest of broken upper band — {{ticker}} @ {{close}}")
 alertcondition(dc_bear_retest, "Donchian Bear Retest", "DC: Bearish retest of broken lower band — {{ticker}} @ {{close}}")
 alertcondition(swing_break_bull, "Swing High Break", "Swing: Price broke above last swing high — {{ticker}} @ {{close}}")

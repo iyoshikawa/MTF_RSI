@@ -1,8 +1,8 @@
 # ORB-Donchian Retest Indicator — SPEC
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Branch:** `feature/orb-donchian-retest`  
-**File:** `ORB_Donchian_Retest/ORB_Donchian_Retest_v1_1.pine`  
+**File:** `ORB_Donchian_Retest/ORB_Donchian_Retest_v1_2.pine`  
 **Chart:** 1-minute standard candlestick  
 **Instruments:** YM, NQ, ES, CL, HG (and micros)  
 
@@ -130,10 +130,16 @@ Sell Trigger Src  → "Bear Trigger"  | Trigger Pulse: Rise > 0
 4. ORB Bearish Breakout
 5. Cross-the-Box Bull
 6. Cross-the-Box Bear
-7. Donchian Bull Retest
-8. Donchian Bear Retest
-9. Swing High Break
-10. Swing Low Break
+7. CTB Setup Bull (Re-Entry)
+8. CTB Setup Bear (Re-Entry)
+9. CTB Bull Gold Line Cross
+10. CTB Bear Gold Line Cross
+11. Donchian Bull Retest
+12. Donchian Bear Retest
+13. Swing High Break
+14. Swing Low Break
+15. (reserved)
+16. (reserved)
 
 ---
 
@@ -153,6 +159,25 @@ The inverse applies for bearish CTB (broke above first, then crosses below).
 
 **Why it matters:** Trapped breakout traders who entered on the initial break are now offside. Their stop-outs and forced exits become fuel for the reversal move. This is one of Bob's highest-conviction setups.
 
+### CTB Setup Early Warning System (v1.2)
+
+Three-phase progression with distinct visuals at each stage:
+
+| Phase | Name | Condition | Visual | Dashboard |
+|-------|------|-----------|--------|-----------|
+| 1 | RE-ENTRY | Price closes back inside box after failed break | ⚠ purple dot below/above bar | "SETUP" |
+| 2 | GOLD CROSS | Price crosses Gold Line heading toward opposite side | GL purple triangle below/above bar | "GOLD" |
+| 3 | COMPLETION | Price closes beyond opposite side of ORB | Purple diamond "CTB" marker | "CTB" |
+
+**Background highlight**: Purple `bgcolor` active on all bars while setup is in play (phases 1–2).
+
+**Setup deactivation**: If price breaks back through the original break side (break holds after all), setup cancels — no false alarm carried forward.
+
+**Galgoom plots** (all `display.none`):
+- `CTB Setup Bull Active` / `CTB Setup Bear Active` — held state while setup is live
+- `CTB Setup Bull Re-Entry` / `CTB Setup Bear Re-Entry` — pulse on phase 1
+- `CTB Bull Gold Cross` / `CTB Bear Gold Cross` — pulse on phase 2
+
 ---
 
 ## Retest Detection Parameters
@@ -171,6 +196,7 @@ The inverse applies for bearish CTB (broke above first, then crosses below).
 |---------|------|---------|
 | 1.0 | 2026-04-22 | Initial build: ORB + Donchian + EMA retest + candle patterns + confluence dashboard + Gate/Trigger plots |
 | 1.1 | 2026-04-22 | Added: Swing Indicator (period 5), Prior Day Close, ORB Box visual, Cross-the-Box detection + gate + alertconditions |
+| 1.2 | 2026-04-22 | Added: CTB Setup early warning (3-phase: RE-ENTRY ⚠ dot → GOLD LINE GL triangle → COMPLETION diamond). Background highlight while setup active. Dashboard shows SETUP → GOLD → CTB progression. 6 new display.none plots, 4 new alertconditions. |
 
 ---
 
