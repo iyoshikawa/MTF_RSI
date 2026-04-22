@@ -1,0 +1,263 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// at https://mozilla.org/MPL/2.0/
+// © Ian Yoshikawa
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  Multi-Symbol % Movement Dashboard  v1.0.0                             ║
+// ║  Overlay table showing % change for up to 8 configurable symbols.      ║
+// ║  Baseline: vs previous close  OR  vs session (daily) open.             ║
+// ║  Designed for Renko / HA / standard chart use.                         ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+// CHANGELOG
+// ─────────────────────────────────────────────────────────────────────────────
+// v1.0.0  2026-04-22  Initial build. 8 configurable symbols, compact table,
+//                     % from prev close or session open, color-coded arrows.
+// ─────────────────────────────────────────────────────────────────────────────
+
+//@version=6
+indicator("Multi-Symbol % Movement v1.0.0", overlay=true, max_bars_back=500)
+
+string VER = "1.0.0"
+
+// ============================================================================
+// 01) SYMBOL INPUTS
+//     Toggle | Ticker | Short display label  (inline per row)
+// ============================================================================
+grp_s = "📊 Symbols  (enable / ticker / label)"
+
+s1_on  = input.bool(true,             "",       group=grp_s, inline="s1")
+s1_sym = input.symbol("CME_MINI:YM1!","",       group=grp_s, inline="s1")
+s1_lbl = input.string("YM",           "Label",  group=grp_s, inline="s1")
+
+s2_on  = input.bool(true,             "",       group=grp_s, inline="s2")
+s2_sym = input.symbol("CME_MINI:NQ1!","",       group=grp_s, inline="s2")
+s2_lbl = input.string("NQ",           "Label",  group=grp_s, inline="s2")
+
+s3_on  = input.bool(true,             "",       group=grp_s, inline="s3")
+s3_sym = input.symbol("CME_MINI:ES1!","",       group=grp_s, inline="s3")
+s3_lbl = input.string("ES",           "Label",  group=grp_s, inline="s3")
+
+s4_on  = input.bool(true,             "",       group=grp_s, inline="s4")
+s4_sym = input.symbol("NYMEX:CL1!",  "",        group=grp_s, inline="s4")
+s4_lbl = input.string("CL",           "Label",  group=grp_s, inline="s4")
+
+s5_on  = input.bool(true,             "",       group=grp_s, inline="s5")
+s5_sym = input.symbol("COMEX:HG1!",  "",        group=grp_s, inline="s5")
+s5_lbl = input.string("HG",           "Label",  group=grp_s, inline="s5")
+
+s6_on  = input.bool(false,            "",       group=grp_s, inline="s6")
+s6_sym = input.symbol("TVC:DXY",     "",        group=grp_s, inline="s6")
+s6_lbl = input.string("DXY",          "Label",  group=grp_s, inline="s6")
+
+s7_on  = input.bool(false,            "",       group=grp_s, inline="s7")
+s7_sym = input.symbol("TVC:US10Y",   "",        group=grp_s, inline="s7")
+s7_lbl = input.string("10Y",          "Label",  group=grp_s, inline="s7")
+
+s8_on  = input.bool(false,            "",       group=grp_s, inline="s8")
+s8_sym = input.symbol("AMEX:SPY",    "",        group=grp_s, inline="s8")
+s8_lbl = input.string("SPY",          "Label",  group=grp_s, inline="s8")
+
+// ============================================================================
+// 02) SETTINGS
+// ============================================================================
+grp_cfg = "⚙️ Settings"
+
+pct_mode = input.string("From Prev Close", "% Baseline",
+     options=["From Prev Close", "From Session Open"],
+     group=grp_cfg,
+     tooltip="From Prev Close  → vs yesterday's daily close.\nFrom Session Open → vs today's daily open (RTH).")
+
+show_price = input.bool(true, "Show Price Column", group=grp_cfg,
+     tooltip="Adds a current-price column between the label and % columns.")
+
+dec_places = input.int(2, "% Decimal Places", minval=0, maxval=4, group=grp_cfg)
+
+// ============================================================================
+// 03) DISPLAY
+// ============================================================================
+grp_ui = "🎨 Display"
+
+tbl_pos_str = input.string("Top Right", "Table Position",
+     options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grp_ui)
+
+bg_alpha = input.int(10, "Background Opacity (0=opaque · 100=invisible)",
+     minval=0, maxval=100, group=grp_ui)
+
+txt_sel = input.string("Small", "Text Size",
+     options=["Tiny","Small","Normal"], group=grp_ui)
+
+show_dash = input.bool(true, "Show Dashboard", group=grp_ui)
+
+// ============================================================================
+// 04) HELPER FUNCTIONS
+// ============================================================================
+f_tbl_pos() =>
+    switch tbl_pos_str
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+f_txt_sz() =>
+    switch txt_sel
+        "Tiny"   => size.tiny
+        "Normal" => size.normal
+        => size.small
+
+// % change color  (green / red / neutral gray)
+FLAT_THRESH = 0.003   // treat |pct| < 0.003% as flat to avoid hair-trigger flips
+
+f_pct_col(p) =>
+    math.abs(p) < FLAT_THRESH ? color.new(#9E9E9E, 0) :
+     p > 0 ? color.new(#00E676, 0) : color.new(#FF5252, 0)
+
+f_arrow(p) =>
+    math.abs(p) < FLAT_THRESH ? "━" : p > 0 ? "▲" : "▼"
+
+// %-change formatted string with sign prefix
+f_pct_str(p) =>
+    fmt = dec_places == 0 ? "#" : "#." + str.repeat("0", dec_places)
+    (p >= 0 ? "+" : "") + str.tostring(p, fmt) + "%"
+
+// Auto-precision price display by magnitude
+f_price_str(v) =>
+    v >= 10000 ? str.tostring(v, "#,###") :
+     v >= 100   ? str.tostring(v, "#,##0.00") :
+     v >= 10    ? str.tostring(v, "0.00") :
+                  str.tostring(v, "0.0000")
+
+// ============================================================================
+// 05) DATA FETCHING
+//     Current close on chart TF  +  daily [open, prev close] for each symbol
+//     Using separate calls to avoid nesting request.security() calls.
+// ============================================================================
+
+// --- Symbol 1
+[s1_dopen, s1_prevc] = request.security(s1_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s1_cur               = request.security(s1_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 2
+[s2_dopen, s2_prevc] = request.security(s2_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s2_cur               = request.security(s2_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 3
+[s3_dopen, s3_prevc] = request.security(s3_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s3_cur               = request.security(s3_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 4
+[s4_dopen, s4_prevc] = request.security(s4_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s4_cur               = request.security(s4_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 5
+[s5_dopen, s5_prevc] = request.security(s5_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s5_cur               = request.security(s5_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 6
+[s6_dopen, s6_prevc] = request.security(s6_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s6_cur               = request.security(s6_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 7
+[s7_dopen, s7_prevc] = request.security(s7_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s7_cur               = request.security(s7_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// --- Symbol 8
+[s8_dopen, s8_prevc] = request.security(s8_sym, "D", [open, close[1]], gaps=barmerge.gaps_off)
+s8_cur               = request.security(s8_sym, "",  close,            gaps=barmerge.gaps_off)
+
+// ============================================================================
+// 06) PCT CALCULATION
+// ============================================================================
+f_pct(cur, dopen, prevc) =>
+    base = pct_mode == "From Prev Close" ? prevc : dopen
+    not na(base) and base != 0 ? (cur - base) / base * 100 : 0.0
+
+s1_pct = f_pct(s1_cur, s1_dopen, s1_prevc)
+s2_pct = f_pct(s2_cur, s2_dopen, s2_prevc)
+s3_pct = f_pct(s3_cur, s3_dopen, s3_prevc)
+s4_pct = f_pct(s4_cur, s4_dopen, s4_prevc)
+s5_pct = f_pct(s5_cur, s5_dopen, s5_prevc)
+s6_pct = f_pct(s6_cur, s6_dopen, s6_prevc)
+s7_pct = f_pct(s7_cur, s7_dopen, s7_prevc)
+s8_pct = f_pct(s8_cur, s8_dopen, s8_prevc)
+
+// ============================================================================
+// 07) TABLE
+//     Layout: 4 columns × 9 rows  (1 header + 8 symbol rows)
+//     Cols: [▲▼]  [SYM]  [PRICE*]  [%CHG]
+//     * Price column hidden (zeroed) when show_price = false
+// ============================================================================
+
+// Theme colors
+color C_HDR   = color.new(#1A237E, 5)       // deep navy header
+color C_ROW   = color.new(#0D1117, bg_alpha) // dark row bg
+color C_BLANK = color.new(#0D1117, 95)       // near-invisible for disabled rows
+color C_WHITE = color.white
+color C_DIM   = color.new(color.white, 45)   // dimmed price text
+
+var table tbl = table.new(f_tbl_pos(), 4, 9,
+     border_width  = 1,
+     frame_color   = color.new(color.gray, 55),
+     border_color  = color.new(color.gray, 75))
+
+// ─── Draw one symbol row ───────────────────────────────────────────────────
+f_draw_row(row, enabled, lbl, cur, pct) =>
+    sz = f_txt_sz()
+    if not enabled
+        // Blank out the row (invisible) so disabled symbols vanish cleanly
+        table.cell(tbl, 0, row, "", bgcolor=C_BLANK, text_color=C_BLANK, text_size=sz)
+        table.cell(tbl, 1, row, "", bgcolor=C_BLANK, text_color=C_BLANK, text_size=sz)
+        table.cell(tbl, 2, row, "", bgcolor=C_BLANK, text_color=C_BLANK, text_size=sz)
+        table.cell(tbl, 3, row, "", bgcolor=C_BLANK, text_color=C_BLANK, text_size=sz)
+    else
+        pc      = f_pct_col(pct)
+        arrow_bg = color.new(pc, 45)
+        pct_bg   = color.new(pc, 62)
+
+        // Col 0 — direction arrow, tinted background
+        table.cell(tbl, 0, row, f_arrow(pct),
+             bgcolor=arrow_bg, text_color=pc, text_size=sz)
+
+        // Col 1 — symbol label
+        table.cell(tbl, 1, row, lbl,
+             bgcolor=C_ROW, text_color=C_WHITE, text_size=sz)
+
+        // Col 2 — price OR hidden
+        if show_price
+            table.cell(tbl, 2, row, f_price_str(cur),
+                 bgcolor=C_ROW, text_color=C_DIM, text_size=sz)
+        else
+            table.cell(tbl, 2, row, "", bgcolor=C_BLANK, text_color=C_BLANK, text_size=sz)
+
+        // Col 3 — % change
+        table.cell(tbl, 3, row, f_pct_str(pct),
+             bgcolor=pct_bg, text_color=pc, text_size=sz)
+
+// ─── Render on last bar only ───────────────────────────────────────────────
+if show_dash and barstate.islast
+    sz       = f_txt_sz()
+    mode_lbl = pct_mode == "From Prev Close" ? "vs PrvC" : "vs Open"
+
+    // Row 0 — Header
+    table.cell(tbl, 0, 0, "±",        bgcolor=C_HDR, text_color=C_WHITE, text_size=sz)
+    table.cell(tbl, 1, 0, "SYM",      bgcolor=C_HDR, text_color=C_WHITE, text_size=sz)
+    table.cell(tbl, 2, 0, show_price ? "PRICE" : "",
+         bgcolor=show_price ? C_HDR : C_BLANK,
+         text_color=show_price ? C_WHITE : C_BLANK,
+         text_size=sz)
+    table.cell(tbl, 3, 0, mode_lbl,   bgcolor=C_HDR, text_color=C_WHITE, text_size=sz)
+
+    // Rows 1–8 — Symbol data
+    f_draw_row(1, s1_on, s1_lbl, s1_cur, s1_pct)
+    f_draw_row(2, s2_on, s2_lbl, s2_cur, s2_pct)
+    f_draw_row(3, s3_on, s3_lbl, s3_cur, s3_pct)
+    f_draw_row(4, s4_on, s4_lbl, s4_cur, s4_pct)
+    f_draw_row(5, s5_on, s5_lbl, s5_cur, s5_pct)
+    f_draw_row(6, s6_on, s6_lbl, s6_cur, s6_pct)
+    f_draw_row(7, s7_on, s7_lbl, s7_cur, s7_pct)
+    f_draw_row(8, s8_on, s8_lbl, s8_cur, s8_pct)
+
+// ============================================================================
+// END  MultiSymbol_PctMove_v1.0.0
+// ============================================================================
